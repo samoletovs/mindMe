@@ -52,3 +52,4 @@ Thumbs.db
 # Encrypted-at-rest local artifacts (never commit)
 *.enc
 briefing-context.json
+scripts/dev/_oneshot_*.ps1

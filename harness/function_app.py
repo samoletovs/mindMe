@@ -257,7 +257,8 @@ def capture_drain(msg: func.QueueMessage) -> None:
 
 @app.function_name(name="health")
 @app.route(route="health", methods=["GET"])
-def health(_: func.HttpRequest) -> func.HttpResponse:
+def health(req: func.HttpRequest) -> func.HttpResponse:
+    del req
     return func.HttpResponse(
         json.dumps({"status": "ok", "agent": os.environ.get("AZURE_AI_AGENT_NAME")}),
         mimetype="application/json",

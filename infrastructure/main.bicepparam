@@ -8,10 +8,15 @@ using 'main.bicep'
 
 param namePrefix = 'mindme'
 param location = 'swedencentral'
-param suffix = 'CHANGEME'
+param suffix = 'ymcpt'
 
 param foundryAccountName = 'foundrylab-aiservices'
 param foundryProjectName = 'mindMe'
+
+// Hard Rule 2 single-user allowlist. Read from local env var so the value
+// never lives in source. Set TELEGRAM_ALLOWED_CHAT_ID in .env or the
+// session shell before running `az deployment group create -p main.bicepparam`.
+param telegramAllowedChatId = readEnvironmentVariable('TELEGRAM_ALLOWED_CHAT_ID', '')
 
 param tags = {
   project: 'mindMe'

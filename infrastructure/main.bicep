@@ -33,6 +33,9 @@ param foundryAccountName string = 'foundrylab-aiservices'
 @description('Name of the existing Foundry project (for diagnostics tagging).')
 param foundryProjectName string = 'mindMe'
 
+@description('Allowed Telegram chat id (single-user allowlist, Hard Rule 2). Provided at deploy via param file (read from local env var; never committed).')
+param telegramAllowedChatId string
+
 @description('Tags applied to all resources.')
 param tags object = {
   project: 'mindMe'
@@ -243,6 +246,20 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           name: 'AZURE_CLIENT_ID'
           value: uami.properties.clientId
         }
+        // Host storage (AzureWebJobsStorage) via the UAMI — required by Flex
+        // Consumption when shared-key access is disabled on the storage account.
+        {
+          name: 'AzureWebJobsStorage__accountName'
+          value: storageName
+        }
+        {
+          name: 'AzureWebJobsStorage__credential'
+          value: 'managedidentity'
+        }
+        {
+          name: 'AzureWebJobsStorage__clientId'
+          value: uami.properties.clientId
+        }
         {
           name: 'AZURE_KEYVAULT_NAME'
           value: keyVaultName
@@ -276,6 +293,10 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=telegram-webhook-secret)'
         }
         {
+          name: 'TELEGRAM_ALLOWED_CHAT_ID'
+          value: telegramAllowedChatId
+        }
+        {
           name: 'BRIEFING_ENCRYPTION_KEY'
           value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=briefing-encryption-key)'
         }
@@ -300,7 +321,7 @@ resource appPackageContainer 'Microsoft.Storage/storageAccounts/blobServices/con
 
 // --- RBAC role assignments --------------------------------------------------
 // Role IDs:
-//   Storage Blob Data Contributor:  ba92f5b4-2d11-453d-a403-e96b0029c9fe
+//   Storage Blob Data Owner:        b7e6dc6d-f1e8-4753-8033-0f276bb0955b
 //   Storage Queue Data Contributor: 974c5e8b-45b9-4653-ba55-5f855dd0fb88
 //   Key Vault Secrets User:         4633458b-17de-408a-b874-0445c86b69e6
 //   Monitoring Metrics Publisher:   3913510d-42f4-4e42-8a64-420c390055eb
@@ -309,11 +330,11 @@ resource appPackageContainer 'Microsoft.Storage/storageAccounts/blobServices/con
 
 resource roleStorageBlob 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: storage
-  name: guid(storage.id, uami.id, 'StorageBlobDataContributor')
+  name: guid(storage.id, uami.id, 'StorageBlobDataOwner')
   properties: {
     principalId: uami.properties.principalId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
   }
 }
 
