@@ -1,10 +1,10 @@
-# AGENTS.md — guidance for coding agents working on `comes`
+# AGENTS.md — guidance for coding agents working on `mindMe`
 
 > Read this before editing. This repo has strict boundaries that protect personal data.
 
 ## What this repo is
 
-`comes` is a personal AI agent for a single user. It is **not** a generic assistant template. It assumes:
+`mindMe` is a personal AI agent for a single user. It is **not** a generic assistant template. It assumes:
 
 - One user, one Telegram chat (the ID configured in `.env` as `TELEGRAM_ALLOWED_CHAT_ID`).
 - Personal data lives in the developer's Personal OS repo on the laptop, NOT in this repo.

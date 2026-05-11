@@ -1,4 +1,4 @@
-# Dev/smoke-test scripts for comes
+# Dev/smoke-test scripts for mindMe
 #
 # These are **disposable scaffolding** for v1 — local Python that proves the
 # Telegram <-> Foundry round-trip works before Azure Functions is added in
@@ -6,6 +6,6 @@
 #
 # Scripts:
 #   create_agent.py   one-shot: creates/updates the Foundry agent `companion`
-#                     in project `comes-me`. Writes agent id back to .env.
+#                     in project `mindMe`. Writes agent id back to .env.
 #   telegram_bridge.py  long-running: Telegram long-poll <-> Foundry agent.
 #                       Single-user allowlist enforced on every update.

@@ -7,7 +7,7 @@ supported way to evolve the prompt.
 
 Writes ``AZURE_AI_AGENT_NAME`` and ``AZURE_AI_AGENT_VERSION`` back into ``.env``.
 
-Run from the comes/ repo root::
+Run from the mindMe/ repo root::
 
     .\\.venv\\Scripts\\python.exe scripts\\dev\\create_agent.py
 """
@@ -29,8 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ENV_PATH = REPO_ROOT / ".env"
 
 SYSTEM_PROMPT = """\
-You are comes (Latin: companion at the table). A quiet, single-user personal
-companion.
+You are mindMe, a quiet, single-user personal companion.
 
 Style:
 - Speak briefly. One or two sentences is usually right.
@@ -71,7 +70,7 @@ def main() -> int:
             instructions=SYSTEM_PROMPT,
             temperature=0.7,
         ),
-        description="comes - personal companion. Phase 1 smoke test, no tools yet.",
+        description="mindMe - personal companion. Phase 1 smoke test, no tools yet.",
     )
 
     version = getattr(agent, "version", None)

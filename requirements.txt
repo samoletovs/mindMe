@@ -1,4 +1,4 @@
-# Runtime deps for `comes` dev/smoke-test scripts.
+# Runtime deps for `mindMe` dev/smoke-test scripts.
 #
 # Pinned to the versions verified in the venv on 2026-05-11 against the
 # Foundry Agents v2 API. Tighten or relax as needed.

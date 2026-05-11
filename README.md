@@ -1,10 +1,10 @@
-# comes
+# mindMe
 
-> *"Can a quiet companion run a life?"*
+> *Mind me, so I can mind what matters.*
 
 A personal AI agent that operates on my [Personal OS](https://github.com/samoletovs/me) to reduce daily friction. Reads my dashboard and journal, sends a morning briefing, captures thoughts to my inbox, and stays out of the way the rest of the time.
 
-**Latin:** *comes* — companion at the table. A trusted figure who travels with you.
+**Name:** *mindMe* — imperative "mind me" (attend to me, look after me) layered with the camelCase compound "my mind, externalized". A second mind, attentive to one. Renamed from `comes` on 2026-05-11.
 
 ---
 
@@ -44,7 +44,7 @@ Anything beyond is v2+. See [Out of scope](#out-of-scope-v1).
 │   └─ capture_drain (Queue trigger)          │
 │       │                                     │
 │       ↓ calls                               │
-│  Foundry project: comes-personal            │
+│  Foundry project: mindMe                    │
 │   └─ Hosted agent: companion                │
 │       ├─ get_briefing_context()             │
 │       ├─ get_weather()                      │
@@ -67,7 +67,7 @@ Anything beyond is v2+. See [Out of scope](#out-of-scope-v1).
 ## Repo layout
 
 ```
-comes/
+mindMe/
 ├── .foundry/                 # Foundry agent metadata (per microsoft-foundry skill)
 │   └── agent-metadata.yaml
 ├── agent/                    # Foundry hosted agent (Python)
@@ -105,12 +105,12 @@ Layout mirrors [`agentMode`](https://github.com/samoletovs/agentMode) and [`foun
 
 ## Status
 
-Phase 1 in progress (2026-05-10). See planning doc in Personal OS: `01_projects/2026-personal-agent-foundation/`.
+Phase 1 complete (2026-05-11). See planning doc in Personal OS: `01_projects/2026-personal-agent-foundation/`.
 
 | Phase | Status | Deliverable |
 |---|---|---|
-| 1. Foundation | 🟡 in progress | Repo, infra, Foundry project, Telegram bot, smoke test (ping → pong) |
-| 2. Morning briefing | ⏳ | Capability #1 working end-to-end |
+| 1. Foundation | ✅ complete | Repo, Foundry project, Telegram bot, end-to-end smoke test (ping → pong via Foundry) |
+| 2. Morning briefing | ⏳ next | Capability #1 working end-to-end |
 | 3. Quick capture | ⏳ | Capability #2 working end-to-end |
 | 4. Stabilize | ⏳ | Foundry evals, prompt optimizer, foundryLab cross-link |
 
@@ -137,5 +137,5 @@ Voice, vision, multi-agent orchestration, family-context bridge, long-term memor
 
 - **[samoletovs/me](https://github.com/samoletovs/me)** — Personal OS this agent operates on (private)
 - **[samoletovs/agentMode](https://github.com/samoletovs/agentMode)** — Family agent. Pattern reference.
-- **[samoletovs/foundryLab](https://github.com/samoletovs/foundryLab)** — Foundry research lab. May absorb a port of `comes` as agent #6 for comparison.
+- **[samoletovs/foundryLab](https://github.com/samoletovs/foundryLab)** — Foundry research lab. May absorb a port of `mindMe` as agent #6 for comparison.
 - **[samoletovs/naurolabs](https://github.com/samoletovs/naurolabs)** — Landing page catalog.

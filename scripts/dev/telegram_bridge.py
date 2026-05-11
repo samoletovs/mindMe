@@ -10,7 +10,7 @@ Azure Function App. The Foundry agent (created by ``create_agent.py``) stays.
 Logging policy (AGENTS.md rule 1): IDs, sizes, durations only. Never message
 content.
 
-Run from the comes/ repo root::
+Run from the mindMe/ repo root::
 
     .\\.venv\\Scripts\\python.exe scripts\\dev\\telegram_bridge.py
 """
@@ -43,7 +43,7 @@ ENV_PATH = REPO_ROOT / ".env"
 CACHE_DIR = REPO_ROOT / ".cache"
 CONV_CACHE_PATH = CACHE_DIR / "conversation.json"
 
-log = logging.getLogger("comes.bridge")
+log = logging.getLogger("mindMe.bridge")
 
 
 def _load_env() -> dict[str, str]:
@@ -130,7 +130,7 @@ class FoundryAgent:
 
 async def cmd_start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "comes is here. This is a smoke test - no tools yet, just chat. "
+        "mindMe is here. This is a smoke test - no tools yet, just chat. "
         "Try /ping, /reset, or just write something."
     )
 
@@ -143,7 +143,7 @@ async def cmd_help(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "/ping - health check\n"
         "/reset - start a new conversation\n"
-        "/status - show what comes can do right now\n"
+        "/status - show what mindMe can do right now\n"
         "/help - this message"
     )
 
@@ -174,7 +174,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         reply = await asyncio.to_thread(agent.ask, text)
     except Exception:
         log.exception("agent error chat=%s in_len=%d", chat_id, in_len)
-        await msg.reply_text("comes hit an error. check the bridge log.")
+        await msg.reply_text("mindMe hit an error. check the bridge log.")
         return
 
     duration = time.monotonic() - started

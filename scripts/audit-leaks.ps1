@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Pre-push leak audit for the `comes` repo.
+    Pre-push leak audit for the `mindMe` repo.
 
 .DESCRIPTION
     Scans tracked-eligible files for personal identifiers that must never

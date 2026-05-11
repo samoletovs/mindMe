@@ -3,7 +3,7 @@
 No Telegram involved. Use this to confirm the Foundry round-trip works before
 starting the bridge.
 
-Run from the comes/ repo root::
+Run from the mindMe/ repo root::
 
     .\\.venv\\Scripts\\python.exe scripts\\dev\\smoke_agent.py "hello"
 """
