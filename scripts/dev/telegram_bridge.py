@@ -201,6 +201,14 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    # SECURITY: httpx logs full request URLs at INFO. For Telegram, those URLs
+    # contain the bot token in the path (`/bot<TOKEN>/getMe`). Silence httpx
+    # (and its httpcore dependency) above WARNING to keep the token out of
+    # terminal output, log files, and VS Code workspace storage.
+    # Also silence APScheduler chatter - it adds noise without value.
+    for noisy in ("httpx", "httpcore", "apscheduler", "telegram.ext.Application"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     cfg = _load_env()
     allowed_id = int(cfg["TELEGRAM_ALLOWED_CHAT_ID"])
 

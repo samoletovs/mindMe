@@ -57,11 +57,14 @@ try {
         $files = $staged | ForEach-Object { Get-Item -LiteralPath $_ -ErrorAction SilentlyContinue } | Where-Object { $_ -and -not $_.PSIsContainer }
     }
     else {
-        # All tracked-eligible files: everything except build/runtime noise and .env files.
+        # All tracked-eligible files: everything except build/runtime noise
+        # and the real .env (gitignored). NOTE: .env.example IS scanned -
+        # it's committed and should only ever contain placeholders.
         $files = Get-ChildItem -Recurse -File | Where-Object {
             $_.FullName -notmatch '\\(\.venv|venv|node_modules|\.git|__pycache__|bin|obj|dist|\.pytest_cache|\.mypy_cache|\.ruff_cache)\\' `
-                -and $_.Name -notmatch '^\.env(\..+)?$' `
-                -and $_.Name -ne 'audit-leaks.ps1'   # don't scan ourselves — patterns live here legitimately
+                -and $_.Name -ne '.env' `
+                -and $_.Name -notmatch '^\.env\.[^e]' `
+                -and $_.Name -ne 'audit-leaks.ps1'   # don't scan ourselves - patterns live here legitimately
         }
     }
 
