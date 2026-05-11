@@ -5,6 +5,13 @@ Uses the Foundry Agents v2 pattern: ``project.agents.create_version`` with a
 references the agent by name (uses latest version), so re-running this is the
 supported way to evolve the prompt.
 
+Phase 1 (no tools): just run the script. Agent gets the smoke-test prompt.
+
+Phase 2 (tools): set ``MINDME_FUNCTION_APP_HOSTNAME`` in ``.env``
+(e.g. ``func-mindme-r4k2p.azurewebsites.net``). The script reads
+``agent/openapi-tools.json``, substitutes the hostname, and registers the
+openapi tool on the agent.
+
 Writes ``AZURE_AI_AGENT_NAME`` and ``AZURE_AI_AGENT_VERSION`` back into ``.env``.
 
 Run from the mindMe/ repo root::
@@ -14,21 +21,28 @@ Run from the mindMe/ repo root::
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
 from pathlib import Path
 
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import PromptAgentDefinition
+from azure.ai.projects.models import (
+    OpenApiAnonymousAuthDetails,
+    OpenApiFunctionDefinition,
+    OpenApiTool,
+    PromptAgentDefinition,
+)
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENV_PATH = REPO_ROOT / ".env"
+OPENAPI_SPEC = REPO_ROOT / "agent" / "openapi-tools.json"
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT_PHASE1 = """\
 You are mindMe, a quiet, single-user personal companion.
 
 Style:
@@ -47,6 +61,74 @@ Conversation:
 - Never pretend to have done a thing you cannot do.
 """
 
+SYSTEM_PROMPT_PHASE2 = """\
+You are mindMe, a quiet, single-user personal companion.
+
+Style:
+- Speak briefly. One or two sentences is usually right.
+- Plain text. No bullet lists, no markdown, no emoji, unless explicitly asked.
+- Warm but not effusive. Direct but not blunt.
+
+Tools:
+- `get_briefing_context()` returns today's plan summary (top goals, this week,
+  today's focus, recent journal mood/energy, area headlines). Call it before
+  composing any morning briefing.
+- `get_weather(location)` returns the current weather. Default to Stockholm if
+  no location is mentioned.
+
+Morning briefing:
+- When asked to compose the briefing, call `get_briefing_context()` first,
+  then `get_weather(...)`, then write 2-3 short paragraphs: today's focus,
+  what's still open, and the weather. No bullet lists.
+- If `get_briefing_context()` returns 503, say so plainly and skip the briefing.
+
+Conversation:
+- If the user says only "ping", reply only with "pong".
+- If the user asks how things are going, ask one specific clarifying question.
+- Never pretend to have done a thing you cannot do.
+"""
+
+
+def _load_openapi_spec(hostname: str) -> dict:
+    spec = json.loads(OPENAPI_SPEC.read_text(encoding="utf-8"))
+    new_servers = []
+    for server in spec.get("servers", []):
+        url = server.get("url", "").replace(
+            "REPLACE_WITH_FUNCTION_APP_HOSTNAME", hostname
+        )
+        new_servers.append({**server, "url": url})
+    spec["servers"] = new_servers
+    return spec
+
+
+def _build_definition(
+    model: str, hostname: str | None
+) -> tuple[PromptAgentDefinition, str, str]:
+    if hostname:
+        spec = _load_openapi_spec(hostname)
+        openapi_tool = OpenApiTool(
+            openapi=OpenApiFunctionDefinition(
+                name="mindme_tools",
+                description="Personal briefing context and weather lookups.",
+                spec=spec,
+                auth=OpenApiAnonymousAuthDetails(),
+            )
+        )
+        definition = PromptAgentDefinition(
+            model=model,
+            instructions=SYSTEM_PROMPT_PHASE2,
+            temperature=0.7,
+            tools=[openapi_tool],
+        )
+        return definition, "phase 2 (tools)", "mindMe - personal companion. Phase 2: briefing + weather tools wired to Function App."
+
+    definition = PromptAgentDefinition(
+        model=model,
+        instructions=SYSTEM_PROMPT_PHASE1,
+        temperature=0.7,
+    )
+    return definition, "phase 1 (no tools)", "mindMe - personal companion. Phase 1 smoke test, no tools yet."
+
 
 def main() -> int:
     load_dotenv(ENV_PATH)
@@ -54,23 +136,31 @@ def main() -> int:
     endpoint = os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
     agent_name = os.environ.get("AZURE_AI_AGENT_NAME", "companion")
     model = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT", "gpt-4o-mini")
+    function_hostname = os.environ.get("MINDME_FUNCTION_APP_HOSTNAME")
 
     if not endpoint:
         print("ERROR: AZURE_AI_PROJECT_ENDPOINT not set in .env", file=sys.stderr)
         return 2
 
+    if function_hostname and not OPENAPI_SPEC.exists():
+        print(
+            f"ERROR: MINDME_FUNCTION_APP_HOSTNAME is set but {OPENAPI_SPEC} is missing.",
+            file=sys.stderr,
+        )
+        return 2
+
     print(f"Connecting to {endpoint}")
     client = AIProjectClient(endpoint=endpoint, credential=DefaultAzureCredential())
 
-    print(f"Creating new version of agent '{agent_name}' on model '{model}'...")
+    definition, phase, description = _build_definition(model, function_hostname)
+
+    print(
+        f"Creating new version of agent '{agent_name}' on model '{model}' ({phase})..."
+    )
     agent = client.agents.create_version(
         agent_name=agent_name,
-        definition=PromptAgentDefinition(
-            model=model,
-            instructions=SYSTEM_PROMPT,
-            temperature=0.7,
-        ),
-        description="mindMe - personal companion. Phase 1 smoke test, no tools yet.",
+        definition=definition,
+        description=description,
     )
 
     version = getattr(agent, "version", None)

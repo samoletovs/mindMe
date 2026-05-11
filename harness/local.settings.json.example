@@ -1,0 +1,25 @@
+# Function App env. Local dev only — Function App runtime gets values from
+# Azure App Settings populated by `infrastructure/main.bicep`.
+#
+# Run `func start` against this when iterating locally.
+
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "AzureWebJobsFeatureFlags": "EnableWorkerIndexing",
+    "AzureWebJobsStorage__accountName": "REPLACE_WITH_STORAGE_ACCOUNT_NAME",
+    "APPLICATIONINSIGHTS_CONNECTION_STRING": "",
+    "AZURE_CLIENT_ID": "",
+    "AZURE_KEYVAULT_NAME": "",
+    "AZURE_STORAGE_ACCOUNT": "",
+    "AZURE_STORAGE_BRIEFING_CONTAINER": "briefing-context",
+    "AZURE_STORAGE_CAPTURE_QUEUE": "capture-events",
+    "AZURE_AI_PROJECT_ENDPOINT": "",
+    "AZURE_AI_AGENT_NAME": "companion",
+    "TELEGRAM_BOT_TOKEN": "",
+    "TELEGRAM_WEBHOOK_SECRET": "",
+    "TELEGRAM_ALLOWED_CHAT_ID": "",
+    "BRIEFING_ENCRYPTION_KEY": ""
+  }
+}

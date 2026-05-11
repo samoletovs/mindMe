@@ -1,0 +1,87 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "mindMe agent tools",
+    "version": "1.0.0",
+    "description": "Function App endpoints exposed to the Foundry hosted agent `companion`."
+  },
+  "servers": [
+    {
+      "url": "https://REPLACE_WITH_FUNCTION_APP_HOSTNAME/api"
+    }
+  ],
+  "paths": {
+    "/tools/briefing_context": {
+      "post": {
+        "operationId": "get_briefing_context",
+        "summary": "Get today's sanitized briefing context built from the user's Personal OS.",
+        "description": "Returns a JSON snapshot of today's plan (top goals, this week, today's focus), the user's most recent journal summary, and area headlines. Decrypted on the server side. Call this every morning before composing the briefing.",
+        "responses": {
+          "200": {
+            "description": "Today's briefing context.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "date": {"type": "string", "description": "ISO date (today)."},
+                    "top_goals": {"type": "array", "items": {"type": "string"}},
+                    "this_week": {"type": "array", "items": {"type": "string"}},
+                    "today_focus": {"type": "string"},
+                    "yesterday": {
+                      "type": "object",
+                      "properties": {
+                        "date": {"type": "string", "nullable": true},
+                        "open_loops_count": {"type": "integer"},
+                        "mood": {"type": "string"},
+                        "energy": {"type": "string"}
+                      }
+                    },
+                    "areas": {"type": "array", "items": {"type": "string"}}
+                  }
+                }
+              }
+            }
+          },
+          "503": {"description": "Briefing not available (no upload today)."}
+        }
+      }
+    },
+    "/tools/weather": {
+      "get": {
+        "operationId": "get_weather",
+        "summary": "Get the current weather for a city.",
+        "description": "Calls wttr.in. Defaults to Stockholm. Use the user's reported location when known.",
+        "parameters": [
+          {
+            "name": "location",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "default": "Stockholm"},
+            "description": "City name, e.g. 'Stockholm' or 'Riga'."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current weather summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "location": {"type": "string"},
+                    "temp_c": {"type": "string"},
+                    "feels_like_c": {"type": "string"},
+                    "description": {"type": "string"},
+                    "wind_kph": {"type": "string"},
+                    "humidity_pct": {"type": "string"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

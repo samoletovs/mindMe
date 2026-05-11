@@ -1,0 +1,12 @@
+# Function App runtime deps. Mirrors top-level requirements.txt where they
+# overlap; pinned to versions known to work on Flex Consumption Python 3.11.
+
+azure-functions==1.21.3
+azure-ai-projects==2.1.0
+azure-identity==1.25.3
+azure-storage-blob==12.28.0
+azure-storage-queue==12.13.0
+azure-keyvault-secrets==4.10.0
+cryptography==48.0.0
+openai==2.36.0
+httpx==0.28.1
