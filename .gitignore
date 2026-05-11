@@ -1,0 +1,53 @@
+# Local development artifacts
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+local.settings.json
+*.pem
+*.key
+*.pfx
+
+# Azure Functions
+bin/
+obj/
+
+# Bicep build output
+*.json
+!.foundry/**/*.json
+!**/azuredeploy.parameters.json
+!harness/host.json
+!harness/**/function.json
+
+# IDE
+.vscode/
+!.vscode/extensions.json
+!.vscode/launch.json.example
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Foundry local cache
+.foundry/datasets/
+.foundry/results/
+
+# Logs / temp
+*.log
+.tmp/
+.cache/
+
+# Encrypted-at-rest local artifacts (never commit)
+*.enc
+briefing-context.json

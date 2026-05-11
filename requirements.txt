@@ -1,0 +1,17 @@
+# Runtime deps for `comes` dev/smoke-test scripts.
+#
+# Pinned to the versions verified in the venv on 2026-05-11 against the
+# Foundry Agents v2 API. Tighten or relax as needed.
+#
+# Install:
+#   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+azure-ai-projects==2.1.0
+azure-identity==1.25.3
+azure-storage-blob==12.28.0
+cryptography==48.0.0
+openai==2.36.0
+python-dotenv==1.2.2
+python-telegram-bot==22.7
+APScheduler==3.11.2
+aiolimiter==1.2.1
