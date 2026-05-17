@@ -1,0 +1,14 @@
+name: mindMe
+purpose: "Personal AI agent — morning briefing, thought capture, journal integration via Telegram"
+users: "Personal assistant for a single user"
+stage: mvp
+goals:
+  - "Morning briefing (07:30 timer) via Telegram"
+  - "Quick capture text to Personal OS inbox"
+  - "Status and help slash commands"
+  - "Ephemeral encrypted briefing context"
+  - "Cost discipline — €10/month budget cap"
+similar:
+  - "Personal OS agents"
+  - "Todoist automation"
+quality: []
