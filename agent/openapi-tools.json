@@ -51,14 +51,14 @@
       "get": {
         "operationId": "get_weather",
         "summary": "Get the current weather for a city.",
-        "description": "Calls wttr.in. Defaults to Stockholm. Use the user's reported location when known.",
+        "description": "Calls wttr.in. Defaults to Riga, Latvia. Use the user's reported location when known.",
         "parameters": [
           {
             "name": "location",
             "in": "query",
             "required": false,
-            "schema": {"type": "string", "default": "Stockholm"},
-            "description": "City name, e.g. 'Stockholm' or 'Riga'."
+            "schema": {"type": "string", "default": "Riga"},
+            "description": "City name, e.g. 'Riga' or 'Stockholm'."
           }
         ],
         "responses": {
