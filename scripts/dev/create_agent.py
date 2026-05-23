@@ -73,7 +73,7 @@ Tools:
 - `get_briefing_context()` returns today's plan summary (top goals, this week,
   today's focus, recent journal mood/energy, area headlines). Call it before
   composing any morning briefing.
-- `get_weather(location)` returns the current weather. Default to Stockholm if
+- `get_weather(location)` returns the current weather. Default to Riga if
   no location is mentioned.
 
 Morning briefing:

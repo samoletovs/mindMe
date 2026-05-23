@@ -295,7 +295,7 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="tools/weather", methods=["GET"])
 def tool_weather(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_weather(location)."""
-    location = req.params.get("location") or "Stockholm"
+    location = req.params.get("location") or "Riga"
     try:
         resp = _http_client().get(f"https://wttr.in/{location}?format=j1")
         resp.raise_for_status()
