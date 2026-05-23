@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import time
+from urllib.parse import quote
 
 import azure.functions as func
 import httpx
@@ -158,6 +159,29 @@ def _load_briefing() -> dict:
     return _decrypt_briefing(raw)
 
 
+def _weather_summary(location: str) -> dict:
+    """Fetch and normalize weather summary data for a location.
+
+    Raises:
+        httpx.HTTPError: If wttr.in is unreachable or returns non-2xx.
+        ValueError: If response parsing fails unexpectedly.
+    """
+    safe_location = quote(location, safe="")
+    resp = _http_client().get(f"https://wttr.in/{safe_location}?format=j1")
+    resp.raise_for_status()
+    full = resp.json()
+    current = (full.get("current_condition") or [{}])[0]
+    description = (current.get("weatherDesc") or [{}])[0].get("value") or "N/A"
+    return {
+        "location": location,
+        "temp_c": current.get("temp_C") or "N/A",
+        "feels_like_c": current.get("FeelsLikeC") or "N/A",
+        "description": description,
+        "wind_kph": current.get("windspeedKmph") or "N/A",
+        "humidity_pct": current.get("humidity") or "N/A",
+    }
+
+
 # --- Function: telegram_webhook --------------------------------------------
 
 @app.function_name(name="telegram_webhook")
@@ -235,7 +259,23 @@ def morning_briefing_timer(timer: func.TimerRequest) -> None:
     except Exception:
         log.exception("briefing failed")
         try:
-            _telegram_send(chat_id, "mindMe could not assemble today's briefing. check the logs.")
+            fallback = (
+                "mindMe could not load your personal briefing context today. "
+                "I can still send weather: "
+            )
+            try:
+                weather = _weather_summary("Stockholm")
+                fallback += (
+                    f"{weather.get('location')} {weather.get('temp_c')}°C "
+                    f"(feels {weather.get('feels_like_c')}°C), {weather.get('description')}."
+                )
+            except Exception:
+                log.exception("briefing fallback weather failed")
+                fallback = (
+                    "mindMe could not assemble today's briefing or weather. "
+                    "please try again later."
+                )
+            _telegram_send(chat_id, fallback)
         except Exception:
             log.exception("briefing fallback notify failed")
 
@@ -297,18 +337,7 @@ def tool_weather(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_weather(location)."""
     location = req.params.get("location") or "Stockholm"
     try:
-        resp = _http_client().get(f"https://wttr.in/{location}?format=j1")
-        resp.raise_for_status()
-        full = resp.json()
-        current = (full.get("current_condition") or [{}])[0]
-        summary = {
-            "location": location,
-            "temp_c": current.get("temp_C"),
-            "feels_like_c": current.get("FeelsLikeC"),
-            "description": (current.get("weatherDesc") or [{}])[0].get("value"),
-            "wind_kph": current.get("windspeedKmph"),
-            "humidity_pct": current.get("humidity"),
-        }
+        summary = _weather_summary(location)
         return func.HttpResponse(
             json.dumps(summary), mimetype="application/json", status_code=200
         )
