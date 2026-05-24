@@ -159,6 +159,59 @@ def _load_briefing() -> dict:
     return _decrypt_briefing(raw)
 
 
+def _is_tiered_briefing(data: dict) -> bool:
+    return isinstance(data.get("tiers"), dict)
+
+
+def _normalize_tier_name(tier: str | None) -> str:
+    value = (tier or "core").strip().lower()
+    return value if value in {"core", "extended", "deep"} else "core"
+
+
+def _parse_bool_param(value: object, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError("invalid boolean value")
+
+
+def _select_briefing_view(data: dict, tier: str, include_meta: bool) -> dict:
+    """Return the requested briefing tier while preserving legacy compatibility."""
+    if not _is_tiered_briefing(data):
+        if tier == "core":
+            return data
+        empty = {"entries": []}
+        if include_meta:
+            empty["_meta"] = {
+                "schema_version": data.get("schema_version", "1.x"),
+                "legacy_format": True,
+            }
+        return empty
+
+    fallback = {} if tier == "core" else {"entries": []}
+    selected = data["tiers"].get(tier, fallback)
+    if not isinstance(selected, dict):
+        selected = dict(fallback)
+    result = dict(selected)
+
+    if include_meta:
+        result["_meta"] = {
+            "schema_version": data.get("schema_version", "2.x"),
+            "date": data.get("date"),
+            "generated_at": data.get("generated_at"),
+            "tier": tier,
+            "meta": data.get("meta", {}),
+        }
+    return result
+
+
 def _weather_summary(location: str) -> dict:
     """Fetch and normalize weather summary data for a location.
 
@@ -315,8 +368,42 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
 
     Returns today's sanitized JSON snapshot (decrypted from Blob).
     """
+    req_json: dict = {}
+    try:
+        req_json = req.get_json()
+    except ValueError:
+        if req.get_body():
+            return func.HttpResponse(
+                json.dumps({"error": "invalid JSON body"}),
+                mimetype="application/json",
+                status_code=400,
+            )
+        req_json = {}
+
+    tier = _normalize_tier_name(req.params.get("tier") or req_json.get("tier"))
+    include_meta_raw = req.params.get("include_meta")
+    if include_meta_raw is None:
+        include_meta_source = req_json.get("include_meta", False)
+    else:
+        include_meta_source = include_meta_raw
+
+    try:
+        include_meta = _parse_bool_param(include_meta_source, default=False)
+    except ValueError:
+        return func.HttpResponse(
+            json.dumps(
+                {
+                    "error": "invalid include_meta value",
+                    "accepted": ["true", "false", "1", "0", "yes", "no", "on", "off"],
+                }
+            ),
+            mimetype="application/json",
+            status_code=400,
+        )
+
     try:
         data = _load_briefing()
+        view = _select_briefing_view(data, tier=tier, include_meta=include_meta)
     except Exception:
         log.exception("briefing_context load failed")
         return func.HttpResponse(
@@ -325,7 +412,7 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
             status_code=503,
         )
     return func.HttpResponse(
-        json.dumps(data),
+        json.dumps(view),
         mimetype="application/json",
         status_code=200,
     )

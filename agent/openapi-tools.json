@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "mindMe agent tools",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "description": "Function App endpoints exposed to the Foundry hosted agent `companion`."
   },
   "servers": [
@@ -15,7 +15,23 @@
       "post": {
         "operationId": "get_briefing_context",
         "summary": "Get today's sanitized briefing context built from the user's Personal OS.",
-        "description": "Returns a JSON snapshot of today's plan (top goals, this week, today's focus), the user's most recent journal summary, and area headlines. Decrypted on the server side. Call this every morning before composing the briefing.",
+        "description": "Returns a tiered context snapshot decrypted on the server side. Use tier=core for morning briefing, tier=extended for ranked summaries, tier=deep for compressed fallback excerpts.",
+        "parameters": [
+          {
+            "name": "tier",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "string", "enum": ["core", "extended", "deep"], "default": "core"},
+            "description": "Context tier to fetch."
+          },
+          {
+            "name": "include_meta",
+            "in": "query",
+            "required": false,
+            "schema": {"type": "boolean", "default": false},
+            "description": "Include schema and budget metadata in `_meta`."
+          }
+        ],
         "responses": {
           "200": {
             "description": "Today's briefing context.",
@@ -24,12 +40,14 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "date": {"type": "string", "description": "ISO date (today)."},
-                    "top_goals": {"type": "array", "items": {"type": "string"}},
-                    "this_week": {"type": "array", "items": {"type": "string"}},
-                    "today_focus": {"type": "string"},
+                    "date": {"type": "string", "description": "ISO date (today). Present in core tier."},
+                    "top_goals": {"type": "array", "items": {"type": "string"}, "description": "Core tier field."},
+                    "this_week": {"type": "array", "items": {"type": "string"}, "description": "Core tier field."},
+                    "today_focus": {"type": "string", "description": "Core tier field."},
+                    "urgent_deadlines": {"type": "array", "items": {"type": "string"}, "description": "Core tier field."},
                     "yesterday": {
                       "type": "object",
+                      "description": "Core tier field.",
                       "properties": {
                         "date": {"type": "string", "nullable": true},
                         "open_loops_count": {"type": "integer"},
@@ -37,7 +55,13 @@
                         "energy": {"type": "string"}
                       }
                     },
-                    "areas": {"type": "array", "items": {"type": "string"}}
+                    "areas": {"type": "array", "items": {"type": "string"}, "description": "Core tier field."},
+                    "entries": {
+                      "type": "array",
+                      "description": "Extended/deep tier field.",
+                      "items": {"type": "object"}
+                    },
+                    "_meta": {"type": "object", "description": "Returned only when include_meta=true."}
                   }
                 }
               }

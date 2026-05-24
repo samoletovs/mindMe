@@ -11,7 +11,7 @@ mindMe. Replaces the long-poll `scripts/dev/telegram_bridge.py` in production.
 | Timer `0 30 7 * * *` | `morning_briefing_timer` | Sends the daily briefing at 07:30 (server time). |
 | Queue `capture-events` | `capture_drain` | Phase 3 placeholder. Receives Telegram captures forwarded by the webhook. |
 | HTTP GET `/api/health` | `health` | Uptime probe. |
-| HTTP POST `/api/tools/briefing_context` | `tool_briefing_context` | Foundry agent tool: returns today's decrypted briefing JSON. |
+| HTTP POST `/api/tools/briefing_context?tier=core|extended|deep` | `tool_briefing_context` | Foundry agent tool: returns requested decrypted briefing tier (`core` default). |
 | HTTP GET `/api/tools/weather?location=...` | `tool_weather` | Foundry agent tool: wttr.in passthrough. |
 
 ## Local dev

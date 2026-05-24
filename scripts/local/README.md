@@ -9,6 +9,17 @@ Runs at 07:25 daily via Windows Task Scheduler. Builds the sanitized briefing
 JSON, AES-GCM encrypts it (key from Key Vault), uploads to
 `briefing-context/today.bin`.
 
+Current blob schema is tiered:
+- `core` (always loaded): today's focus, goals, open loops, mood/energy, area headlines, urgent deadlines.
+- `extended` (on demand): scored summaries with metadata.
+- `deep` (rare fallback): compressed excerpts (`zlib+base64`) for extra context.
+
+Optional size controls via `.env`:
+- `BRIEFING_CORE_MAX_BYTES` (default `3500`)
+- `BRIEFING_EXTENDED_MAX_BYTES` (default `7000`)
+- `BRIEFING_DEEP_MAX_BYTES` (default `9000`)
+- `BRIEFING_DEEP_ZLIB_LEVEL` (default `9`)
+
 ### Run once manually
 
 ```powershell

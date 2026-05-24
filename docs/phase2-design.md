@@ -68,18 +68,21 @@ This is scaffolded but **NOT redeployed** yet — `create_agent.py` is updated l
 Runs at 07:25 via Windows Task Scheduler. Steps:
 
 1. Read `c:\vsCode\.me\_dashboard.md`, today's journal entry, and current `02_areas/*/README.md` headers.
-2. Build a minimal JSON snapshot:
+2. Build a tiered sanitized JSON snapshot:
    ```json
    {
+     "schema_version": "2.0.0",
      "date": "2026-05-12",
-     "top_goals": ["..."],
-     "this_week": ["..."],
-     "today_focus": "...",
-     "open_loops_count": N,
-     "energy_yesterday": "...",
-     "mood_yesterday": "..."
+     "tiers": {
+       "core": {"today_focus": "...", "top_goals": ["..."], "urgent_deadlines": ["..."]},
+       "extended": {"entries": [{"title": "...", "relevance_score": 8.5}]},
+       "deep": {"entries": [{"content_encoding": "zlib+base64", "content_b64": "..."}]}
+     }
    }
    ```
+   - Entries are ranked by recency + priority (deadlines, unresolved loops, active areas).
+   - Hard per-tier size budgets trim low-priority entries instead of failing the run.
+   - Blob metadata includes schema version and budget usage.
 3. Encrypt with AES-GCM using key from Key Vault (`briefing-encryption-key`).
 4. Upload to `briefing-context` container, blob name `today.bin`. Overwrite.
 5. Log only sizes and timing. **Never** log content.
