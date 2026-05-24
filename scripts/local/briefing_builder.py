@@ -52,6 +52,9 @@ MAX_DEEP_ITEMS = int(os.environ.get("BRIEFING_MAX_DEEP_ITEMS", "8"))
 
 DATE_RE = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
 URGENCY_HINTS = ("urgent", "today", "asap", "deadline", "due", "blocker")
+CONFIDENCE_BASELINE = 0.35
+CONFIDENCE_SCALE = 12.0
+CONFIDENCE_CAP = 0.99
 
 log = logging.getLogger("mindMe.briefing-builder")
 
@@ -166,7 +169,7 @@ def _candidate(
         active_project=active_project,
         last_touched_days=last_touched_days,
     )
-    digest = hashlib.sha1(f"{source_type}|{source_ref}|{title}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{source_type}|{source_ref}|{title}".encode("utf-8")).hexdigest()
     return {
         "id": digest[:12],
         "title": _sanitize_text(title, 140),
@@ -177,7 +180,10 @@ def _candidate(
         "date": source_date.isoformat() if source_date else None,
         "urgency": urgency,
         "relevance_score": round(score, 2),
-        "confidence": round(min(0.99, 0.35 + score / 12.0), 2),
+        # Confidence is a bounded heuristic for retrieval ranking, not a model probability.
+        "confidence": round(
+            min(CONFIDENCE_CAP, CONFIDENCE_BASELINE + score / CONFIDENCE_SCALE), 2
+        ),
         "long_excerpt": _sanitize_text(long_excerpt, 1400) if long_excerpt else "",
     }
 

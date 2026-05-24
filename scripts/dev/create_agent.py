@@ -81,7 +81,7 @@ Morning briefing:
 - When asked to compose the briefing, call `get_briefing_context(tier="core")`
   first, then `get_weather(...)`, then write 2-3 short paragraphs: today's focus,
   what's still open, and the weather. No bullet lists.
-- If `get_briefing_context()` returns 503, say so plainly and skip the briefing.
+- If `get_briefing_context(tier="core")` returns 503, say so plainly and skip the briefing.
 
 Conversation:
 - If the user says only "ping", reply only with "pong".

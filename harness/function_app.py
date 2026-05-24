@@ -181,9 +181,10 @@ def _select_briefing_view(data: dict, tier: str, include_meta: bool) -> dict:
             }
         return empty
 
-    selected = data["tiers"].get(tier) or ({} if tier == "core" else {"entries": []})
+    fallback = {} if tier == "core" else {"entries": []}
+    selected = data["tiers"].get(tier, fallback)
     if not isinstance(selected, dict):
-        selected = {"entries": []}
+        selected = dict(fallback)
     result = dict(selected)
 
     if include_meta:
@@ -362,9 +363,31 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
     tier = _normalize_tier_name(req.params.get("tier") or req_json.get("tier"))
     include_meta_raw = req.params.get("include_meta")
     if include_meta_raw is None:
-        include_meta = bool(req_json.get("include_meta", False))
+        include_meta_source = req_json.get("include_meta", False)
     else:
-        include_meta = include_meta_raw.lower() in {"1", "true", "yes", "on"}
+        include_meta_source = include_meta_raw
+
+    if isinstance(include_meta_source, bool):
+        include_meta = include_meta_source
+    elif isinstance(include_meta_source, str):
+        value = include_meta_source.strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            include_meta = True
+        elif value in {"0", "false", "no", "off"}:
+            include_meta = False
+        else:
+            return func.HttpResponse(
+                json.dumps(
+                    {
+                        "error": "invalid include_meta value",
+                        "accepted": ["true", "false", "1", "0", "yes", "no", "on", "off"],
+                    }
+                ),
+                mimetype="application/json",
+                status_code=400,
+            )
+    else:
+        include_meta = bool(include_meta_source)
 
     try:
         data = _load_briefing()
