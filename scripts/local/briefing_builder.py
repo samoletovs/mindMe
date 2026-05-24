@@ -49,6 +49,7 @@ EXTENDED_MAX_BYTES = int(os.environ.get("BRIEFING_EXTENDED_MAX_BYTES", "7000"))
 DEEP_MAX_BYTES = int(os.environ.get("BRIEFING_DEEP_MAX_BYTES", "9000"))
 MAX_EXTENDED_ITEMS = int(os.environ.get("BRIEFING_MAX_EXTENDED_ITEMS", "20"))
 MAX_DEEP_ITEMS = int(os.environ.get("BRIEFING_MAX_DEEP_ITEMS", "8"))
+DEEP_ZLIB_LEVEL = int(os.environ.get("BRIEFING_DEEP_ZLIB_LEVEL", "9"))
 
 DATE_RE = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
 URGENCY_HINTS = ("urgent", "today", "asap", "deadline", "due", "blocker")
@@ -98,6 +99,7 @@ def _extract_due_date(text: str) -> date | None:
     try:
         return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
     except ValueError:
+        log.debug("ignoring invalid due date in text")
         return None
 
 
@@ -171,7 +173,7 @@ def _candidate(
     )
     digest = hashlib.sha256(f"{source_type}|{source_ref}|{title}".encode("utf-8")).hexdigest()
     return {
-        "id": digest[:12],
+        "id": digest[:16],
         "title": _sanitize_text(title, 140),
         "summary": _sanitize_text(summary, 260),
         "source_type": source_type,
@@ -477,7 +479,7 @@ def _build_snapshot() -> dict:
         excerpt = c.get("long_excerpt") or c.get("summary") or ""
         if not excerpt:
             continue
-        compressed = zlib.compress(excerpt.encode("utf-8"), level=6)
+        compressed = zlib.compress(excerpt.encode("utf-8"), level=max(1, min(9, DEEP_ZLIB_LEVEL)))
         deep_entries.append(
             {
                 "id": c["id"],

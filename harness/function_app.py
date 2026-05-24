@@ -168,6 +168,20 @@ def _normalize_tier_name(tier: str | None) -> str:
     return value if value in {"core", "extended", "deep"} else "core"
 
 
+def _parse_bool_param(value: object, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise ValueError("invalid boolean value")
+
+
 def _select_briefing_view(data: dict, tier: str, include_meta: bool) -> dict:
     """Return the requested briefing tier while preserving legacy compatibility."""
     if not _is_tiered_briefing(data):
@@ -358,6 +372,12 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
     try:
         req_json = req.get_json()
     except ValueError:
+        if req.get_body():
+            return func.HttpResponse(
+                json.dumps({"error": "invalid JSON body"}),
+                mimetype="application/json",
+                status_code=400,
+            )
         req_json = {}
 
     tier = _normalize_tier_name(req.params.get("tier") or req_json.get("tier"))
@@ -367,27 +387,19 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
     else:
         include_meta_source = include_meta_raw
 
-    if isinstance(include_meta_source, bool):
-        include_meta = include_meta_source
-    elif isinstance(include_meta_source, str):
-        value = include_meta_source.strip().lower()
-        if value in {"1", "true", "yes", "on"}:
-            include_meta = True
-        elif value in {"0", "false", "no", "off"}:
-            include_meta = False
-        else:
-            return func.HttpResponse(
-                json.dumps(
-                    {
-                        "error": "invalid include_meta value",
-                        "accepted": ["true", "false", "1", "0", "yes", "no", "on", "off"],
-                    }
-                ),
-                mimetype="application/json",
-                status_code=400,
-            )
-    else:
-        include_meta = bool(include_meta_source)
+    try:
+        include_meta = _parse_bool_param(include_meta_source, default=False)
+    except ValueError:
+        return func.HttpResponse(
+            json.dumps(
+                {
+                    "error": "invalid include_meta value",
+                    "accepted": ["true", "false", "1", "0", "yes", "no", "on", "off"],
+                }
+            ),
+            mimetype="application/json",
+            status_code=400,
+        )
 
     try:
         data = _load_briefing()

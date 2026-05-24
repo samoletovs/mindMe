@@ -18,6 +18,7 @@ Optional size controls via `.env`:
 - `BRIEFING_CORE_MAX_BYTES` (default `3500`)
 - `BRIEFING_EXTENDED_MAX_BYTES` (default `7000`)
 - `BRIEFING_DEEP_MAX_BYTES` (default `9000`)
+- `BRIEFING_DEEP_ZLIB_LEVEL` (default `9`)
 
 ### Run once manually
 
