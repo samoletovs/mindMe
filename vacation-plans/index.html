@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Family Vacation 2026 — China vs. New York</title>
+<style>
+  :root{
+    --ink:#1d2433; --muted:#5b6678; --line:#e6e9f0; --bg:#f6f8fc;
+    --china:#c0392b; --china-soft:#fbeceb; --ny:#1f6feb; --ny-soft:#e8f1ff;
+    --ok:#1c8c4a; --warn:#c47f17; --card:#ffffff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       color:var(--ink);background:var(--bg);line-height:1.6}
+  .wrap{max-width:980px;margin:0 auto;padding:32px 20px 64px}
+  header.hero{background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);color:#fff;border-radius:18px;
+              padding:40px 32px;box-shadow:0 10px 30px rgba(16,32,48,.18)}
+  header.hero h1{margin:0 0 8px;font-size:2rem;letter-spacing:-.02em}
+  header.hero p{margin:4px 0;opacity:.92}
+  .facts{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+  .facts span{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);
+              padding:6px 12px;border-radius:999px;font-size:.85rem}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:28px}
+  @media(max-width:720px){.cards{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;
+        box-shadow:0 4px 14px rgba(16,32,48,.06);display:flex;flex-direction:column}
+  .card .top{padding:22px 24px 16px;color:#fff}
+  .card.china .top{background:linear-gradient(135deg,#c0392b,#8e2419)}
+  .card.ny .top{background:linear-gradient(135deg,#1f6feb,#0a3d91)}
+  .card .top h2{margin:0;font-size:1.4rem}
+  .card .top .price{font-size:1.05rem;font-weight:600;margin-top:6px}
+  .card .body{padding:20px 24px;flex:1}
+  .card .body ul{margin:0;padding-left:18px}
+  .card .body li{margin:6px 0}
+  .badge{display:inline-block;font-size:.72rem;font-weight:700;padding:3px 9px;border-radius:999px;text-transform:uppercase;letter-spacing:.04em}
+  .badge.rec{background:var(--china-soft);color:var(--china)}
+  .badge.risk{background:#fdeede;color:var(--warn)}
+  .btn{display:block;text-align:center;text-decoration:none;font-weight:600;padding:14px;border-top:1px solid var(--line)}
+  .card.china .btn{color:var(--china)}
+  .card.ny .btn{color:var(--ny)}
+  .btn:hover{background:var(--bg)}
+  .verdict{background:#fff;border:1px solid var(--line);border-radius:16px;padding:24px 26px;margin-top:28px}
+  .verdict h3{margin-top:0}
+  table{border-collapse:collapse;width:100%;margin-top:14px;font-size:.94rem}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--bg)}
+  .ok{color:var(--ok);font-weight:600}
+  .bad{color:var(--china);font-weight:600}
+  .note{font-size:.82rem;color:var(--muted);margin-top:26px;border-top:1px dashed var(--line);padding-top:14px}
+  .stamp{font-size:.8rem;color:var(--muted);margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <h1>👨‍👩‍👧‍👦 Family Vacation 2026 — Two Comprehensive Plans</h1>
+    <p>Prepared for a Riga-based family of four: 2 adults + kids aged 12 &amp; 9.</p>
+    <p>Two weeks built around the Latvian autumn school break plus one excused week.</p>
+    <div class="facts">
+      <span>🗓️ Travel window: Sat 17 Oct → Sun 1 Nov 2026</span>
+      <span>🏫 Autumn break: 19–23 Oct 2026</span>
+      <span>🎯 Goal: cost-effective</span>
+      <span>🛂 Mixed citizenship: Latvian + Russian</span>
+    </div>
+  </header>
+
+  <div class="cards">
+    <div class="card china">
+      <div class="top">
+        <span class="badge rec">Recommended</span>
+        <h2>🇨🇳 China</h2>
+        <div class="price">≈ €6,000 – €7,200 total</div>
+      </div>
+      <div class="body">
+        <ul>
+          <li><strong>Visa-free for the whole family</strong> — including your wife.</li>
+          <li>Route: Beijing → Xi'an → Chengdu (pandas) → Shanghai.</li>
+          <li>Great Wall, Terracotta Warriors, giant pandas, futuristic Shanghai.</li>
+          <li>Cheap on the ground: food, trains, hotels.</li>
+          <li>Low planning risk; fits the visa-free deadline (31 Dec 2026).</li>
+        </ul>
+      </div>
+      <a class="btn" href="china.html">Open the full China plan →</a>
+    </div>
+
+    <div class="card ny">
+      <div class="top">
+        <span class="badge risk">Visa risk</span>
+        <h2>🗽 New York</h2>
+        <div class="price">≈ €8,200 – €10,400 total</div>
+      </div>
+      <div class="body">
+        <ul>
+          <li><strong>Wife (Russian) needs a US B1/B2 visa</strong> — months of wait, not guaranteed by October.</li>
+          <li>You + kids travel on a simple ESTA.</li>
+          <li>Route: NYC base + a Washington DC side trip.</li>
+          <li>Statue of Liberty, world-class museums, Halloween on 31 Oct.</li>
+          <li>Higher cost: lodging &amp; food much pricier than China.</li>
+        </ul>
+      </div>
+      <a class="btn" href="new-york.html">Open the full New York plan →</a>
+    </div>
+  </div>
+
+  <div class="verdict">
+    <h3>⭐ My recommendation: China</h3>
+    <p>China wins on the two things that matter most for your family: <strong>everyone can enter visa-free</strong>
+       (your wife's Russian passport is the dealbreaker for the US), and it is roughly
+       <strong>€2,000–3,000 cheaper</strong> for the same two weeks. It also delivers huge kid appeal —
+       the Great Wall, the Terracotta Warriors and the panda base. New York is wonderful, but only attempt it
+       if you start your wife's US visa application <em>immediately</em> and it is confirmed by late September;
+       otherwise the trip could collapse at the last minute.</p>
+
+    <table>
+      <tr><th>Factor</th><th>🇨🇳 China</th><th>🗽 New York</th></tr>
+      <tr><td>Wife's entry (Russian citizen)</td><td class="ok">Visa-free ✓</td><td class="bad">B1/B2 visa, months' wait ⚠️</td></tr>
+      <tr><td>You + kids (Latvian)</td><td class="ok">Visa-free ✓</td><td class="ok">ESTA, easy ✓</td></tr>
+      <tr><td>Estimated total (family of 4)</td><td><strong>€6,000–7,200</strong></td><td>€8,200–10,400</td></tr>
+      <tr><td>Flights from Riga</td><td>1 stop (Istanbul), ~€600–800 pp</td><td>1 stop (Helsinki), ~€500–680 pp</td></tr>
+      <tr><td>On-the-ground cost</td><td class="ok">Low</td><td class="bad">High</td></tr>
+      <tr><td>Kid wow-factor</td><td>Great Wall, Warriors, pandas</td><td>Liberty, museums, Halloween</td></tr>
+      <tr><td>Weather late Oct</td><td>Crisp north, mild south</td><td>Cool autumn</td></tr>
+      <tr><td>Planning risk</td><td class="ok">Low</td><td class="bad">High (visa timing)</td></tr>
+    </table>
+  </div>
+
+  <p class="note">
+    Prices are research-based estimates for travel in October 2026 (Riga origin) and will move with demand —
+    book early and set fare alerts. Visa and visa-free rules change; always reconfirm with the relevant embassy
+    and your airline before booking. Flight fares: Skyscanner / Turkish Airlines (RIX–PEK) and KAYAK / Expedia / Finnair (RIX–JFK).
+    School dates: Latvian Ministry of Education &amp; Science (IZM).
+  </p>
+  <p class="stamp">Prepared 30 May 2026 · for review only — nothing is booked.</p>
+</div>
+</body>
+</html>
