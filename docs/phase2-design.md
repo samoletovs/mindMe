@@ -1,5 +1,16 @@
 # Phase 2 — Morning briefing capability
 
+> **⚠ Superseded 2026-05-16.** The "07:25 laptop → upload encrypted blob → 07:30
+> Function reads blob" design described below was implemented and smoke-tested,
+> then deliberately retired before Phase 2 went live. The new design lives in
+> [architecture.md](architecture.md): the Function reads the OS markdown
+> directly from a private `personal-os/` container that the laptop syncs to
+> on-demand. No daily laptop schedule.
+>
+> This file is kept as a design-decision record. The trade-off discussion
+> ("does personal markdown live in cloud at all?") that produced the pivot is
+> in [architecture.md §1](architecture.md).
+
 > **Status:** scaffolding (2026-05-11). Code committed; no Azure deployment yet.
 > **Goal:** every morning at 07:30 local time, receive a Telegram message with today's plan + weather, assembled by the `companion` agent from a sanitized briefing context the laptop uploaded at 07:25.
 
@@ -10,7 +21,7 @@
 ┌────────────────────────────┐              ┌──────────────────────────────┐
 │ scripts/local/             │   blob put   │ harness/morning_briefing_timer│
 │   briefing_builder.py      │ ───────────► │  - calls Foundry agent        │
-│  - reads c:\vsCode\.me     │   (AES-GCM)  │  - sends reply via Bot API    │
+│  - reads OneDrive\.me      │   (AES-GCM)  │  - sends reply via Bot API    │
 │  - sanitizes to JSON       │              └──────────────┬───────────────┘
 │  - encrypts (AES-GCM)      │                             │
 │  - uploads to Blob         │                             ▼
@@ -67,7 +78,7 @@ This is scaffolded but **NOT redeployed** yet — `create_agent.py` is updated l
 
 Runs at 07:25 via Windows Task Scheduler. Steps:
 
-1. Read `c:\vsCode\.me\_dashboard.md`, today's journal entry, and current `02_areas/*/README.md` headers.
+1. Read `%USERPROFILE%\OneDrive\.vscode\.me\_dashboard.md` (configurable via `ME_OS_ROOT`), today's journal entry, and current `02_areas/*/README.md` headers.
 2. Build a tiered sanitized JSON snapshot:
    ```json
    {

@@ -14,16 +14,40 @@ Endpoints
 - GET   /api/tools/weather       Foundry agent tool: get_weather()
 
 Logging policy (AGENTS.md rule 1): IDs, sizes, durations only. Never message
-content. Rule 8: httpx logger silenced before any Telegram call.
+content. Rule 8: httpx logger silenced before any Telegram call. Rule 9 (added
+2026-05-17 with agentFlow Phase 1): OpenTelemetry span attributes follow the
+same policy as logs — never set attributes containing prompts, completions,
+message bodies, briefing text, or Telegram URLs. Manual spans only; httpx /
+requests auto-instrumentation is explicitly disabled.
 """
 
 from __future__ import annotations
 
-import base64
+# --- Tracing safety env (Hard Rule 9) ---------------------------------------
+# MUST be set BEFORE importing any OTel exporter or instrumentation. GenAI
+# semantic conventions capture prompts/completions by default — we don't ship
+# that to App Insights. Done belt-and-suspenders via env so any nested
+# OTel-aware library also picks it up.
+import os as _os_for_otel_env
+
+_os_for_otel_env.environ.setdefault(
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false"
+)
+# httpx / requests / urllib auto-instrumentation would capture full URLs.
+# Telegram URLs contain the bot token in the path. Disable them outright; we
+# emit manual spans for the few HTTP calls we make.
+_os_for_otel_env.environ.setdefault(
+    "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS",
+    "httpx,requests,urllib,urllib3,aiohttp-client",
+)
+del _os_for_otel_env
+
 import json
 import logging
 import os
+import re
 import time
+from datetime import date
 from urllib.parse import quote
 
 import azure.functions as func
@@ -31,12 +55,27 @@ import httpx
 from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 # Hard Rule 8: silence httpx/httpcore BEFORE constructing any Telegram client.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("azure.identity").setLevel(logging.WARNING)
+
+# --- Azure Monitor OpenTelemetry (Application Insights) ---------------------
+# Wires traces, metrics, and logs to App Insights via the connection string
+# in APPLICATIONINSIGHTS_CONNECTION_STRING. Safe no-op locally if either the
+# env var or the package is missing.
+try:
+    from azure.monitor.opentelemetry import configure_azure_monitor
+
+    if os.environ.get("APPLICATIONINSIGHTS_CONNECTION_STRING"):
+        configure_azure_monitor()
+except ImportError:  # pragma: no cover — local dev without the package installed
+    pass
+
+from opentelemetry import trace
+
+tracer = trace.get_tracer("mindMe.harness")
 
 log = logging.getLogger("mindMe.harness")
 
@@ -85,11 +124,16 @@ TELEGRAM_API = "https://api.telegram.org"
 
 def _telegram_send(chat_id: int, text: str) -> None:
     """Send a Telegram message. URL contains the token — caller must trust the
-    pre-silenced httpx logger (Hard Rule 8)."""
-    token = os.environ["TELEGRAM_BOT_TOKEN"]
-    url = f"{TELEGRAM_API}/bot{token}/sendMessage"
-    resp = _http_client().post(url, json={"chat_id": chat_id, "text": text})
-    resp.raise_for_status()
+    pre-silenced httpx logger (Hard Rule 8). Span attributes carry size/status
+    only (Hard Rule 9) — NEVER the URL or message text."""
+    with tracer.start_as_current_span("telegram.send") as span:
+        span.set_attribute("chat_id", chat_id)
+        span.set_attribute("message.length", len(text))
+        token = os.environ["TELEGRAM_BOT_TOKEN"]
+        url = f"{TELEGRAM_API}/bot{token}/sendMessage"
+        resp = _http_client().post(url, json={"chat_id": chat_id, "text": text})
+        span.set_attribute("http.status_code", resp.status_code)
+        resp.raise_for_status()
 
 
 def _verify_telegram_secret(req: func.HttpRequest) -> bool:
@@ -115,48 +159,171 @@ def _is_allowed_chat(chat_id: int | None) -> bool:
 # --- Foundry call -----------------------------------------------------------
 
 def _ask_companion(user_text: str, conversation_id: str | None = None) -> str:
-    """Forward to the hosted prompt agent. Returns plain text or '(empty reply)'."""
-    _, openai_client = _foundry()
-    agent_name = os.environ.get("AZURE_AI_AGENT_NAME", "companion")
+    """Forward to the hosted prompt agent. Returns plain text or '(empty reply)'.
 
-    if conversation_id is None:
-        conv = openai_client.conversations.create()
-        conversation_id = conv.id
+    Span attributes carry agent name, input/output **lengths**, and conversation
+    presence flag only (Hard Rule 9) — NEVER prompts or completions."""
+    with tracer.start_as_current_span("ask_companion") as span:
+        span.set_attribute("input.length", len(user_text))
+        span.set_attribute("has_conversation_id", conversation_id is not None)
 
-    response = openai_client.responses.create(
-        conversation=conversation_id,
-        input=user_text,
-        extra_body={
-            "agent_reference": {
-                "name": agent_name,
-                "type": "agent_reference",
-            }
-        },
+        _, openai_client = _foundry()
+        agent_name = os.environ.get("AZURE_AI_AGENT_NAME", "companion")
+        span.set_attribute("agent.name", agent_name)
+
+        if conversation_id is None:
+            conv = openai_client.conversations.create()
+            conversation_id = conv.id
+
+        response = openai_client.responses.create(
+            conversation=conversation_id,
+            input=user_text,
+            extra_body={
+                "agent_reference": {
+                    "name": agent_name,
+                    "type": "agent_reference",
+                }
+            },
+        )
+        text = (response.output_text or "").strip() or "(empty reply)"
+        span.set_attribute("output.length", len(text))
+        return text
+
+
+# --- Briefing snapshot (built from personal-os blob container) -------------
+#
+# Source of truth lives in the `personal-os` container of the SA. The Function
+# reads the markdown files directly with managed identity and builds a
+# sanitized snapshot in-process. No application-layer encryption — the
+# container is private, RBAC-gated, and Microsoft-managed at-rest encryption
+# applies. See docs/architecture.md for the rationale and how to re-add an
+# AES-GCM layer if you change your mind.
+
+PERSONAL_OS_CONTAINER_DEFAULT = "personal-os"
+_personal_os_container = None
+
+
+def _os_container_client():
+    global _personal_os_container
+    if _personal_os_container is None:
+        name = os.environ.get(
+            "AZURE_STORAGE_PERSONAL_OS_CONTAINER", PERSONAL_OS_CONTAINER_DEFAULT
+        )
+        _personal_os_container = _blob_client().get_container_client(name)
+    return _personal_os_container
+
+
+def _read_os_text(rel_path: str) -> str:
+    """Read a markdown blob by relative path; return '' if it doesn't exist."""
+    blob = _os_container_client().get_blob_client(rel_path)
+    try:
+        data = blob.download_blob().readall()
+    except Exception:
+        return ""
+    return data.decode("utf-8", errors="replace")
+
+
+def _extract_dashboard_sections(text: str) -> dict:
+    """Parse `_dashboard.md` into a few well-known slices."""
+    sections: dict[str, list[str]] = {}
+    current_key: str | None = None
+    current_lines: list[str] = []
+
+    for line in text.splitlines():
+        header = re.match(r"^##\s+(.+?)\s*$", line)
+        if header:
+            if current_key is not None:
+                sections[current_key] = current_lines
+            current_key = header.group(1).strip().lower()
+            current_lines = []
+        else:
+            if current_key is not None:
+                current_lines.append(line)
+    if current_key is not None:
+        sections[current_key] = current_lines
+
+    def first_bullets(key_substrings: list[str], limit: int = 5) -> list[str]:
+        for k, lines in sections.items():
+            if any(s in k for s in key_substrings):
+                bullets = [
+                    re.sub(r"^[-*]\s+", "", ln).strip()
+                    for ln in lines
+                    if re.match(r"^\s*[-*]\s+", ln)
+                ]
+                return [b for b in bullets if b][:limit]
+        return []
+
+    return {
+        "top_goals": first_bullets(["top goal", "goal"]),
+        "this_week": first_bullets(["this week", "week"]),
+        "today_focus": " ".join(first_bullets(["today", "focus"])) or "",
+    }
+
+
+def _extract_journal_summary(text: str, journal_date: str) -> dict:
+    if not text:
+        return {"date": None, "open_loops_count": 0, "mood": "", "energy": ""}
+    open_loops = len(re.findall(r"^\s*-\s*\[\s*\]", text, flags=re.MULTILINE))
+    mood = ""
+    energy = ""
+    mood_match = re.search(r"Mood\s*:\s*([0-9]{1,2})", text)
+    energy_match = re.search(r"Energy\s*:\s*([0-9]{1,2})", text)
+    if mood_match:
+        mood = mood_match.group(1)
+    if energy_match:
+        energy = energy_match.group(1)
+    return {
+        "date": journal_date,
+        "open_loops_count": open_loops,
+        "mood": mood,
+        "energy": energy,
+    }
+
+
+def _list_area_h1s(limit: int = 8) -> list[str]:
+    """H1 of each `02_areas/<area>/README.md`, in alphabetical order."""
+    headlines: list[str] = []
+    container = _os_container_client()
+    blobs = container.list_blobs(name_starts_with="02_areas/")
+    readmes = sorted(
+        b.name for b in blobs
+        if b.name.endswith("/README.md") and b.name.count("/") == 2
     )
-    return (response.output_text or "").strip() or "(empty reply)"
+    for name in readmes:
+        text = _read_os_text(name)
+        first_line = next((ln for ln in text.splitlines() if ln.strip()), "")
+        if first_line.startswith("# "):
+            headlines.append(first_line[2:].strip())
+        if len(headlines) >= limit:
+            break
+    return headlines
 
 
-# --- Briefing encryption ----------------------------------------------------
+def _build_briefing_snapshot() -> dict:
+    with tracer.start_as_current_span("build_briefing_snapshot") as span:
+        today = date.today()
+        snapshot: dict = {"date": today.isoformat()}
 
-def _decrypt_briefing(blob_bytes: bytes) -> dict:
-    """Format: [12-byte nonce][ciphertext+tag]. Key is 32 bytes base64 in env."""
-    key_b64 = os.environ["BRIEFING_ENCRYPTION_KEY"]
-    key = base64.b64decode(key_b64)
-    if len(key) != 32:
-        raise ValueError("BRIEFING_ENCRYPTION_KEY must be 32 bytes (base64-encoded).")
-    if len(blob_bytes) < 13:
-        raise ValueError("Briefing blob too short.")
-    nonce, ciphertext = blob_bytes[:12], blob_bytes[12:]
-    aesgcm = AESGCM(key)
-    plaintext = aesgcm.decrypt(nonce, ciphertext, associated_data=None)
-    return json.loads(plaintext.decode("utf-8"))
+        dashboard_text = _read_os_text("_dashboard.md")
+        span.set_attribute("dashboard.length", len(dashboard_text))
+        if dashboard_text:
+            snapshot.update(_extract_dashboard_sections(dashboard_text))
+        else:
+            snapshot.update({"top_goals": [], "this_week": [], "today_focus": ""})
 
+        journal_rel = (
+            f"05_journal/{today.year}/{today.year}-{today.month:02d}-{today.day:02d}.md"
+        )
+        journal_text = _read_os_text(journal_rel)
+        span.set_attribute("journal.length", len(journal_text))
+        snapshot["yesterday"] = _extract_journal_summary(
+            journal_text,
+            journal_date=journal_rel.split("/")[-1].removesuffix(".md"),
+        )
 
-def _load_briefing() -> dict:
-    container = os.environ["AZURE_STORAGE_BRIEFING_CONTAINER"]
-    blob = _blob_client().get_blob_client(container=container, blob="today.bin")
-    raw = blob.download_blob().readall()
-    return _decrypt_briefing(raw)
+        snapshot["areas"] = _list_area_h1s()
+        span.set_attribute("areas.count", len(snapshot["areas"]))
+        return snapshot
 
 
 def _is_tiered_briefing(data: dict) -> bool:
@@ -366,7 +533,8 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
 def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_briefing_context().
 
-    Returns today's sanitized JSON snapshot (decrypted from Blob).
+    Returns today's sanitized JSON snapshot, built in-process from the
+    `personal-os` blob container. No application-layer encryption.
     """
     req_json: dict = {}
     try:
@@ -405,7 +573,7 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
         data = _load_briefing()
         view = _select_briefing_view(data, tier=tier, include_meta=include_meta)
     except Exception:
-        log.exception("briefing_context load failed")
+        log.exception("briefing_context build failed")
         return func.HttpResponse(
             json.dumps({"error": "briefing not available"}),
             mimetype="application/json",

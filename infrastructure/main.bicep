@@ -300,6 +300,18 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           name: 'BRIEFING_ENCRYPTION_KEY'
           value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=briefing-encryption-key)'
         }
+        // Tracing safety (agentFlow Phase 1, AGENTS.md Hard Rule 9):
+        // belt-and-suspenders content suppression in case any nested
+        // OTel-aware library auto-instruments at runtime. The Function App
+        // also sets these defensively in code; both layers are required.
+        {
+          name: 'OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT'
+          value: 'false'
+        }
+        {
+          name: 'OTEL_PYTHON_DISABLED_INSTRUMENTATIONS'
+          value: 'httpx,requests,urllib,urllib3,aiohttp-client'
+        }
       ]
     }
   }

@@ -1,60 +1,76 @@
 # mindMe / scripts / local
 
-Scripts that run **on the laptop** (not in Azure). These touch the Personal OS
-at `c:\vsCode\.me` directly. They are not in the Function App.
+Utility scripts that run **from the laptop** — but only on-demand, never on a
+schedule. The daily morning briefing pipeline lives entirely in Azure
+(`harness/function_app.py`). See `docs/architecture.md` for the full picture.
 
-## briefing_builder.py
+These scripts touch the Personal OS at `%USERPROFILE%\OneDrive\.vscode\.me`
+directly (override via `ME_OS_ROOT` env var).
 
-Runs at 07:25 daily via Windows Task Scheduler. Builds the sanitized briefing
-JSON, AES-GCM encrypts it (key from Key Vault), uploads to
-`briefing-context/today.bin`.
+---
 
-Current blob schema is tiered:
-- `core` (always loaded): today's focus, goals, open loops, mood/energy, area headlines, urgent deadlines.
-- `extended` (on demand): scored summaries with metadata.
-- `deep` (rare fallback): compressed excerpts (`zlib+base64`) for extra context.
+## sync_os_to_blob.py — push OS edits to Azure
 
-Optional size controls via `.env`:
-- `BRIEFING_CORE_MAX_BYTES` (default `3500`)
-- `BRIEFING_EXTENDED_MAX_BYTES` (default `7000`)
-- `BRIEFING_DEEP_MAX_BYTES` (default `9000`)
-- `BRIEFING_DEEP_ZLIB_LEVEL` (default `9`)
-
-### Run once manually
+After you've edited the Personal OS, run this to refresh the cloud mirror so
+the Function App reads your latest content at briefing time:
 
 ```powershell
 cd c:\vsCode\.nauroLabs\mindMe
-.\.venv\Scripts\python.exe scripts\local\briefing_builder.py
+.\.venv\Scripts\python.exe scripts\local\sync_os_to_blob.py
 ```
 
-### Install as a scheduled task (one-time)
+- Uploads every `*.md` under the OS root to the `personal-os` container.
+- Skips files where `size` and `last-modified` already match (cheap idempotent
+  re-runs).
+- Writes a `_manifest.json` blob at the container root with the sync time.
+- **Not** a scheduled task. Run it manually, wire it into a VS Code task, or
+  hang it off a git pre-push hook later — your choice. The Function App does
+  not depend on this running on any particular cadence.
+
+---
+
+## test_briefing_snapshot.py — local validator
+
+Imports `harness/function_app.py::_build_briefing_snapshot()` and runs it
+against the live `personal-os` container. Use this to verify the snapshot
+content after editing the OS or the dashboard parser:
 
 ```powershell
-$action = New-ScheduledTaskAction `
-    -Execute "c:\vsCode\.nauroLabs\mindMe\.venv\Scripts\python.exe" `
-    -Argument "c:\vsCode\.nauroLabs\mindMe\scripts\local\briefing_builder.py" `
-    -WorkingDirectory "c:\vsCode\.nauroLabs\mindMe"
-
-$trigger = New-ScheduledTaskTrigger -Daily -At 07:25
-
-$settings = New-ScheduledTaskSettingsSet `
-    -StartWhenAvailable `
-    -DontStopOnIdleEnd `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-
-Register-ScheduledTask -TaskName "mindMe-briefing-builder" `
-    -Action $action -Trigger $trigger -Settings $settings -Description "Build + encrypt + upload mindMe briefing context daily at 07:25."
+.\.venv\Scripts\python.exe scripts\local\test_briefing_snapshot.py
 ```
 
-### Prerequisites
+Output is the JSON the Foundry agent receives from `get_briefing_context()`.
 
-- `az login` (personal account) — `DefaultAzureCredential` uses Azure CLI cached
-  creds.
-- `.env` populated with `AZURE_KEYVAULT_NAME` and `AZURE_STORAGE_ACCOUNT` from
-  Bicep output.
-- Key Vault contains `briefing-encryption-key` (32 random bytes, base64):
+---
+
+## briefing_builder.py — DEPRECATED 2026-05-16
+
+Was the laptop-scheduled job that built, AES-GCM encrypted, and uploaded
+`briefing-context/today.bin` daily at 07:25. Replaced by:
+
+| Old (laptop)                               | New (cloud)                                      |
+|---|---|
+| Task Scheduler `mindMe-briefing-builder`   | None — no laptop schedule                        |
+| `briefing_builder.py` (this folder)        | `harness/function_app.py::_build_briefing_snapshot()` |
+| `briefing-context/today.bin` (encrypted blob) | Live read from `personal-os/` container       |
+| `briefing-encryption-key` in Key Vault     | Not used (private container + RBAC only)         |
+
+File kept for reference and fallback. Do **not** schedule it.
+
+---
+
+## Prerequisites (for the sync + test scripts)
+
+- `az login` with the personal account that owns `foundrylab-rg`:
   ```powershell
-  $key = [Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 } | ForEach-Object { [byte]$_ }))
-  az keyvault secret set --vault-name kv-mindme-<suffix> --name briefing-encryption-key --value $key
+  az account set --subscription "Visual Studio Enterprise Subscription"
   ```
-- The signed-in user has `Key Vault Secrets User` (or higher) on the Vault.
+- `.env` populated with `AZURE_STORAGE_ACCOUNT` (and optionally
+  `AZURE_STORAGE_PERSONAL_OS_CONTAINER` if you want to override the
+  `personal-os` default).
+- The signed-in user has `Storage Blob Data Contributor` on the storage
+  account. Grant once:
+  ```powershell
+  $said='/subscriptions/<sub>/resourceGroups/foundrylab-rg/providers/Microsoft.Storage/storageAccounts/stmindmeymcpt'
+  az role assignment create --assignee <your-object-id> --role 'Storage Blob Data Contributor' --scope $said
+  ```

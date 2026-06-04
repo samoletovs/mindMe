@@ -23,33 +23,36 @@ Anything beyond is v2+. See [Out of scope](#out-of-scope-v1).
 ## Architecture
 
 ```
-┌─────────────────────┐
-│ Laptop (c:\vsCode)  │
-│  - .me (Personal OS)│  07:25 cron → builds briefing-context.json
-│  - briefing_builder │           → encrypts (AES-GCM)
-│  - capture_sync     │           → uploads to Blob
-└──────────┬──────────┘
-           │
-           ↓ (encrypted, overwritten daily)
-┌─────────────────────────────────────────────┐
-│ Azure (foundrylab-rg, swedencentral)        │
-│                                             │
-│  Storage Account (Blob + Queue + Table)     │
-│  Key Vault (bot token, encryption key)      │
-│  App Insights                               │
-│                                             │
-│  Function App (Python, Consumption)         │
-│   ├─ telegram_webhook (HTTP)                │
-│   ├─ morning_briefing_timer (07:30 CRON)    │
-│   └─ capture_drain (Queue trigger)          │
-│       │                                     │
-│       ↓ calls                               │
-│  Foundry project: mindMe                    │
-│   └─ Hosted agent: companion                │
-│       ├─ get_briefing_context()             │
-│       ├─ get_weather()                      │
-│       └─ ack_capture()                      │
-└─────────────────────────────────────────────┘
+┌────────────────────────────────────────┐
+│ Laptop (occasional, on-demand only)    │
+│  - .me (Personal OS, markdown)         │  When you edit, run:
+│  - scripts/local/sync_os_to_blob.py    │  → pushes markdown to personal-os/
+└──────────────────┬─────────────────────┘
+                   │ (on-demand, never scheduled)
+                   ↓
+┌──────────────────────────────────────────────────┐
+│ Azure (foundrylab-rg, swedencentral)             │
+│                                                  │
+│  Storage Account                                 │
+│   ├─ personal-os/      ← OS markdown mirror      │
+│   ├─ briefing-context/ ← LEGACY, no longer read  │
+│   └─ Queue (Phase 3)                             │
+│  Key Vault   (bot token; legacy encryption key)  │
+│  App Insights                                    │
+│                                                  │
+│  Function App (Python, Flex Consumption)         │
+│   ├─ telegram_webhook        (HTTP)              │
+│   ├─ morning_briefing_timer  (07:30 CRON)        │
+│   ├─ capture_drain           (Queue trigger)     │
+│   ├─ tool_briefing_context   (HTTP, agent tool)  │
+│   │     reads personal-os/ blobs, builds         │
+│   │     sanitized JSON in-process                │
+│   └─ tool_weather            (HTTP, agent tool)  │
+│         │                                        │
+│         ↓ calls                                  │
+│  Foundry project: mindMe                         │
+│   └─ Hosted agent: companion                     │
+└──────────────────────────────────────────────────┘
            ↑↓
 ┌─────────────────────┐
 │ Telegram bot        │
@@ -57,10 +60,14 @@ Anything beyond is v2+. See [Out of scope](#out-of-scope-v1).
 └─────────────────────┘
 ```
 
-**Key principle:** personal markdown NEVER lives unencrypted in the cloud. The briefing-context blob is the only personal data that touches Azure, and it's:
-- Sanitized (only what the agent needs)
-- AES-GCM encrypted with key in Key Vault
-- Overwritten daily (no history)
+**Key principle (revised 2026-05-16):** the morning briefing pipeline runs
+entirely in Azure — no laptop required at run-time. The Personal OS markdown is
+mirrored to a **private** blob container (`personal-os/`) guarded by
+managed-identity RBAC and Microsoft-managed at-rest encryption. The previous
+application-layer AES-GCM encryption was dropped because (a) the container is
+private and (b) the SA's MMK encryption already covers the at-rest threat. See
+`docs/architecture.md` for the trade-off discussion and how to re-enable
+app-layer encryption if you change your mind.
 
 ---
 
@@ -105,12 +112,15 @@ Layout mirrors [`agentMode`](https://github.com/samoletovs/agentMode) and [`foun
 
 ## Status
 
-Phase 1 complete (2026-05-11). See planning doc in Personal OS: `01_projects/2026-personal-agent-foundation/`.
+Phase 1 complete (2026-05-11). Phase 2 cloud-native rewrite landed 2026-05-16
+(see [docs/architecture.md](docs/architecture.md) for the trade-off decision
+that drove it). See planning doc in Personal OS:
+`01_projects/2026-personal-agent-foundation/`.
 
 | Phase | Status | Deliverable |
 |---|---|---|
 | 1. Foundation | ✅ complete | Repo, Foundry project, Telegram bot, end-to-end smoke test (ping → pong via Foundry) |
-| 2. Morning briefing | ⏳ next | Capability #1 working end-to-end |
+| 2. Morning briefing | 🟡 in progress | Function App reads `personal-os/` blob, builds snapshot, calls agent, sends Telegram. Awaiting Function App deploy + first 07:30 observation. |
 | 3. Quick capture | ⏳ | Capability #2 working end-to-end |
 | 4. Stabilize | ⏳ | Foundry evals, prompt optimizer, foundryLab cross-link |
 

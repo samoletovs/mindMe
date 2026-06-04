@@ -20,6 +20,11 @@
     "TELEGRAM_BOT_TOKEN": "",
     "TELEGRAM_WEBHOOK_SECRET": "",
     "TELEGRAM_ALLOWED_CHAT_ID": "",
-    "BRIEFING_ENCRYPTION_KEY": ""
+    "BRIEFING_ENCRYPTION_KEY": "",
+
+    "// --- Tracing (agentFlow Phase 1)": "Hard Rule 9 — never capture content",
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "false",
+    "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS": "httpx,requests,urllib,urllib3,aiohttp-client",
+    "// OTEL_EXPORTER_OTLP_ENDPOINT": "Set to http://localhost:4318 to also export to AI Toolkit local viewer"
   }
 }

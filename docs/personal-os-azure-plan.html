@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Personal OS on Azure — MindMe Plan</title>
+  <title>Personal OS on Azure — channels by sensitivity (mindMe)</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; max-width: 920px; margin: 2rem auto; padding: 0 1rem; line-height: 1.55; color: #1f2937; }
     h1, h2, h3 { color: #111827; }
@@ -15,97 +15,167 @@
   </style>
 </head>
 <body>
-  <h1>Personal OS on Azure — MindMe Plan</h1>
-  <p class="note"><strong>Status:</strong> proposal draft for review.<br />
-  <strong>Scope:</strong> secure personal knowledge system with OneDrive source data, MindMe agent core, Telegram notifications, and GitHub-based chat access.</p>
+  <h1>Personal OS on Azure — channels by sensitivity</h1>
+  <p class="note"><strong>Status:</strong> build-ready plan for the next mindMe capability. Revised 2026-06-01 to match the deployed architecture and the channel-split decision (Telegram = capture + notify; GitHub/VS Code = read).<br />
+  This supersedes the original generic proposal (Container Apps + PostgreSQL + Redis), which never reflected what was actually built. The real stack lives in <code>architecture.md</code> and <code>phase2-design.md</code>. This HTML mirrors <code>personal-os-azure-plan.md</code> (the source of truth).</p>
 
-  <h2>Goals</h2>
-  <ul>
-    <li>Keep personal information organized, searchable, and private.</li>
-    <li>Enable chat access from laptop and iPhone.</li>
-    <li>Keep operating cost predictable.</li>
-    <li>Use strong security defaults from day one.</li>
-  </ul>
+  <h2>What this plan is (and is not)</h2>
+  <p>This is <strong>not</strong> a greenfield "stand up a personal OS on Azure" plan — that work is largely done. mindMe already runs in <code>foundrylab-rg</code> (swedencentral), reads the Personal OS markdown from a private blob container, and answers Telegram messages through the <code>companion</code> Foundry agent. This plan settles the <strong>interface question</strong> — which channel touches which data — and defines the next build step that follows from it.</p>
 
-  <h2>Target user flow</h2>
-  <ol>
-    <li>You keep source files in OneDrive.</li>
-    <li>MindMe sync/index pipeline imports approved content.</li>
-    <li>You chat with MindMe from Telegram bot, GitHub chat bridge, and local VS Code workflow.</li>
-    <li>Sensitive data stays in controlled storage with strict auth and audit logging.</li>
-  </ol>
-
-  <h2>Recommended architecture (personal, secure, cost-aware)</h2>
-  <ul>
-    <li><strong>Identity/Auth:</strong> Microsoft Entra ID (OAuth2/OIDC, delegated scopes).</li>
-    <li><strong>Agent API host:</strong> Azure Container Apps (or Function App for timer/webhook workloads).</li>
-    <li><strong>Database:</strong> Azure Database for PostgreSQL.</li>
-    <li><strong>Cache/queue (optional):</strong> Azure Cache for Redis + Storage Queue.</li>
-    <li><strong>Secrets:</strong> Azure Key Vault.</li>
-    <li><strong>Storage:</strong> Azure Blob Storage.</li>
-    <li><strong>Monitoring:</strong> Application Insights + Log Analytics.</li>
-    <li><strong>Integrations:</strong> Microsoft Graph (OneDrive), Telegram Bot API, GitHub bridge service.</li>
-  </ul>
-
-  <h2>Estimated monthly costs (rough ranges)</h2>
+  <h3>The decision: split channels by sensitivity</h3>
+  <p>Regular Telegram chats are <strong>not</strong> end-to-end encrypted. Bot conversations are stored in plaintext on Telegram's servers, and the allowlist trusts a single Telegram chat ID — so an account takeover would turn the bot into a data-exfiltration tool the moment it can read the full <code>.me</code>. That makes Telegram the wrong place to <em>retrieve</em> personal content. So we split by sensitivity:</p>
   <table>
     <thead>
-      <tr><th>Profile</th><th>Typical range</th><th>Notes</th></tr>
+      <tr><th>Channel</th><th>Direction</th><th>Sensitivity</th><th>Use</th></tr>
     </thead>
     <tbody>
-      <tr>
-        <td>Minimal secure setup</td>
-        <td>~$39–85/month</td>
-        <td>Lean hosting + small PostgreSQL + essential security/monitoring.</td>
-      </tr>
-      <tr>
-        <td>Recommended personal production</td>
-        <td>~$73–165/month</td>
-        <td>More headroom, optional Redis, stronger backup/retention posture.</td>
-      </tr>
+      <tr><td><strong>Telegram / mindMe</strong></td><td>write + push</td><td>low</td><td>Quick captures <strong>in</strong>; briefings &amp; notifications <strong>out</strong></td></tr>
+      <tr><td><strong>GitHub mobile + VS Code</strong></td><td>read</td><td>high</td><td>Browse / search the full <code>.me</code>, behind your own Microsoft/GitHub identity + 2FA</td></tr>
     </tbody>
   </table>
-  <p><strong>Important:</strong> LLM/API usage is separate and may be the largest variable cost.</p>
-
-  <h2>Security baseline (required)</h2>
+  <p>In one line: <strong>mindMe is the ears and mouth (capture + notify); GitHub/VS Code are the eyes (read).</strong> Rich, conversational recall over Telegram is <strong>deferred</strong> behind explicit privacy controls — built only if the "librarian you talk to" experience proves worth the exposure.</p>
+  <p>Why this is the right default:</p>
   <ul>
-    <li>Least-privilege Graph scopes for OneDrive.</li>
-    <li>Key Vault-only secret management.</li>
-    <li>Encryption in transit and at rest.</li>
-    <li>Per-user data isolation in DB/storage.</li>
-    <li>Token refresh/revocation + disconnect OneDrive action.</li>
-    <li>Audit logs for sync, access, and admin actions.</li>
-    <li>Budget alerts + anomaly detection in Azure Cost Management.</li>
-    <li>Backup policy with periodic restore test.</li>
+    <li><strong>Removes the worst exposure.</strong> Recalled personal content never lands in Telegram's plaintext cloud store, because rich reading doesn't go through Telegram.</li>
+    <li><strong>Reuses auth you already trust.</strong> GitHub mobile and VS Code sit behind your GitHub/Microsoft identity with 2FA — no new front-end to secure, no new allowlist.</li>
+    <li><strong><code>.me</code> is already a git repo.</strong> Reading on the phone is just browsing the <strong>private</strong> GitHub repo, so "make <code>.me</code> accessible" on the read side is mostly free.</li>
+    <li><strong>Shrinks the build.</strong> mindMe's job narrows to <em>capture + notify</em>, which is largely built. The conversational-recall tool (<code>search_os</code>) becomes optional and deferred rather than the centerpiece.</li>
+  </ul>
+  <p>The trade-off, stated plainly: you lose <em>conversational</em> recall on mobile ("summarize my payArc pricing decisions") in exchange for the privacy win. You keep <em>manual</em> recall (browse/search the repo). And <code>.me</code> now also lives in a GitHub cloud copy — acceptable because it's a <strong>private</strong> repo behind your 2FA, but it must stay private with no collaborators.</p>
+
+  <h2>Where we are now (verified 2026-06-01)</h2>
+  <h3>Deployed resources (tag <code>project=mindMe</code>, <code>foundrylab-rg</code>, swedencentral)</h3>
+  <table>
+    <thead>
+      <tr><th>Resource</th><th>Type / SKU</th><th>Role</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>func-mindme-ymcpt</code></td><td>Function App, Flex Consumption (FC1)</td><td>Telegram webhook, briefing timer, agent tools</td></tr>
+      <tr><td><code>plan-mindme-ymcpt</code></td><td>Server farm, FC1 FlexConsumption</td><td>Hosts the Function App</td></tr>
+      <tr><td><code>stmindmeymcpt</code></td><td>Storage, Standard_LRS (StorageV2)</td><td><code>personal-os/</code> markdown mirror, <code>capture-events</code> queue</td></tr>
+      <tr><td><code>kv-mindme-ymcpt</code></td><td>Key Vault, Standard</td><td>Bot token, webhook secret, (legacy) encryption key</td></tr>
+      <tr><td><code>log-mindme</code></td><td>Log Analytics, PerGB2018, 30-day, 1 GB/day cap</td><td>Telemetry store</td></tr>
+      <tr><td><code>appi-mindme</code></td><td>App Insights, workspace-based</td><td>Traces / metrics / logs</td></tr>
+      <tr><td><code>id-mindme</code></td><td>User-assigned managed identity</td><td>Auth for Storage, Key Vault, Foundry</td></tr>
+      <tr><td>Foundry project <code>mindMe</code></td><td>Reuses <code>foundrylab-aiservices</code>, <code>gpt-4o-mini</code></td><td>The <code>companion</code> agent</td></tr>
+    </tbody>
+  </table>
+  <p class="note">The original plan's Container Apps + PostgreSQL + Redis are <strong>not deployed and not needed.</strong> mindMe is a single-user agent reading a few hundred markdown files; a relational DB and a cache server would be cost and operational overhead with no payoff. If full-text or vector search later proves it needs a backing index, the answer is a managed index, not a PostgreSQL server.</p>
+
+  <h3>What already works</h3>
+  <ul>
+    <li><strong>Interactive chat</strong> — <code>telegram_webhook</code> forwards free text to <code>_ask_companion</code> (<code>harness/function_app.py</code>). Allowlist of one (Hard Rule 2). <code>/ping</code>, <code>/status</code>, <code>/help</code> handled locally.</li>
+    <li><strong>Morning briefing</strong> — <code>morning_briefing_timer</code> at 07:30 Sweden time asks the agent to compose a briefing using <code>get_briefing_context</code> + <code>get_weather</code>.</li>
+    <li><strong>Agent tools</strong> — <code>tool_briefing_context</code> (shallow daily snapshot) and <code>tool_weather</code>.</li>
+    <li><strong>Security baseline</strong> — managed-identity RBAC everywhere, no SAS / account keys, Key Vault references for secrets, Telegram webhook secret header, OpenTelemetry content suppression (Hard Rules 1, 8, 9).</li>
   </ul>
 
-  <h2>Access from iPhone (practical approach)</h2>
+  <h3>The gap</h3>
+  <p><code>tool_briefing_context</code> builds a <strong>fixed, shallow</strong> snapshot in <code>_build_briefing_snapshot</code>: <code>_dashboard.md</code> bullets, yesterday's journal summary, and the H1 of each <code>02_areas/*/README.md</code>. There is <strong>no way to query arbitrary <code>.me</code> content</strong>. The agent cannot search projects, past journals, notes, decisions, or anything outside the four hardcoded slices.</p>
+
+  <h2>The next capability: tighten the capture + notify loop</h2>
+  <p>Given the channel split, the <strong>read</strong> side is largely solved for free (browse / search the private <code>.me</code> repo in GitHub mobile or VS Code). So the next build focuses on the two things that <em>do</em> run through mindMe — and are <em>safe</em> to — namely <strong>capture</strong> (quick thoughts in) and <strong>notify</strong> (briefings + nudges out).</p>
+  <p><strong>Goal:</strong> from my phone, I can fire a quick capture into <code>.me</code> in one message, and I receive a useful morning briefing plus timely nudges — all without rich personal content sitting in Telegram's cloud.</p>
+
+  <h3>Capture (write path)</h3>
+  <p>A Telegram message that isn't a command becomes a capture: the harness enqueues it on <code>capture-events</code>, and a queue-triggered function appends it to the right place in <code>.me</code> (e.g. <code>05_journal/YYYY/YYYY-MM-DD.md</code> or an inbox file). Keep captures short, and <strong>do not echo the full stored content back</strong> — acknowledge with a minimal confirmation ("captured ✓") so personal text isn't duplicated into the chat history.</p>
+  <pre><code>Telegram message ("idea: payArc — tier pricing by merchant volume")
+   → telegram_webhook → enqueue capture-events
+        → queue-trigger appends to .me inbox/journal (blob mirror)
+   → _telegram_send ("captured ✓")  # no content echo</code></pre>
+  <p class="note">The write path lands in the <strong>blob mirror</strong>. Syncing the blob mirror back to the laptop <code>.me</code> repo — and from there to the <strong>private GitHub repo</strong> you read on mobile — is what closes the loop.</p>
+
+  <h3>Notify (push path — already mostly built)</h3>
   <ul>
-    <li>Primary mobile UX: Telegram bot.</li>
-    <li>GitHub app access: GitHub chat bridge endpoint relaying to MindMe.</li>
-    <li>Both channels should share authorization policy and audit trail.</li>
+    <li><strong>Morning briefing</strong> at 07:30 (deployed) — keep it low-sensitivity: surface <em>pointers and counts</em> ("3 open loops in <code>turgo</code>, deadline Friday"), not verbatim private content, since briefings persist in Telegram's cloud.</li>
+    <li><strong>Nudges</strong> — optional timer/event-driven reminders (deadlines approaching, open-loop count rising). Same low-sensitivity rule.</li>
   </ul>
 
-  <h2>Implementation phases</h2>
+  <h3>Freshness &amp; the read repo</h3>
+  <p>The channel split adds a requirement: the data you <em>read</em> on GitHub mobile is a <strong>third copy</strong> (laptop <code>.me</code> → blob mirror → GitHub repo). For mobile reading to be useful, <code>.me</code> must be pushed to a <strong>private GitHub repo</strong> on a cadence that keeps it current. Two ergonomics to build:</p>
+  <ul>
+    <li><strong>One-gesture sync</strong> — a VS Code task / keybind (or git hook on <code>.me</code>) that runs <code>sync_os_to_blob.py</code> <strong>and</strong> pushes the <code>.me</code> git repo, so "sync before I leave the laptop" is one action that updates both the agent's mirror and the mobile-read repo.</li>
+    <li><strong>Staleness signal</strong> — surface the last-sync timestamp in <code>/status</code> so you know how fresh the mobile copy and the agent's mirror are.</li>
+  </ul>
+
+  <h2>Deferred: conversational recall over Telegram (<code>search_os</code>)</h2>
+  <p>This is the capability we are <strong>explicitly not building yet</strong>. It would let you ask mindMe a free-form question ("summarize my payArc pricing decisions") and have it read across the full <code>.me</code> and answer in chat. It's recorded here so the design isn't lost — but it stays behind the channel-split decision.</p>
+  <p><strong>Build it only if</strong> manual reading via GitHub/VS Code proves too clumsy <em>and</em> you accept the mitigations below (which keep personal content out of Telegram's cloud as much as a chat channel allows):</p>
+  <ul>
+    <li><strong>Pointers, not content</strong> — default replies cite <em>where</em> ("found it in <code>02_areas/payArc/pricing.md</code> — want the detail?"); verbatim excerpts are opt-in per query.</li>
+    <li><strong>Sensitivity tiering</strong> — mark some areas/files (e.g. <code>private:</code> frontmatter or a <code>99_vault/</code> prefix) as <em>never sent to Telegram</em>; reachable only from the laptop/VS Code read path. Caps blast radius on account takeover.</li>
+    <li><strong>Ephemeral replies</strong> — auto-delete the bot's recall messages after N minutes to shrink the standing cloud copy.</li>
+    <li><strong>Re-auth gate</strong> — require a time-boxed "unlock" before sensitive recall, so a hijacked session can't silently vacuum everything.</li>
+  </ul>
+  <p>If/when it ships, the implementation is a new <code>search_os</code> agent tool inside the existing Function App:</p>
+  <ul>
+    <li><strong>Tier 1 (first):</strong> in-process keyword/recency search — <code>search_os(query, k=5, area=None)</code> lists <code>personal-os/</code> blobs (optional prefix), ranks by term frequency + recency + path match, returns top-<em>k</em> heading-chunked, byte-capped excerpts. No new infrastructure, ≈ €0.</li>
+    <li><strong>Tier 2 (only if Tier 1 falls short):</strong> embeddings — Foundry vector store or in-blob vectors with <code>text-embedding-3-small</code>. <strong>Azure AI Search (~€70+/mo) breaks the €5–10 cap and is out of scope</strong> without an explicit decision.</li>
+  </ul>
+
+  <h2>Security &amp; privacy</h2>
+  <h3>Interface trust boundary (the reason for the split)</h3>
+  <ul>
+    <li><strong>Telegram is semi-trusted.</strong> Cloud chats are plaintext on Telegram's servers; the allowlist trusts a chat ID, so account takeover → bot access. Therefore Telegram carries only <em>low-sensitivity</em> traffic: short captures in, pointer-style briefings out. No full-<code>.me</code> retrieval over Telegram (that's the deferred <code>search_os</code>).</li>
+    <li><strong>Account hardening (do regardless, free):</strong> Telegram 2FA password on, active sessions reviewed, carrier SIM-swap PIN set. Highest-impact, lowest-cost fix.</li>
+    <li><strong>Bot token hygiene</strong> — Key Vault only; httpx/httpcore loggers silenced before the Telegram client is built (Hard Rule 8); rotate on any suspected leak.</li>
+    <li><strong>GitHub read repo must be private</strong> with no collaborators — it's the high-sensitivity read surface and a cloud copy of <code>.me</code>.</li>
+  </ul>
+  <h3>Existing guarantees (carried forward)</h3>
+  <ul>
+    <li><strong>RBAC-only blob access</strong> via <code>id-mindme</code>. No SAS, no keys.</li>
+    <li><strong>Allowlist of one</strong> (Hard Rule 2) — never widened without explicit confirmation.</li>
+    <li><strong>No content in logs or traces</strong> (Hard Rules 1, 9). The capture path's span carries only sizes/counts/durations — <strong>never</strong> the capture text. Any new span gets a row in architecture.md §8.3 with an audited, size-only attribute list.</li>
+    <li><strong>Content minimization</strong> — captures aren't echoed back in full; briefings prefer pointers over verbatim content.</li>
+    <li><strong>Audit</strong> — export 24 h of traces and grep for a known personal string; zero hits is the acceptance criterion (architecture.md §8.6).</li>
+    <li><strong>Pre-push leak scan</strong> — <code>scripts/audit-leaks.ps1</code> before every push (Hard Rule 7).</li>
+  </ul>
+
+  <h2>Cost — real run-rate (corrected)</h2>
+  <p>The original "$39–165/month" range assumed a stack that was never deployed. The actual mindMe footprint is far cheaper.</p>
+  <table>
+    <thead>
+      <tr><th>Service</th><th>Driver</th><th>Expected / month</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Functions (Flex Consumption)</td><td>Very low execution volume; free grant covers it</td><td>~€0</td></tr>
+      <tr><td>Storage (Standard_LRS)</td><td>Tiny capacity, modest transactions</td><td>~€0.50</td></tr>
+      <tr><td>Key Vault (Standard)</td><td>A few hundred ops</td><td>~€0</td></tr>
+      <tr><td>Log Analytics / App Insights</td><td>Light telemetry, 1 GB/day cap, 30-day retention</td><td>€0–3</td></tr>
+      <tr><td>Managed identity</td><td>—</td><td>€0</td></tr>
+      <tr><td>Foundry <code>gpt-4o-mini</code></td><td>Briefing + occasional capture classification</td><td>low single-digit €</td></tr>
+      <tr><td><strong>Total</strong></td><td></td><td><strong>~€1–4/month</strong></td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li><strong>Cost cap:</strong> €5–10/month. Budget alert already set at <strong>€8</strong>.</li>
+    <li><strong>Biggest cost risk is telemetry, not compute</strong> — the 1 GB/day Log Analytics cap is the guardrail; keep it. The capture + notify loop barely moves token cost.</li>
+    <li><strong>Deferred <code>search_os</code> Tier 2 with Azure AI Search would break the cap</strong> (~€70+/mo) — explicitly gated, not in scope without a decision.</li>
+    <li>Comfortably inside the €150/month Visual Studio Enterprise credit on <code>146099412+samoletovs@users.noreply.github.com</code>. Verify month-to-date in Azure Portal → <strong>Cost Management + Billing</strong> → Cost analysis (scope: mindMe resource group or <code>project=mindMe</code> tag).</li>
+  </ul>
+
+  <h2>Build steps (next session)</h2>
+  <p class="note">Prerequisite: Phase 2 (morning briefing) is deployed and a 07:30 message has been observed. If not, finish that first.</p>
   <ol>
-    <li>Foundation: Entra app registration, Key Vault, base hosting, PostgreSQL.</li>
-    <li>OneDrive integration: OAuth flow + Graph sync/index worker.</li>
-    <li>Interfaces: Telegram bot + GitHub chat bridge + notification routing.</li>
-    <li>Security hardening: audit, budgets, alerts, backup/restore drill.</li>
-    <li>Optimization: tune costs, autoscaling, retention, indexing policy.</li>
+    <li><strong>Confirm the read repo.</strong> Ensure <code>.me</code> is pushed to a <strong>private</strong> GitHub repo (no collaborators) and verify browsing/searching it in the GitHub mobile app covers your manual-recall needs. This is the read side — mostly config, little code.</li>
+    <li><strong>Harden Telegram (free).</strong> Turn on Telegram 2FA, review active sessions, set a carrier SIM-swap PIN.</li>
+    <li><strong>Capture path.</strong> In <code>harness/function_app.py</code>: route non-command Telegram text to the <code>capture-events</code> queue; add a queue-triggered function that appends the capture to the right <code>.me</code> file in the blob mirror. Acknowledge with <code>captured ✓</code> — <strong>no content echo</strong>. Manual spans carry sizes/counts only.</li>
+    <li><strong>Close the sync loop.</strong> One-gesture VS Code task (or <code>.me</code> git hook) that runs <code>sync_os_to_blob.py</code> <strong>and</strong> pushes the <code>.me</code> repo, so captures land in both the agent mirror and the GitHub read repo. Surface <code>last_sync</code> in <code>/status</code>.</li>
+    <li><strong>Briefing/nudge polish.</strong> Keep briefings pointer-style (counts + locations, not verbatim content). Optionally add deadline/open-loop nudges.</li>
+    <li><strong>Tests.</strong> Unit-test the capture routing, queue-drain append target, and the <code>no content echo</code> confirmation in <code>tests/</code>. Mock blob + queue — never hit Azure in tests.</li>
+    <li><strong>Telemetry audit.</strong> Deploy, run real captures + a briefing, export 24 h of traces, grep for a known personal string → must be zero hits. Add any new span rows to architecture.md §8.3.</li>
+    <li><strong>Update docs.</strong> Architecture.md data-flow + span table, README capability table (capture + notify; note recall is manual via GitHub/VS Code), and flip this plan's status to "in progress".</li>
   </ol>
 
-  <h2>How to check your subscription cost now</h2>
-  <p>I cannot directly inspect your subscription from here, so use Azure Portal:</p>
-  <ol>
-    <li><strong>Cost Management + Billing</strong></li>
-    <li>Select your subscription (account: <code>146099412+samoletovs@users.noreply.github.com</code>)</li>
-    <li>Open <strong>Cost analysis</strong> (month-to-date + forecast)</li>
-    <li>Create budget alerts at 50/80/100%</li>
-    <li>Enable anomaly alerts and review top cost-by-resource</li>
-  </ol>
+  <h2>Open questions</h2>
+  <ul>
+    <li><strong>Read repo cadence</strong> — push <code>.me</code> to GitHub on every laptop sync, or on a schedule? Tie it to the one-gesture sync so it can't drift.</li>
+    <li><strong>Capture target</strong> — append everything to a single inbox file, or route by type (journal vs. project note)? Start with an inbox; refine later.</li>
+    <li><strong>When (if ever) to build <code>search_os</code></strong> — define the trigger: e.g. "manual GitHub reading is too slow on &gt;N questions/week." Only then, and only with the privacy mitigations above.</li>
+    <li><strong>Sync automation</strong> — VS Code task vs. git hook vs. Storage extension as the editor target (carried over from architecture.md §3).</li>
+  </ul>
 
-  <h2>Decision guidance</h2>
-  <p>Azure is a good option for a secure personal OS if security and reliability are top priorities. If lowest monthly cost is the top priority, keep the initial footprint minimal and defer optional services until needed.</p>
+  <h2>Decision</h2>
+  <p>mindMe stays on the lean, single-user, serverless footprint it already has, and <strong>channels are split by sensitivity</strong>: Telegram handles low-sensitivity <em>capture in</em> and <em>notify out</em>; reading the full <code>.me</code> happens on <strong>GitHub mobile / VS Code</strong> behind your own identity. The next build tightens the capture + notify loop and closes the sync→GitHub read loop. <strong>Conversational recall over Telegram (<code>search_os</code>) is deferred</strong> behind explicit privacy controls, built only if manual reading proves insufficient. This keeps the €5–10/month cap intact and keeps personal content out of Telegram's plaintext cloud store.</p>
 </body>
 </html>

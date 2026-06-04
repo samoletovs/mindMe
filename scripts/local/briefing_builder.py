@@ -1,7 +1,20 @@
-"""Local briefing builder — runs on the laptop via Task Scheduler at 07:25.
+"""[DEPRECATED 2026-05-16] Local briefing builder.
+
+Replaced by the cloud-native flow:
+- `scripts/local/sync_os_to_blob.py` syncs OS markdown to `personal-os/` container.
+- `harness/function_app.py::_build_briefing_snapshot()` builds the briefing
+  in-process when the Foundry agent calls `get_briefing_context()`.
+
+Kept here for reference / fallback while the new path stabilizes. Do not
+schedule via Task Scheduler. See docs/architecture.md for the new design.
+
+Original docstring follows.
+---
+
+Local briefing builder — was scheduled on the laptop via Task Scheduler at 07:25.
 
 Pipeline:
-1. Read curated slices of the Personal OS at c:\\vsCode\\.me.
+1. Read curated slices of the Personal OS at %USERPROFILE%\\OneDrive\\.vscode\\.me (override via ME_OS_ROOT env var).
 2. Build a sanitized JSON snapshot.
 3. Encrypt with AES-GCM (key from Key Vault via Azure CLI auth).
 4. Upload to Blob `briefing-context/today.bin`. Overwrite.
@@ -37,8 +50,14 @@ from dotenv import load_dotenv
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENV_PATH = REPO_ROOT / ".env"
 
-# Personal OS layout. Adjust if the OS path moves.
-ME_ROOT = Path(os.environ.get("ME_OS_ROOT", r"c:\vsCode\.me"))
+# Personal OS layout. Lives in OneDrive for cross-device sync.
+# Override via ME_OS_ROOT env var if the OS path moves.
+ME_ROOT = Path(
+    os.environ.get(
+        "ME_OS_ROOT",
+        os.path.expandvars(r"%USERPROFILE%\OneDrive\.vscode\.me"),
+    )
+)
 DASHBOARD = ME_ROOT / "_dashboard.md"
 JOURNAL_DIR_FMT = "05_journal/{year}/{year}-{month:02d}-{day:02d}.md"
 AREAS_DIR = ME_ROOT / "02_areas"
