@@ -2,7 +2,7 @@
 
 > *Mind me, so I can mind what matters.*
 
-A personal AI agent that operates on my [Personal OS](https://github.com/samoletovs/me) to reduce daily friction. Reads my dashboard and journal, sends a morning briefing, captures thoughts to my inbox, and stays out of the way the rest of the time.
+A personal AI agent that operates on my [Personal OS (mindVault)](https://github.com/samoletovs/mindVault) to reduce daily friction. Reads my dashboard and journal, sends a morning briefing, captures thoughts to my inbox, and stays out of the way the rest of the time.
 
 **Name:** *mindMe* — imperative "mind me" (attend to me, look after me) layered with the camelCase compound "my mind, externalized". A second mind, attentive to one. Renamed from `comes` on 2026-05-11.
 
@@ -145,7 +145,7 @@ Voice, vision, multi-agent orchestration, family-context bridge, long-term memor
 
 ## Related
 
-- **[samoletovs/me](https://github.com/samoletovs/me)** — Personal OS this agent operates on (private)
+- **[samoletovs/mindVault](https://github.com/samoletovs/mindVault)** — Personal OS this agent operates on (private). Synced zone; sensitive tier stays in the OneDrive `.me` vault.
 - **[samoletovs/agentMode](https://github.com/samoletovs/agentMode)** — Family agent. Pattern reference.
 - **[samoletovs/foundryLab](https://github.com/samoletovs/foundryLab)** — Foundry research lab. May absorb a port of `mindMe` as agent #6 for comparison.
 - **[samoletovs/naurolabs](https://github.com/samoletovs/naurolabs)** — Landing page catalog.
