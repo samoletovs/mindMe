@@ -11,7 +11,7 @@ mindMe. Replaces the long-poll `scripts/dev/telegram_bridge.py` in production.
 | Timer `0 30 7 * * *` | `morning_briefing_timer` | Sends the daily briefing at 07:30 (server time). |
 | Queue `capture-events` | `capture_drain` | Phase 3 placeholder. Receives Telegram captures forwarded by the webhook. |
 | HTTP GET `/api/health` | `health` | Uptime probe. |
-| HTTP POST `/api/tools/briefing_context?tier=core|extended|deep` | `tool_briefing_context` | Foundry agent tool: returns requested decrypted briefing tier (`core` default). |
+| HTTP POST `/api/tools/briefing_context?tier=core|extended|deep&include_meta=true|false` | `tool_briefing_context` | Foundry agent tool: returns the requested sanitized briefing view built in-process from `personal-os/` (`core` default). |
 | HTTP GET `/api/tools/weather?location=...` | `tool_weather` | Foundry agent tool: wttr.in passthrough. |
 
 ## Local dev
@@ -38,9 +38,11 @@ references in App Settings:
 
 - `telegram-bot-token` — bot token from @BotFather.
 - `telegram-webhook-secret` — random string passed to Telegram `setWebhook`.
-- `briefing-encryption-key` — 32 random bytes, base64, used for AES-GCM.
-
 The user-assigned managed identity (`id-mindme`) has `Key Vault Secrets User`.
+
+Personal OS markdown is read directly from the private `personal-os/` blob
+container via managed identity. The old AES-GCM `briefing-encryption-key` flow
+is legacy-only and no longer part of the active runtime.
 
 ## Once the App is live, wire Telegram
 

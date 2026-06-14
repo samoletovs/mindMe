@@ -6,7 +6,7 @@ goals:
   - "Morning briefing (07:30 timer) via Telegram"
   - "Quick capture text to Personal OS inbox"
   - "Status and help slash commands"
-  - "Ephemeral encrypted briefing context"
+  - "Private personal-os mirror with in-process sanitized briefing snapshots"
   - "Cost discipline — €10/month budget cap"
 similar:
   - "Personal OS agents"
