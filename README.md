@@ -64,10 +64,9 @@ Anything beyond is v2+. See [Out of scope](#out-of-scope-v1).
 entirely in Azure — no laptop required at run-time. The Personal OS markdown is
 mirrored to a **private** blob container (`personal-os/`) guarded by
 managed-identity RBAC and Microsoft-managed at-rest encryption. The previous
-application-layer AES-GCM encryption was dropped because (a) the container is
-private and (b) the SA's MMK encryption already covers the at-rest threat. See
-`docs/architecture.md` for the trade-off discussion and how to re-enable
-app-layer encryption if you change your mind.
+application-layer AES-GCM briefing blob is now legacy only. See
+`docs/architecture.md` for the trade-off discussion and the current security
+boundary.
 
 ---
 
@@ -75,38 +74,33 @@ app-layer encryption if you change your mind.
 
 ```
 mindMe/
-├── .foundry/                 # Foundry agent metadata (per microsoft-foundry skill)
-│   └── agent-metadata.yaml
-├── agent/                    # Foundry hosted agent (Python)
-│   ├── Dockerfile
-│   ├── pyproject.toml
-│   ├── src/
-│   │   ├── main.py
-│   │   └── tools/
-│   └── tests/
+├── agent/                    # Foundry agent-facing tool schema / metadata
+│   └── openapi-tools.json
 ├── harness/                  # Azure Functions (Telegram receiver + timers)
-│   ├── host.json
+│   ├── README.md
 │   ├── requirements.txt
-│   ├── telegram_webhook/
-│   ├── morning_briefing_timer/
-│   └── capture_drain/
-├── infrastructure/           # Bicep
+│   ├── host.json
+│   └── function_app.py
+├── infrastructure/           # Bicep deployment definitions
 │   ├── main.bicep
-│   ├── main.bicepparam
-│   └── modules/
+│   └── main.bicepparam
 ├── scripts/
-│   ├── local/                # runs on laptop (Task Scheduler)
-│   │   ├── briefing_builder.py
-│   │   └── capture_sync.py
-│   └── deploy.ps1
+│   ├── dev/                  # local bootstrap + smoke-test helpers
+│   │   ├── create_agent.py
+│   │   ├── smoke_agent.py
+│   │   └── telegram_bridge.py
+│   └── local/                # runs on laptop on demand
+│       ├── briefing_builder.py
+│       ├── sync_os_to_blob.py
+│       └── test_briefing_snapshot.py
 ├── docs/
 │   ├── architecture.md
-│   ├── foundry-learnings.md
-│   └── operations.md
-└── tests/
+│   ├── deploy.md
+│   ├── personal-os-azure-plan.md
+│   └── phase2-design.md
 ```
 
-Layout mirrors [`agentMode`](https://github.com/samoletovs/agentMode) and [`foundryLab`](https://github.com/samoletovs/foundryLab).
+Layout borrows patterns from [`agentMode`](https://github.com/samoletovs/agentMode) and [`foundryLab`](https://github.com/samoletovs/foundryLab), but this repo currently keeps the runnable cloud logic almost entirely in `harness/function_app.py`.
 
 ---
 

@@ -1,8 +1,8 @@
 # Dev/smoke-test scripts for mindMe
 #
-# These are **disposable scaffolding** for v1 — local Python that proves the
-# Telegram <-> Foundry round-trip works before Azure Functions is added in
-# phase 2 of the project plan. None of this code ships to production.
+# These are local bootstrap and smoke-test helpers. They are useful for
+# validating Foundry wiring and older local bot flows, but none of this code
+# ships to production now that Azure Functions owns the live Telegram path.
 #
 # Scripts:
 #   create_agent.py   one-shot: creates/updates the Foundry agent `companion`
