@@ -156,6 +156,94 @@ def _is_allowed_chat(chat_id: int | None) -> bool:
         return False
 
 
+# --- Capture front door -----------------------------------------------------
+# mindMe and memex share one Telegram bot (a bot has one webhook), so mindMe owns
+# the webhook and forwards capture-intent updates to memex's capture engine. The
+# companion stays the default for ordinary conversation.
+
+_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+_CAPTURE_PREFIX_RE = re.compile(r"^\s*(save|note|idea|n)\s*[:\-]", re.IGNORECASE)
+
+
+def _is_capture_intent(text: str) -> bool:
+    """A message is a capture (not a chat) if it is prefixed save:/note:/idea:/n:
+    or contains a URL."""
+    if not text:
+        return False
+    return bool(_CAPTURE_PREFIX_RE.match(text) or _URL_RE.search(text))
+
+
+def _forward_to_memex(update: dict) -> bool:
+    """Forward a raw Telegram update to memex's mindMe capture webhook.
+
+    Returns True if forwarded. The URL (incl. the function key as ?code=) is held
+    in MEMEX_WEBHOOK_URL. Token-bearing URLs are never logged (Hard Rule 8)."""
+    target = os.environ.get("MEMEX_WEBHOOK_URL")
+    if not target:
+        log.warning("capture forward skipped: MEMEX_WEBHOOK_URL not set")
+        return False
+    with tracer.start_as_current_span("capture.forward") as span:
+        try:
+            resp = _http_client().post(target, json=update)
+            span.set_attribute("http.status_code", resp.status_code)
+            return resp.status_code < 400
+        except httpx.HTTPError:
+            log.exception("capture forward failed")
+            return False
+
+
+# --- dig: deep-research front door (Mode B) ---------------------------------
+# `/dig <question>` opens a labelled 'dig' issue in the mindVault repo. A workflow
+# there (dig-assign.yml) assigns the Copilot coding agent, which runs the research
+# and opens a PR with the report. Reasoning runs on Copilot, not Azure.
+
+GITHUB_API = "https://api.github.com"
+DIG_REPO_DEFAULT = "samoletovs/mindVault"
+
+
+def _create_dig_issue(question: str) -> str | None:
+    """Create a labelled 'dig' research issue and return its URL (or None).
+    Hard Rule 1: never log the question text — only lengths/status."""
+    token = os.environ.get("DIG_GITHUB_TOKEN")
+    if not token:
+        log.warning("dig issue skipped: DIG_GITHUB_TOKEN not set")
+        return None
+    repo = os.environ.get("DIG_REPO", DIG_REPO_DEFAULT)
+    title = "[dig] " + (question[:60].strip() or "research request")
+    body = (
+        "Deep-research request fired from Telegram (Mode B).\n\n"
+        f"## Question\n{question}\n\n"
+        "## Execution method (lead research agent — orchestrator/worker)\n"
+        "1. PLAN: restate the question; default to standard effort (3–4 subagents); decompose into non-overlapping sub-questions.\n"
+        "2. RESEARCH each sub-question via web search/fetch + relevant MCP tools; 4–8 sources each; start broad then narrow.\n"
+        "3. Capture a SOURCE URL for every key claim; prefer primary/official sources.\n"
+        "4. SYNTHESIZE: merge, dedupe, resolve contradictions explicitly.\n"
+        "5. SAVE a markdown report to `02_areas/agents/research/YYYY-MM-DD-<slug>.md` with TL;DR, themed sections with inline citations, a 'So what (for me)' section, and a 'confidence + gaps' note.\n"
+        "GUARDRAILS: markdown only; citations required; no invented sources/numbers; if anything sensitive surfaces, leave a reference-note (system.md §7). Open a PR titled 'dig: <question>'."
+    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    with tracer.start_as_current_span("dig.create_issue") as span:
+        span.set_attribute("question.length", len(question))
+        try:
+            resp = _http_client().post(
+                f"{GITHUB_API}/repos/{repo}/issues",
+                json={"title": title, "body": body, "labels": ["dig"]},
+                headers=headers,
+            )
+            span.set_attribute("http.status_code", resp.status_code)
+        except httpx.HTTPError:
+            log.exception("dig issue create failed (network)")
+            return None
+        if resp.status_code >= 400:
+            log.error("dig issue create failed status=%d", resp.status_code)
+            return None
+        return resp.json().get("html_url")
+
+
 # --- Foundry call -----------------------------------------------------------
 
 def _ask_companion(user_text: str, conversation_id: str | None = None) -> str:
@@ -416,6 +504,12 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
     except ValueError:
         return func.HttpResponse("bad request", status_code=400)
 
+    # Inline-keyboard button taps (note review) belong to the memex capture
+    # engine — forward and return before any companion handling.
+    if "callback_query" in update:
+        _forward_to_memex(update)
+        return func.HttpResponse("ok", status_code=200)
+
     message = update.get("message") or update.get("edited_message") or {}
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
@@ -425,7 +519,35 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         log.warning("webhook rejected: unauthorized chat_id=%s", chat_id)
         return func.HttpResponse("ok", status_code=200)  # silent drop
 
+    # Voice / audio notes are always captures → memex (transcribe + draft).
+    if message.get("voice") or message.get("audio"):
+        _forward_to_memex(update)
+        return func.HttpResponse("ok", status_code=200)
+
     if not user_text:
+        return func.HttpResponse("ok", status_code=200)
+
+    # Command: /dig <question> → open a Mode B deep-research issue. Handled BEFORE
+    # capture routing, since the question may contain a URL that would otherwise
+    # look like a capture and get forwarded to memex.
+    if user_text == "/dig" or user_text.startswith("/dig "):
+        question = user_text[4:].strip()
+        if not question:
+            _telegram_send(chat_id, "usage: /dig <research question>")
+        else:
+            issue_url = _create_dig_issue(question)
+            _telegram_send(
+                chat_id,
+                f"\U0001f50e dig started: {issue_url}\nCopilot is researching — report will land in mindVault."
+                if issue_url
+                else "couldn't start dig — DIG_GITHUB_TOKEN may be missing. check the function logs.",
+            )
+        return func.HttpResponse("ok", status_code=200)
+
+    # Capture intent (save:/note:/idea:/n: or a URL) → memex capture engine.
+    # Everything else is a conversation with the companion.
+    if _is_capture_intent(user_text):
+        _forward_to_memex(update)
         return func.HttpResponse("ok", status_code=200)
 
     started = time.monotonic()
@@ -433,9 +555,9 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         if user_text == "/ping":
             reply = "pong"
         elif user_text == "/status":
-            reply = "phase 2 webhook. agent=companion. tools=[briefing_context, weather]."
+            reply = "phase 2 webhook. agent=companion. tools=[briefing_context, weather]. commands=[dig]."
         elif user_text == "/help":
-            reply = "/ping | /status | /reset | /help — anything else goes to mindMe."
+            reply = "/ping | /status | /reset | /dig <question> | /help — anything else goes to mindMe."
         else:
             reply = _ask_companion(user_text)
     except Exception:

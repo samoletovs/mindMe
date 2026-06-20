@@ -22,6 +22,10 @@
     "TELEGRAM_ALLOWED_CHAT_ID": "",
     "BRIEFING_ENCRYPTION_KEY": "",
 
+    "// --- dig (deep research Mode B)": "PAT with issues:write on mindVault; in prod use a Key Vault reference",
+    "DIG_GITHUB_TOKEN": "",
+    "DIG_REPO": "samoletovs/mindVault",
+
     "// --- Tracing (agentFlow Phase 1)": "Hard Rule 9 — never capture content",
     "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "false",
     "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS": "httpx,requests,urllib,urllib3,aiohttp-client",
