@@ -243,7 +243,8 @@ actual mindMe footprint is far cheaper.
 - **Deferred `search_os` Tier 2 with Azure AI Search would break the cap**
   (~€70+/mo) — explicitly gated, not in scope without a decision.
 - This is comfortably inside the €150/month Visual Studio Enterprise credit on
-  `146099412+samoletovs@users.noreply.github.com`. Verify month-to-date anytime in Azure Portal →
+  the personal subscription (account in `.env` / Azure Portal, not committed).
+  Verify month-to-date anytime in Azure Portal →
   **Cost Management + Billing** → Cost analysis (scope: mindMe resource group or
   `project=mindMe` tag).
 
