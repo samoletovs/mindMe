@@ -8,6 +8,7 @@ Endpoints
 ---------
 - POST  /api/telegram_webhook    Telegram update receiver (replaces long-poll)
 - TIMER 0 30 7 * * *             morning_briefing_timer (07:30 Sweden time)
+- TIMER 0 0 18 * * 0             weekly_review_timer (Sun 18:00, review nudge)
 - QUEUE capture-events           capture_drain (Phase 3 placeholder)
 - GET   /api/health              uptime probe
 - POST  /api/tools/briefing_context  Foundry agent tool: get_briefing_context()
@@ -411,7 +412,268 @@ def _build_briefing_snapshot() -> dict:
 
         snapshot["areas"] = _list_area_h1s()
         span.set_attribute("areas.count", len(snapshot["areas"]))
+
+        snapshot["vault_state"] = _vault_state(today)
         return snapshot
+
+
+# --- Vault state (shared helper) -------------------------------------------
+#
+# A small, sanitized snapshot of "how the OS is doing right now": inbox backlog,
+# open projects + nearest deadline, weekly-review staleness, and stale life
+# areas. Powers the enriched morning briefing, the live /status command, and the
+# weekly-review nudge. Read-only over the same `personal-os` blob; returns counts
+# and dates only. Hard Rule 1/9: span attributes carry counts/ages only — never
+# note titles or bodies.
+
+_OS_DATE_RE = re.compile(r"(20\d{2})-(\d{2})-(\d{2})")
+_WEEKLY_REVIEW_RE = re.compile(r"(20\d{2})-w(\d{1,2})-weekly\.md$", re.IGNORECASE)
+_PROJECT_DONE_HINTS = (
+    "done", "complete", "completed", "archived", "dropped", "shipped", "closed",
+)
+STALE_AREA_DAYS = int(os.environ.get("MINDME_STALE_AREA_DAYS", "90"))
+
+
+def _clip(text: str, max_len: int) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= max_len:
+        return collapsed
+    return collapsed[: max_len - 1].rstrip() + "…"
+
+
+def _parse_iso_date(text: str) -> date | None:
+    m = _OS_DATE_RE.search(text)
+    if not m:
+        return None
+    try:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+
+
+def _os_blob_props(prefix: str) -> list[tuple[str, object]]:
+    """(name, last_modified) for blobs under `prefix`. [] on any failure."""
+    try:
+        return [
+            (b.name, b.last_modified)
+            for b in _os_container_client().list_blobs(name_starts_with=prefix)
+        ]
+    except Exception:
+        log.exception("blob list failed prefix_len=%d", len(prefix))
+        return []
+
+
+def _inbox_state(today: date) -> dict:
+    count = 0
+    dates: list[date] = []
+    for name, last_modified in _os_blob_props("00_inbox/"):
+        base = name.rsplit("/", 1)[-1]
+        if not base.endswith(".md") or base.lower() == "readme.md":
+            continue
+        count += 1
+        when = _parse_iso_date(base)
+        if when is None and last_modified is not None:
+            when = last_modified.date()
+        if when is not None:
+            dates.append(when)
+    oldest_age = max(((today - d).days for d in dates), default=0)
+    return {"count": count, "oldest_age_days": max(oldest_age, 0)}
+
+
+def _project_title(blob_name: str, text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            title = re.sub(
+                r"^project\s*[—:\-]\s*", "", stripped[2:].strip(), flags=re.IGNORECASE
+            )
+            return _clip(title, 60)
+    parts = blob_name.split("/")
+    slug = parts[1] if len(parts) > 1 else blob_name
+    return _clip(re.sub(r"^20\d{2}-", "", slug).replace("-", " "), 60)
+
+
+def _project_status(text: str) -> tuple[bool, date | None]:
+    """(is_open, nearest_deadline) parsed from a project README header."""
+    is_open = True
+    deadline: date | None = None
+    for line in text.splitlines()[:30]:
+        low = line.lower()
+        if any(k in low for k in ("deadline", "due", "target")):
+            found = _parse_iso_date(line)
+            if found and (deadline is None or found < deadline):
+                deadline = found
+        if "status" in low and any(h in low for h in _PROJECT_DONE_HINTS):
+            is_open = False
+    return is_open, deadline
+
+
+def _projects_state(today: date) -> dict:
+    open_count = 0
+    nearest: date | None = None
+    nearest_title = ""
+    for name, _lm in _os_blob_props("01_projects/"):
+        if not name.endswith("/README.md") or name.count("/") != 2:
+            continue
+        text = _read_os_text(name)
+        is_open, deadline = _project_status(text)
+        if not is_open:
+            continue
+        open_count += 1
+        if deadline and deadline >= today and (nearest is None or deadline < nearest):
+            nearest = deadline
+            nearest_title = _project_title(name, text)
+    return {
+        "open_count": open_count,
+        "nearest_deadline": nearest.isoformat() if nearest else None,
+        "nearest_project": nearest_title,
+    }
+
+
+def _reviews_state(today: date) -> dict:
+    latest: date | None = None
+    for name, _lm in _os_blob_props("reviews/"):
+        m = _WEEKLY_REVIEW_RE.search(name)
+        if not m:
+            continue
+        try:
+            monday = date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1)
+        except ValueError:
+            continue
+        if latest is None or monday > latest:
+            latest = monday
+    if latest is None:
+        return {"last_weekly": None, "days_since": None}
+    return {"last_weekly": latest.isoformat(), "days_since": max((today - latest).days, 0)}
+
+
+def _stale_areas_state(today: date, *, limit: int = 5) -> list[dict]:
+    newest: dict[str, date] = {}
+    for name, last_modified in _os_blob_props("02_areas/"):
+        parts = name.split("/")
+        if len(parts) < 3 or last_modified is None:
+            continue
+        area = parts[1]
+        when = last_modified.date()
+        if area not in newest or when > newest[area]:
+            newest[area] = when
+    stale = [
+        {"area": area, "days_since": (today - when).days}
+        for area, when in newest.items()
+        if (today - when).days > STALE_AREA_DAYS
+    ]
+    stale.sort(key=lambda item: item["days_since"], reverse=True)
+    return stale[:limit]
+
+
+def _vault_state(today: date | None = None) -> dict:
+    today = today or date.today()
+    state = {
+        "inbox": {"count": 0, "oldest_age_days": 0},
+        "projects": {"open_count": 0, "nearest_deadline": None, "nearest_project": ""},
+        "reviews": {"last_weekly": None, "days_since": None},
+        "stale_areas": [],
+    }
+    with tracer.start_as_current_span("vault_state") as span:
+        try:
+            state["inbox"] = _inbox_state(today)
+            state["projects"] = _projects_state(today)
+            state["reviews"] = _reviews_state(today)
+            state["stale_areas"] = _stale_areas_state(today)
+        except Exception:
+            log.exception("vault_state build failed")
+        span.set_attribute("inbox.count", state["inbox"]["count"])
+        span.set_attribute("inbox.oldest_age_days", state["inbox"]["oldest_age_days"])
+        span.set_attribute("projects.open", state["projects"]["open_count"])
+        span.set_attribute(
+            "projects.has_deadline", state["projects"]["nearest_deadline"] is not None
+        )
+        days_since = state["reviews"]["days_since"]
+        span.set_attribute("reviews.days_since", days_since if days_since is not None else -1)
+        span.set_attribute("areas.stale_count", len(state["stale_areas"]))
+        return state
+
+
+def _load_briefing() -> dict:
+    """Public entry used by the get_briefing_context tool. Builds today's
+    snapshot in-process from the personal-os blob.
+
+    Note: this function was previously referenced by tool_briefing_context but
+    never defined, which made the tool always return 503 (briefing not
+    available). Defining it here restores the briefing context.
+    """
+    return _build_briefing_snapshot()
+
+
+def _status_line() -> str:
+    """One-line vault snapshot for the /status command (owner chat only)."""
+    try:
+        state = _vault_state()
+    except Exception:
+        log.exception("status build failed")
+        return "status unavailable — check the function logs."
+    inbox = state["inbox"]
+    projects = state["projects"]
+    reviews = state["reviews"]
+    inbox_part = f"📥 inbox: {inbox['count']}"
+    if inbox["count"]:
+        inbox_part += f" (oldest {inbox['oldest_age_days']}d)"
+    proj_part = f"🗂️ projects: {projects['open_count']} open"
+    if projects["nearest_deadline"]:
+        proj_part += f" (next {projects['nearest_deadline']}"
+        proj_part += (
+            f" · {projects['nearest_project']})" if projects["nearest_project"] else ")"
+        )
+    if reviews["days_since"] is not None:
+        review_part = f"🔄 review: {reviews['days_since']}d ago"
+    else:
+        review_part = "🔄 review: none yet"
+    parts = [inbox_part, proj_part, review_part]
+    if state["stale_areas"]:
+        parts.append(f"🕸️ stale areas: {len(state['stale_areas'])}")
+    return " · ".join(parts)
+
+
+def _review_prompt() -> str:
+    """/review — current state plus a short weekly-review checklist."""
+    return (
+        _status_line()
+        + "\n\nWeekly review:\n"
+        "1. Empty 00_inbox/ — file or drop each note.\n"
+        "2. Touch each open project — next action or close it.\n"
+        "3. Skim any stale areas.\n"
+        "4. Set this week's focus in _dashboard.md."
+    )
+
+
+def _compose_review_nudge(state: dict) -> str:
+    """Compose the Sunday weekly-review nudge from a vault_state snapshot."""
+    inbox = state["inbox"]
+    projects = state["projects"]
+    reviews = state["reviews"]
+    stale = state["stale_areas"]
+    bits: list[str] = []
+    if inbox["count"]:
+        piece = f"{inbox['count']} inbox note" + ("s" if inbox["count"] != 1 else "")
+        if inbox["oldest_age_days"]:
+            piece += f" (oldest {inbox['oldest_age_days']}d)"
+        bits.append(piece)
+    if projects["open_count"]:
+        piece = f"{projects['open_count']} open project" + (
+            "s" if projects["open_count"] != 1 else ""
+        )
+        if projects["nearest_deadline"]:
+            piece += f", next deadline {projects['nearest_deadline']}"
+        bits.append(piece)
+    if stale:
+        names = ", ".join(item["area"] for item in stale[:3])
+        piece = f"{len(stale)} stale area" + ("s" if len(stale) != 1 else "")
+        bits.append(f"{piece} ({names})")
+    head = "🧹 Weekly review time."
+    if reviews["days_since"] is not None:
+        head += f" Last review {reviews['days_since']}d ago."
+    body = " · ".join(bits) if bits else "inbox clear, projects fresh — quick win this week."
+    return f"{head}\n{body}\nReply /review when you're ready."
 
 
 def _is_tiered_briefing(data: dict) -> bool:
@@ -555,9 +817,11 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         if user_text == "/ping":
             reply = "pong"
         elif user_text == "/status":
-            reply = "phase 2 webhook. agent=companion. tools=[briefing_context, weather]. commands=[dig]."
+            reply = _status_line()
+        elif user_text == "/review":
+            reply = _review_prompt()
         elif user_text == "/help":
-            reply = "/ping | /status | /reset | /dig <question> | /help — anything else goes to mindMe."
+            reply = "/ping | /status | /review | /reset | /dig <question> | /help — anything else goes to mindMe."
         else:
             reply = _ask_companion(user_text)
     except Exception:
@@ -589,8 +853,12 @@ def morning_briefing_timer(timer: func.TimerRequest) -> None:
     try:
         seed = (
             "Compose my morning briefing. Call get_briefing_context for today's "
-            "data and get_weather for the weather. Keep it 3 short paragraphs "
-            "max: today's focus, what's open, the weather."
+            "data and get_weather for the weather. Keep it to 3 short paragraphs: "
+            "(1) today's focus and top goals; (2) what needs attention — read "
+            "vault_state for the inbox backlog (count + oldest age in days), the "
+            "nearest project deadline, and whether the weekly review is overdue, "
+            "and mention these only when they actually need action; (3) the "
+            "weather. Be warm and concise."
         )
         reply = _ask_companion(seed)
         _telegram_send(chat_id, reply)
@@ -620,6 +888,36 @@ def morning_briefing_timer(timer: func.TimerRequest) -> None:
             _telegram_send(chat_id, fallback)
         except Exception:
             log.exception("briefing fallback notify failed")
+
+
+# --- Function: weekly_review_timer -----------------------------------------
+
+@app.function_name(name="weekly_review_timer")
+@app.timer_trigger(
+    schedule="0 0 18 * * 0",  # Sundays 18:00 (WEBSITE_TIME_ZONE)
+    arg_name="timer",
+    run_on_startup=False,
+    use_monitor=True,
+)
+def weekly_review_timer(timer: func.TimerRequest) -> None:
+    """Sunday-evening nudge to run the weekly review. Substance only — counts
+    of inbox backlog, open projects + nearest deadline, and stale areas, built
+    from the same vault_state snapshot the briefing uses."""
+    started = time.monotonic()
+    chat_id = int(os.environ["TELEGRAM_ALLOWED_CHAT_ID"])
+    try:
+        state = _vault_state()
+        _telegram_send(chat_id, _compose_review_nudge(state))
+        log.info(
+            "weekly nudge sent chat=%s inbox=%d projects=%d stale=%d duration=%.2fs",
+            chat_id,
+            state["inbox"]["count"],
+            state["projects"]["open_count"],
+            len(state["stale_areas"]),
+            time.monotonic() - started,
+        )
+    except Exception:
+        log.exception("weekly nudge failed")
 
 
 # --- Function: capture_drain (Phase 3 placeholder) -------------------------

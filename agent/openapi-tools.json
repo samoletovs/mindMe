@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "mindMe agent tools",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "description": "Function App endpoints exposed to the Foundry hosted agent `companion`."
   },
   "servers": [
@@ -56,6 +56,44 @@
                       }
                     },
                     "areas": {"type": "array", "items": {"type": "string"}, "description": "Core tier field."},
+                    "vault_state": {
+                      "type": "object",
+                      "description": "Core tier field. Live OS health: inbox backlog, open projects + nearest deadline, weekly-review staleness, and stale areas. Use it to flag what needs attention in the briefing.",
+                      "properties": {
+                        "inbox": {
+                          "type": "object",
+                          "properties": {
+                            "count": {"type": "integer"},
+                            "oldest_age_days": {"type": "integer"}
+                          }
+                        },
+                        "projects": {
+                          "type": "object",
+                          "properties": {
+                            "open_count": {"type": "integer"},
+                            "nearest_deadline": {"type": "string", "nullable": true},
+                            "nearest_project": {"type": "string"}
+                          }
+                        },
+                        "reviews": {
+                          "type": "object",
+                          "properties": {
+                            "last_weekly": {"type": "string", "nullable": true},
+                            "days_since": {"type": "integer", "nullable": true}
+                          }
+                        },
+                        "stale_areas": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "area": {"type": "string"},
+                              "days_since": {"type": "integer"}
+                            }
+                          }
+                        }
+                      }
+                    },
                     "entries": {
                       "type": "array",
                       "description": "Extended/deep tier field.",
