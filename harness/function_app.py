@@ -123,6 +123,10 @@ def _http_client() -> httpx.Client:
 TELEGRAM_API = "https://api.telegram.org"
 
 
+def _home_location() -> str:
+    return (os.environ.get("MINDME_HOME_LOCATION") or "Riga").strip() or "Riga"
+
+
 def _telegram_send(chat_id: int, text: str) -> None:
     """Send a Telegram message. URL contains the token — caller must trust the
     pre-silenced httpx logger (Hard Rule 8). Span attributes carry size/status
@@ -752,6 +756,58 @@ def _weather_summary(location: str) -> dict:
     }
 
 
+def _compose_local_briefing() -> str:
+    """Fallback morning briefing assembled locally from the Personal OS."""
+    snapshot = _load_briefing()
+    weather = _weather_summary(_home_location())
+
+    focus_parts: list[str] = []
+    today_focus = _clip(snapshot.get("today_focus") or "", 180)
+    if today_focus:
+        focus_parts.append(today_focus)
+    top_goals = [_clip(goal, 80) for goal in snapshot.get("top_goals") or [] if goal]
+    if top_goals:
+        focus_parts.append("Top goals: " + "; ".join(top_goals[:3]) + ".")
+    if not focus_parts:
+        this_week = [_clip(item, 80) for item in snapshot.get("this_week") or [] if item]
+        if this_week:
+            focus_parts.append("This week: " + "; ".join(this_week[:3]) + ".")
+    paragraph_1 = " ".join(focus_parts).strip() or "No fresh dashboard focus yet."
+
+    state = snapshot.get("vault_state") or {}
+    inbox = state.get("inbox") or {}
+    projects = state.get("projects") or {}
+    reviews = state.get("reviews") or {}
+    yesterday = snapshot.get("yesterday") or {}
+    needs_attention: list[str] = []
+    inbox_count = inbox.get("count") or 0
+    if inbox_count:
+        oldest_age = inbox.get("oldest_age_days") or 0
+        piece = f"Inbox: {inbox_count} note" + ("s" if inbox_count != 1 else "")
+        if oldest_age:
+            piece += f", oldest {oldest_age}d"
+        needs_attention.append(piece + ".")
+    nearest_deadline = projects.get("nearest_deadline")
+    if nearest_deadline:
+        nearest_project = projects.get("nearest_project") or "project"
+        needs_attention.append(f"Next deadline: {nearest_project} on {nearest_deadline}.")
+    review_age = reviews.get("days_since")
+    if review_age is not None and review_age >= 7:
+        needs_attention.append(f"Weekly review is {review_age}d old.")
+    open_loops = yesterday.get("open_loops_count") or 0
+    if open_loops:
+        needs_attention.append(
+            f"Yesterday left {open_loops} open loop" + ("s." if open_loops != 1 else ".")
+        )
+    paragraph_2 = " ".join(needs_attention).strip() or "Vault looks calm right now."
+
+    paragraph_3 = (
+        f"Weather in {weather.get('location')}: {weather.get('temp_c')}°C "
+        f"(feels {weather.get('feels_like_c')}°C), {weather.get('description')}."
+    )
+    return "\n\n".join([paragraph_1, paragraph_2, paragraph_3])
+
+
 # --- Function: telegram_webhook --------------------------------------------
 
 @app.function_name(name="telegram_webhook")
@@ -858,7 +914,7 @@ def morning_briefing_timer(timer: func.TimerRequest) -> None:
             "vault_state for the inbox backlog (count + oldest age in days), the "
             "nearest project deadline, and whether the weekly review is overdue, "
             "and mention these only when they actually need action; (3) the "
-            "weather. Be warm and concise."
+            f"weather. Use {_home_location()} as the default location. Be warm and concise."
         )
         reply = _ask_companion(seed)
         _telegram_send(chat_id, reply)
@@ -869,22 +925,24 @@ def morning_briefing_timer(timer: func.TimerRequest) -> None:
     except Exception:
         log.exception("briefing failed")
         try:
-            fallback = (
-                "mindMe could not load your personal briefing context today. "
-                "I can still send weather: "
-            )
             try:
-                weather = _weather_summary("Stockholm")
-                fallback += (
-                    f"{weather.get('location')} {weather.get('temp_c')}°C "
-                    f"(feels {weather.get('feels_like_c')}°C), {weather.get('description')}."
-                )
+                fallback = _compose_local_briefing()
             except Exception:
-                log.exception("briefing fallback weather failed")
-                fallback = (
-                    "mindMe could not assemble today's briefing or weather. "
-                    "please try again later."
-                )
+                log.exception("briefing local fallback failed")
+                try:
+                    weather = _weather_summary(_home_location())
+                    fallback = (
+                        "mindMe could not load your personal briefing context today. "
+                        f"I can still send weather: {weather.get('location')} "
+                        f"{weather.get('temp_c')}°C (feels {weather.get('feels_like_c')}°C), "
+                        f"{weather.get('description')}."
+                    )
+                except Exception:
+                    log.exception("briefing fallback weather failed")
+                    fallback = (
+                        "mindMe could not assemble today's briefing or weather. "
+                        "please try again later."
+                    )
             _telegram_send(chat_id, fallback)
         except Exception:
             log.exception("briefing fallback notify failed")
@@ -1010,7 +1068,7 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="tools/weather", methods=["GET"])
 def tool_weather(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_weather(location)."""
-    location = req.params.get("location") or "Riga"
+    location = req.params.get("location") or _home_location()
     try:
         summary = _weather_summary(location)
         return func.HttpResponse(
