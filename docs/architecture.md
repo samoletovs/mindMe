@@ -45,7 +45,7 @@ app-layer encryption without redesigning the data flow.
 │  Storage Account stmindmeymcpt                   │
 │   └─ personal-os/      ← markdown mirror         │
 │                                                  │
-│  Function App func-mindme-ymcpt (Flex Consumption)│
+│  Function App func-mindme-ymcptc (Flex)          │
 │   ├─ morning_briefing_timer (07:30 CRON)         │
 │   │   → asks companion agent for the briefing    │
 │   ├─ tool_briefing_context                       │

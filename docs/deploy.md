@@ -1,9 +1,37 @@
 # Deploying the Function App
 
-> **Pending action for the human.** Everything below is safe to run after
-> reviewing the code changes in this commit. Code is validated locally; the
-> only remaining step is pushing it to the live Function App and watching the
-> first 07:30 execution.
+> **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
+> `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the
+> Foundry `companion` agent (currently `companion:3`) calls back to this app.
+> The sections below are the maintenance runbook + the hard-won deploy recipe.
+
+## ⚠️ Root cause: the 503 SCM wedge (read before touching infra)
+
+Getting the first deploy live took 4 days because of a Flex Consumption trap:
+
+- **Symptom:** `func azure functionapp publish` fails with
+  `Uploading archive... (ServiceUnavailable)` / HTTP 503, and
+  `https://<app>.scm.azurewebsites.net` returns **503** permanently. It does
+  **not** recover from restart, stop/start, deployment-storage swap, or even
+  deleting and recreating the site/plan under the same name.
+- **Cause:** the app's **host storage** (`AzureWebJobsStorage`) was configured
+  with **managed-identity auth** (`AzureWebJobsStorage__accountName` +
+  `__credential=managedidentity` + `__clientId`) against a storage account with
+  **shared-key access DISABLED**. On Flex Consumption this wedges the SCM/deploy
+  plane for good. A throwaway app created with shared-key storage got SCM **401**
+  (healthy) and deployed first try — that's how it was isolated.
+- **Fix (the working recipe):** host/deploy storage must use a **shared-key
+  connection string**, on a storage account separate from the (MI-only,
+  shared-key-disabled) **data** storage. `infrastructure/main.bicep` now encodes
+  this: data storage `stmindmeymcpt` stays MI-only; a dedicated
+  `stmindmedepymcpt` (shared-key enabled) holds the app package +
+  `AzureWebJobsStorage`. Personal data is never on the shared-key account.
+
+The live app was ultimately hand-created with `az functionapp create
+--storage-account stmindmedepymcpt` (which wires connection-string storage by
+default), then configured + published. The Bicep is the clean-rebuild recipe;
+it will create a fresh `plan-mindme-ymcptc` rather than adopt the live
+auto-created plan `ASP-foundrylabrg-c0d2`.
 
 ## Pre-deploy checklist
 
@@ -13,8 +41,8 @@ az account show --query name -o tsv
 # Expect: Visual Studio Enterprise Subscription
 
 # 2. Function App is the right one
-az functionapp show -g foundrylab-rg -n func-mindme-ymcpt --query '{name:name, state:state, kind:kind}' -o jsonc
-# Expect: state=Running, kind=functionapp,linux
+az functionapp show -g foundrylab-rg -n func-mindme-ymcptc --query '{name:name, state:state, kind:kind}' -o jsonc
+# Expect: kind=functionapp,linux (state may show null on Flex — use the health probe instead)
 
 # 3. The personal-os container is populated
 az storage blob list --account-name stmindmeymcpt --container-name personal-os --auth-mode login --query 'length([])'
@@ -32,18 +60,54 @@ The harness uses Azure Functions Core Tools (`func`). From the harness folder:
 
 ```powershell
 cd c:\vsCode\.nauroLabs\mindMe\harness
-func azure functionapp publish func-mindme-ymcpt --python
+func azure functionapp publish func-mindme-ymcptc --python
 ```
 
 Expect ~2–4 minutes for a Python Flex Consumption publish. Watch for these
 markers in the output:
 
-- `Remote build succeeded`
-- `Functions in func-mindme-ymcpt: telegram_webhook, morning_briefing_timer, capture_drain, health, tool_briefing_context, tool_weather`
+- `The deployment was successful!`
+- `Functions in func-mindme-ymcptc: telegram_webhook, morning_briefing_timer, capture_drain, health, tool_briefing_context, tool_weather, weekly_review_timer`
+
+> The local Python is 3.14; the app targets 3.11. `func` prints a version-mismatch
+> warning — it's harmless for this app (remote build installs against 3.11).
+
+If publish fails with `Uploading archive... (ServiceUnavailable)` / 503, see the
+**Root cause** section above — it's the host-storage-MI wedge, not a transient
+outage. Do not bother retrying; fix the storage auth.
 
 If publish fails with a build error about a missing package, double-check
 `harness/requirements.txt` — the 2026-05-16 rev removed `cryptography` and
 `azure-keyvault-secrets`. Both are confirmed unused by the new code.
+
+## Re-register the Foundry agent (when tool URLs or hostname change)
+
+The `companion` agent calls back to this app's `/api/tools/*` endpoints, so its
+tool URLs are pinned to the function app hostname. If you rebuild the app under a
+new name (as happened here), re-point the agent:
+
+```powershell
+# create_agent.py uses DefaultAzureCredential, which on Python 3.14 CANNOT spawn
+# the az/PowerShell CLI subprocess (azure-identity bug). Use Python <= 3.13.
+$py311 = "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe"
+& $py311 -m venv "$env:TEMP\mmagentvenv"
+& "$env:TEMP\mmagentvenv\Scripts\python.exe" -m pip install "azure-ai-projects==2.1.0" azure-identity python-dotenv
+$env:MINDME_FUNCTION_APP_HOSTNAME = "func-mindme-ymcptc.azurewebsites.net"
+cd c:\vsCode\.nauroLabs\mindMe
+& "$env:TEMP\mmagentvenv\Scripts\python.exe" scripts\dev\create_agent.py
+# Writes AZURE_AI_AGENT_NAME + AZURE_AI_AGENT_VERSION to .env. The Function App
+# resolves the agent by NAME (latest version), so no app-setting change needed.
+```
+
+Then re-point the Telegram webhook at the new hostname:
+
+```powershell
+$bot = az keyvault secret show --vault-name kv-mindme-ymcpt --name telegram-bot-token --query value -o tsv
+$sec = az keyvault secret show --vault-name kv-mindme-ymcpt --name telegram-webhook-secret --query value -o tsv
+curl.exe -sS "https://api.telegram.org/bot$bot/setWebhook" `
+  -d "url=https://func-mindme-ymcptc.azurewebsites.net/api/telegram_webhook" `
+  -d "secret_token=$sec" -d "drop_pending_updates=true"
+```
 
 ## Post-deploy verification
 
@@ -61,13 +125,13 @@ DM `/ping` to `@mindMeTo_bot`. Expect `pong` back within a few seconds.
 
 ```powershell
 # Hit the Foundry-agent-facing tool endpoint directly.
-$fn = az functionapp show -g foundrylab-rg -n func-mindme-ymcpt --query defaultHostName -o tsv
+$fn = az functionapp show -g foundrylab-rg -n func-mindme-ymcptc --query defaultHostName -o tsv
 curl.exe -sS -X POST "https://$fn/api/tools/briefing_context" -H "Content-Type: application/json" -d '{}' | jq
 ```
 
 Expect a JSON snapshot with `date`, `top_goals`, `this_week`, `today_focus`,
-`yesterday`, `areas`. Same shape `scripts/local/test_briefing_snapshot.py`
-produces.
+`yesterday`, `areas`, and `vault_state` (inbox / projects / reviews /
+stale_areas). Same shape `scripts/local/test_briefing_snapshot.py` produces.
 
 ### 3. The 07:30 timer (the moment of truth)
 
@@ -84,7 +148,7 @@ manually invoke the timer from the Azure Portal under the Function App's
 
 ```powershell
 $resp = az rest --method post `
-  --uri "https://management.azure.com/subscriptions/$($env:AZURE_SUBSCRIPTION_ID)/resourceGroups/foundrylab-rg/providers/Microsoft.Web/sites/func-mindme-ymcpt/host/default/triggers/morning_briefing_timer?api-version=2022-03-01" `
+  --uri "https://management.azure.com/subscriptions/$($env:AZURE_SUBSCRIPTION_ID)/resourceGroups/foundrylab-rg/providers/Microsoft.Web/sites/func-mindme-ymcptc/host/default/triggers/morning_briefing_timer?api-version=2022-03-01" `
   --body '{}'
 ```
 
@@ -98,7 +162,7 @@ the KV-stored key. To roll back:
 
 1. `git revert <this commit>` in the mindMe repo, OR check out the previous
    `harness/function_app.py` from git.
-2. `func azure functionapp publish func-mindme-ymcpt --python` again.
+2. `func azure functionapp publish func-mindme-ymcptc --python` again.
 3. From the laptop:
    `.\.venv\Scripts\python.exe scripts\local\briefing_builder.py` to refresh
    `briefing-context/today.bin` (the script is still there, marked DEPRECATED,

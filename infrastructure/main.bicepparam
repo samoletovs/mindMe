@@ -10,6 +10,19 @@ param namePrefix = 'mindme'
 param location = 'swedencentral'
 param suffix = 'ymcpt'
 
+// Function App + plan name only. ROOT CAUSE of the original wedge (4 days of
+// persistent 503 on publish across site/plan/storage recreations): Flex
+// Consumption host storage using managed-identity auth against the
+// shared-key-DISABLED data storage wedges the SCM endpoint permanently. Fixed
+// in main.bicep by moving host/deploy storage to a dedicated shared-key
+// (connection-string) account. The LIVE app `func-mindme-ymcptc` was ultimately
+// hand-created via `az functionapp create` (see docs/deploy.md) and runs on the
+// auto-created plan `ASP-foundrylabrg-c0d2`, so a fresh `az deployment group
+// create` from this template will provision a NEW `plan-mindme-ymcptc` rather
+// than adopt the live plan. Treat this template as the clean-rebuild recipe.
+// (2026-06-30)
+param functionSuffix = 'ymcptc'
+
 param foundryAccountName = 'foundrylab-aiservices'
 param foundryProjectName = 'mindMe'
 

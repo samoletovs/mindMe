@@ -27,6 +27,11 @@ param location string = resourceGroup().location
 @maxLength(8)
 param suffix string
 
+@description('Suffix for the Function App + plan names only. Lets us rebuild the app under a fresh SCM hostname if the platform wedges one, while keeping storage/Key Vault/identity stable. Defaults to `suffix`.')
+@minLength(3)
+@maxLength(10)
+param functionSuffix string = suffix
+
 @description('Name of the existing Foundry AIServices account (for RBAC).')
 param foundryAccountName string = 'foundrylab-aiservices'
 
@@ -47,12 +52,20 @@ param tags object = {
 // --- Resource names ----------------------------------------------------------
 
 var storageName = toLower('st${namePrefix}${suffix}')
+// Dedicated DEPLOYMENT/host storage, separate from the data storage on purpose.
+// Flex Consumption wedges its SCM endpoint (persistent 503 on publish that NEVER
+// recovers — survives restart, stop/start, and storage swaps) when
+// AzureWebJobsStorage uses managed-identity auth against a storage account with
+// shared-key access DISABLED. Fix: a shared-key (connection-string) host/deploy
+// storage. The data storage (`storageName`) stays MI-only + shared-key-disabled;
+// only host/deploy storage uses a key. See docs/deploy.md. (2026-06-30)
+var deployStorageName = toLower('st${namePrefix}dep${suffix}')
 var keyVaultName = toLower('kv-${namePrefix}-${suffix}')
 var logWorkspaceName = 'log-${namePrefix}'
 var appInsightsName = 'appi-${namePrefix}'
 var managedIdentityName = 'id-${namePrefix}'
-var functionAppName = 'func-${namePrefix}-${suffix}'
-var functionPlanName = 'plan-${namePrefix}-${suffix}'
+var functionAppName = 'func-${namePrefix}-${functionSuffix}'
+var functionPlanName = 'plan-${namePrefix}-${functionSuffix}'
 
 // --- User-Assigned Managed Identity -----------------------------------------
 
@@ -159,6 +172,50 @@ resource captureQueue 'Microsoft.Storage/storageAccounts/queueServices/queues@20
   name: 'capture-events'
 }
 
+// --- Deployment / host storage (shared-key) ---------------------------------
+// Holds ONLY the function app package + AzureWebJobsStorage host artifacts.
+// Shared-key access is ENABLED here (unlike the data storage) because Flex
+// Consumption's deploy plane wedges when host storage is MI-only on a
+// shared-key-disabled account. No personal data ever lands here.
+resource deployStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: deployStorageName
+  location: location
+  tags: tags
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+    allowBlobPublicAccess: false
+    allowSharedKeyAccess: true
+    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      defaultAction: 'Allow'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
+resource deployBlobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+  parent: deployStorage
+  name: 'default'
+}
+
+resource deployAppPackageContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: deployBlobService
+  name: 'app-package'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+// Connection string for host + deployment storage. Contains an account key, so
+// it flows into app settings (the supported Flex non-MI pattern). Data-plane
+// access to personal content still uses the UAMI against `storageName`.
+var deployStorageConnString = 'DefaultEndpointsProtocol=https;AccountName=${deployStorage.name};AccountKey=${deployStorage.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
+
 // --- Key Vault --------------------------------------------------------------
 
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
@@ -218,10 +275,13 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       deployment: {
         storage: {
           type: 'blobContainer'
-          value: '${storage.properties.primaryEndpoints.blob}app-package'
+          value: '${deployStorage.properties.primaryEndpoints.blob}app-package'
           authentication: {
-            type: 'UserAssignedIdentity'
-            userAssignedIdentityResourceId: uami.id
+            // Connection-string (shared-key) auth — NOT managed identity. MI auth
+            // here is what wedged the SCM endpoint for 4 days. The connection
+            // string lives in the named app setting below.
+            type: 'StorageAccountConnectionString'
+            storageAccountConnectionStringName: 'DEPLOYMENT_STORAGE_CONNECTION_STRING'
           }
         }
       }
@@ -246,19 +306,18 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           name: 'AZURE_CLIENT_ID'
           value: uami.properties.clientId
         }
-        // Host storage (AzureWebJobsStorage) via the UAMI — required by Flex
-        // Consumption when shared-key access is disabled on the storage account.
+        // Host storage (AzureWebJobsStorage) + deployment storage via a
+        // shared-key connection string to the dedicated deploy storage account.
+        // Do NOT switch these to `AzureWebJobsStorage__accountName` +
+        // managedidentity on a shared-key-disabled account — that wedges the
+        // Flex SCM endpoint (persistent 503 on publish). See docs/deploy.md.
         {
-          name: 'AzureWebJobsStorage__accountName'
-          value: storageName
+          name: 'AzureWebJobsStorage'
+          value: deployStorageConnString
         }
         {
-          name: 'AzureWebJobsStorage__credential'
-          value: 'managedidentity'
-        }
-        {
-          name: 'AzureWebJobsStorage__clientId'
-          value: uami.properties.clientId
+          name: 'DEPLOYMENT_STORAGE_CONNECTION_STRING'
+          value: deployStorageConnString
         }
         {
           name: 'AZURE_KEYVAULT_NAME'
@@ -318,17 +377,8 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
   dependsOn: [
     briefingContainer
     captureQueue
+    deployAppPackageContainer
   ]
-}
-
-// --- App-package container for deployment-from-storage ----------------------
-
-resource appPackageContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
-  parent: blobService
-  name: 'app-package'
-  properties: {
-    publicAccess: 'None'
-  }
 }
 
 // --- RBAC role assignments --------------------------------------------------

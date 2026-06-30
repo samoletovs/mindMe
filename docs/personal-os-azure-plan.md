@@ -65,7 +65,7 @@ no collaborators.
 
 | Resource | Type / SKU | Role |
 |---|---|---|
-| `func-mindme-ymcpt` | Function App, Flex Consumption (FC1) | Telegram webhook, briefing timer, agent tools |
+| `func-mindme-ymcptc` | Function App, Flex Consumption (FC1) | Telegram webhook, briefing timer, agent tools |
 | `plan-mindme-ymcpt` | Server farm, FC1 FlexConsumption | Hosts the Function App |
 | `stmindmeymcpt` | Storage, Standard_LRS (StorageV2) | `personal-os/` markdown mirror, `capture-events` queue |
 | `kv-mindme-ymcpt` | Key Vault, Standard | Bot token, webhook secret, (legacy) encryption key |
