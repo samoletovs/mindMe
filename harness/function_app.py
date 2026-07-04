@@ -204,17 +204,32 @@ def _forward_to_memex(update: dict) -> bool:
 
 GITHUB_API = "https://api.github.com"
 DIG_REPO_DEFAULT = "samoletovs/mindVault"
+DIG_TITLE_MAX_LENGTH = 60
+DIG_ERROR_MESSAGES = {
+    "missing_token": "couldn't start dig — please try again later.",
+    "github_auth_failed": "couldn't start dig — please try again later.",
+    "repo_not_found": "couldn't start dig — please try again later.",
+    "network_error": "couldn't start dig — GitHub couldn't be reached. Try again in a bit.",
+    "github_unavailable": "couldn't start dig — GitHub is failing right now. Try again in a bit.",
+    "github_rejected": "couldn't start dig — GitHub rejected the request.",
+    "invalid_json": "couldn't start dig — GitHub returned an unexpected response.",
+    "missing_url": "couldn't start dig — GitHub returned an unexpected response.",
+}
 
 
-def _create_dig_issue(question: str) -> str | None:
-    """Create a labelled 'dig' research issue and return its URL (or None).
-    Hard Rule 1: never log the question text — only lengths/status."""
+def _create_dig_issue(question: str) -> tuple[str | None, str]:
+    """Create a labelled 'dig' research issue.
+
+    Returns `(issue_url, status)` where status is a stable, non-sensitive failure
+    code suitable for logs/telemetry/user-facing branching.
+    Hard Rule 1: never log the question text — only lengths/status.
+    """
     token = os.environ.get("DIG_GITHUB_TOKEN")
     if not token:
         log.warning("dig issue skipped: DIG_GITHUB_TOKEN not set")
-        return None
+        return None, "missing_token"
     repo = os.environ.get("DIG_REPO", DIG_REPO_DEFAULT)
-    title = "[dig] " + (question[:60].strip() or "research request")
+    title = "[dig] " + (question[:DIG_TITLE_MAX_LENGTH].strip() or "research request")
     body = (
         "Deep-research request fired from Telegram (Mode B).\n\n"
         f"## Question\n{question}\n\n"
@@ -242,11 +257,37 @@ def _create_dig_issue(question: str) -> str | None:
             span.set_attribute("http.status_code", resp.status_code)
         except httpx.HTTPError:
             log.exception("dig issue create failed (network)")
-            return None
+            span.set_attribute("dig.status", "network_error")
+            return None, "network_error"
         if resp.status_code >= 400:
             log.error("dig issue create failed status=%d", resp.status_code)
-            return None
-        return resp.json().get("html_url")
+            if resp.status_code in (401, 403):
+                span.set_attribute("dig.status", "github_auth_failed")
+                return None, "github_auth_failed"
+            if resp.status_code == 404:
+                span.set_attribute("dig.status", "repo_not_found")
+                return None, "repo_not_found"
+            if resp.status_code >= 500:
+                span.set_attribute("dig.status", "github_unavailable")
+                return None, "github_unavailable"
+            # Remaining 4xx responses (for example 400/422/429) mean GitHub
+            # received the request but rejected it for a non-auth, non-repo,
+            # non-server reason.
+            span.set_attribute("dig.status", "github_rejected")
+            return None, "github_rejected"
+        try:
+            payload = resp.json()
+        except json.JSONDecodeError:
+            log.error("dig issue create failed: invalid JSON response from GitHub")
+            span.set_attribute("dig.status", "invalid_json")
+            return None, "invalid_json"
+        issue_url = payload.get("html_url")
+        if not issue_url:
+            log.error("dig issue create failed: missing html_url in GitHub response")
+            span.set_attribute("dig.status", "missing_url")
+            return None, "missing_url"
+        span.set_attribute("dig.status", "created")
+        return issue_url, "created"
 
 
 # --- Foundry call -----------------------------------------------------------
@@ -853,12 +894,15 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         if not question:
             _telegram_send(chat_id, "usage: /dig <research question>")
         else:
-            issue_url = _create_dig_issue(question)
+            issue_url, dig_status = _create_dig_issue(question)
             _telegram_send(
                 chat_id,
                 f"\U0001f50e dig started: {issue_url}\nCopilot is researching — report will land in mindVault."
                 if issue_url
-                else "couldn't start dig — DIG_GITHUB_TOKEN may be missing. check the function logs.",
+                else DIG_ERROR_MESSAGES.get(
+                    dig_status,
+                    "couldn't start dig — unexpected error.",
+                ),
             )
         return func.HttpResponse("ok", status_code=200)
 
