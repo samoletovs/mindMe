@@ -33,29 +33,38 @@ default), then configured + published. The Bicep is the clean-rebuild recipe;
 it will create a fresh `plan-mindme-ymcptc` rather than adopt the live
 auto-created plan `ASP-foundrylabrg-c0d2`.
 
-### Not every 503 is the wedge — check before you rebuild
+### Reading a deploy 503 — three cases, only one config-fixable
 
-The wedge above is a **config** fault (permanent). A *correctly configured* app
-can still hit `Uploading archive... (ServiceUnavailable)` when Azure's Flex
-deploy/SCM sub-service has a transient outage — the running app is unaffected
-(dig, captures, briefings keep working) and Azure reports it `availability:
-Normal`. That case **self-heals**: wait and retry. Rebuilding a correctly-
-configured app is the trap to avoid.
-
-Tell them apart with the preflight (read-only, makes no changes):
+`Uploading archive... (ServiceUnavailable)` / SCM 503 has three very different
+causes. The running app is unaffected in all of them (dig, captures, briefings
+keep working) — the difference is in the *deploy* plane. Run the preflight first;
+it classifies the case for you:
 
 ```powershell
 pwsh scripts/dev/check-deploy-readiness.ps1
-# exit 0 = ready · 1 = transient deploy-plane 503 (retry later) · 2 = config problem
+# exit 0 = ready · 1 = deploy-plane 503 (transient or app-specific) · 2 = config wedge
 ```
 
-Manual equivalent — a wedge shows a bad config value; a transient shows all-correct:
+1. **Config wedge** (preflight exit 2) — host/deploy storage uses managed-identity
+   auth on a shared-key-disabled account (the original saga). Fix the storage, then
+   redeploy. Permanent until fixed.
+2. **Transient / regional** (exit 1; a known-healthy peer app's SCM is *also* 503, or
+   it clears within minutes) — an Azure-side blip. Just wait and retry the publish.
+3. **App-specific platform wedge** (exit 1; config correct **and** a peer app's SCM is
+   healthy **and** it persists for hours) — the Flex deploy plane for *this* app is
+   stuck even though nothing is misconfigured. Restart / stop-start / storage-swap do
+   **not** clear it. The documented remedy is to rebuild under a fresh `functionSuffix`
+   (the Bicep param exists for exactly this) — a new SCM hostname while storage / Key
+   Vault / identity stay stable — then **re-point the Telegram webhook and re-register
+   the Foundry `companion` agent's tool URLs** to the new hostname. Disruptive; only do
+   it when a deploy actually must land.
+
+The regional-vs-app-specific probe the preflight uses, by hand:
 
 ```powershell
-$sub = az account show --query id -o tsv
-az rest --method get --url "https://management.azure.com/subscriptions/$sub/resourceGroups/foundrylab-rg/providers/Microsoft.Web/sites/func-mindme-ymcptc?api-version=2024-04-01" --query "{availability:properties.availabilityState, deployAuth:properties.functionAppConfig.deployment.storage.authentication.type}" -o jsonc
-# WEDGE     -> deployAuth is a managed-identity type, and/or availability != Normal
-# TRANSIENT -> deployAuth = StorageAccountConnectionString AND availability = Normal -> just retry
+curl.exe -s -o NUL -w "mindMe %{http_code}`n" https://func-mindme-ymcptc.scm.azurewebsites.net
+curl.exe -s -o NUL -w "peer   %{http_code}`n" https://func-memex-f5o6h2un2sqiu.scm.azurewebsites.net
+# both 503 -> regional/transient (wait) · mindMe 503 + peer 401 -> app-specific (case 3 if it persists)
 ```
 
 ## Pre-deploy checklist

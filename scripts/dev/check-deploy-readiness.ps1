@@ -30,7 +30,10 @@ param(
     [string]$ResourceGroup     = 'foundrylab-rg',
     [string]$FunctionApp       = 'func-mindme-ymcptc',
     [string]$DeployStorage     = 'stmindmedepymcpt',
-    [string]$HostStorageSetting = 'AzureWebJobsStorage'
+    [string]$HostStorageSetting = 'AzureWebJobsStorage',
+    # A known-healthy sibling Flex app in the same region, used only to tell a
+    # regional outage (peer also 503) from an app-specific wedge (peer healthy).
+    [string]$PeerApp           = 'func-memex-f5o6h2un2sqiu'
 )
 
 $ErrorActionPreference = 'Continue'
@@ -93,6 +96,15 @@ if     ($scm -eq '401') { Ok "SCM/deploy plane reachable (401 = healthy)" }
 elseif ($scm -eq '503') { Warn "SCM/deploy plane: 503 (unavailable)" }
 else   { Warn "SCM/deploy plane: HTTP $scm" }
 
+# 5b. On a 503, probe a healthy peer to tell regional-transient from app-specific.
+$peerScm = $null
+if ($scm -eq '503' -and $PeerApp) {
+    $peerScm = curl.exe -s -o NUL -w "%{http_code}" --max-time 30 "https://$PeerApp.scm.azurewebsites.net" 2>$null
+    if     ($peerScm -eq '401') { Warn "Peer $PeerApp SCM healthy (401) -> the 503 is APP-SPECIFIC, not regional" }
+    elseif ($peerScm -eq '503') { Ok   "Peer $PeerApp SCM also 503 -> looks regional/transient" }
+    else   { Warn "Peer $PeerApp SCM: HTTP $peerScm (inconclusive)" }
+}
+
 # --- Verdict ---
 Write-Host "`n--- Verdict ---" -ForegroundColor Cyan
 if ($wedge) {
@@ -100,7 +112,12 @@ if ($wedge) {
     exit 2
 }
 elseif ($scm -eq '503') {
-    Write-Host "TRANSIENT 503: config is correct but the Flex deploy plane is 503. This is Azure-side and self-heals — wait and retry 'func azure functionapp publish $FunctionApp --python'. Do NOT rebuild." -ForegroundColor Yellow
+    Write-Host "DEPLOY PLANE 503 (config is correct, so NOT the storage wedge)." -ForegroundColor Yellow
+    if ($peerScm -eq '401') {
+        Write-Host "  A healthy peer means this is app-specific. A brief spell is transient (retry). If it persists for hours, it may be a Flex platform wedge of THIS app's deploy plane — the documented remedy is a fresh-functionSuffix rebuild (docs/deploy.md), which re-points the Telegram webhook + Foundry agent. Decide deliberately; don't rebuild reflexively." -ForegroundColor Yellow
+    } else {
+        Write-Host "  Peer also affected / inconclusive -> looks regional/transient. Wait and retry 'func azure functionapp publish $FunctionApp --python'." -ForegroundColor Yellow
+    }
     exit 1
 }
 elseif ($fails.Count -gt 0) {
