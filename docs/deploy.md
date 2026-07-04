@@ -56,6 +56,12 @@ cd c:\vsCode\.nauroLabs\mindMe
 # 5. Ensure the dig PAT secret exists (used by `/dig` issue creation)
 az keyvault secret show --vault-name kv-mindme-ymcpt --name dig-github-token --query id -o tsv
 # Expect: a Key Vault secret resource ID (non-empty)
+
+# 6. Ensure the memex webhook secret exists. MEMEX_WEBHOOK_URL is now a Key Vault
+#    reference (note/URL/YouTube/voice captures forward here), so a redeploy resolves
+#    it from this secret — a missing/empty value silently breaks the capture flows.
+az keyvault secret show --vault-name kv-mindme-ymcpt --name memex-webhook-url --query id -o tsv
+# Expect: a Key Vault secret resource ID (non-empty)
 ```
 
 ## Deploy

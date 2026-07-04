@@ -363,6 +363,14 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           name: 'DIG_REPO'
           value: 'samoletovs/mindVault'
         }
+        // memex capture webhook: note/URL/YouTube/voice captures are forwarded here
+        // (full URL incl. the function ?code= key), stored as a Key Vault secret so the
+        // key never lands in source. Seed memex-webhook-url before any redeploy, or this
+        // resolves empty and breaks the capture flows.
+        {
+          name: 'MEMEX_WEBHOOK_URL'
+          value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=memex-webhook-url)'
+        }
         {
           name: 'BRIEFING_ENCRYPTION_KEY'
           value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=briefing-encryption-key)'
