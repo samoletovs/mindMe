@@ -356,6 +356,14 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           value: telegramAllowedChatId
         }
         {
+          name: 'DIG_GITHUB_TOKEN'
+          value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=dig-github-token)'
+        }
+        {
+          name: 'DIG_REPO'
+          value: 'samoletovs/mindVault'
+        }
+        {
           name: 'BRIEFING_ENCRYPTION_KEY'
           value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=briefing-encryption-key)'
         }

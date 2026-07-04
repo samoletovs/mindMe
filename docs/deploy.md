@@ -52,6 +52,10 @@ az storage blob list --account-name stmindmeymcpt --container-name personal-os -
 cd c:\vsCode\.nauroLabs\mindMe
 .\.venv\Scripts\python.exe scripts\local\test_briefing_snapshot.py
 # Expect: JSON with today's date, dashboard slices, area H1s
+
+# 5. Ensure the dig PAT secret exists (used by `/dig` issue creation)
+az keyvault secret show --vault-name kv-mindme-ymcpt --name dig-github-token --query id -o tsv
+# Expect: a Key Vault secret resource ID (non-empty)
 ```
 
 ## Deploy
