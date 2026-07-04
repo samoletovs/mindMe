@@ -33,6 +33,31 @@ default), then configured + published. The Bicep is the clean-rebuild recipe;
 it will create a fresh `plan-mindme-ymcptc` rather than adopt the live
 auto-created plan `ASP-foundrylabrg-c0d2`.
 
+### Not every 503 is the wedge — check before you rebuild
+
+The wedge above is a **config** fault (permanent). A *correctly configured* app
+can still hit `Uploading archive... (ServiceUnavailable)` when Azure's Flex
+deploy/SCM sub-service has a transient outage — the running app is unaffected
+(dig, captures, briefings keep working) and Azure reports it `availability:
+Normal`. That case **self-heals**: wait and retry. Rebuilding a correctly-
+configured app is the trap to avoid.
+
+Tell them apart with the preflight (read-only, makes no changes):
+
+```powershell
+pwsh scripts/dev/check-deploy-readiness.ps1
+# exit 0 = ready · 1 = transient deploy-plane 503 (retry later) · 2 = config problem
+```
+
+Manual equivalent — a wedge shows a bad config value; a transient shows all-correct:
+
+```powershell
+$sub = az account show --query id -o tsv
+az rest --method get --url "https://management.azure.com/subscriptions/$sub/resourceGroups/foundrylab-rg/providers/Microsoft.Web/sites/func-mindme-ymcptc?api-version=2024-04-01" --query "{availability:properties.availabilityState, deployAuth:properties.functionAppConfig.deployment.storage.authentication.type}" -o jsonc
+# WEDGE     -> deployAuth is a managed-identity type, and/or availability != Normal
+# TRANSIENT -> deployAuth = StorageAccountConnectionString AND availability = Normal -> just retry
+```
+
 ## Pre-deploy checklist
 
 ```powershell
