@@ -144,6 +144,48 @@
           }
         }
       }
+    },
+    "/tools/vault_recent": {
+      "get": {
+        "operationId": "get_vault_recent",
+        "summary": "List the most recent items in a mindVault folder.",
+        "description": "Returns the newest markdown items from the NON-sensitive mindVault repo. kind='research' for recent deep-research reports, 'notes' for notes, 'ideas' for open ideas, 'wiki' for the knowledge wiki. Never reads private (.me) data.",
+        "parameters": [
+          {"name": "kind", "in": "query", "required": false, "schema": {"type": "string", "enum": ["research", "notes", "ideas", "wiki"], "default": "research"}, "description": "Which folder to list."},
+          {"name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "default": 5}, "description": "Max items (1-20)."}
+        ],
+        "responses": {
+          "200": {
+            "description": "Recent items.",
+            "content": {"application/json": {"schema": {"type": "object", "properties": {
+              "kind": {"type": "string"},
+              "items": {"type": "array", "items": {"type": "object", "properties": {
+                "title": {"type": "string"}, "path": {"type": "string"}, "date": {"type": "string"}, "url": {"type": "string"}
+              }}}
+            }}}}
+          }
+        }
+      }
+    },
+    "/tools/vault_read": {
+      "get": {
+        "operationId": "get_vault_read",
+        "summary": "Read one markdown file from mindVault by path.",
+        "description": "Returns the markdown content of a single file from the NON-sensitive mindVault repo. Use a path returned by get_vault_recent (under research/notes/ideas/wiki). Never reads private (.me) data.",
+        "parameters": [
+          {"name": "path", "in": "query", "required": true, "schema": {"type": "string"}, "description": "Repo-relative path, e.g. '02_areas/agents/research/2026-07-10-x.md'."}
+        ],
+        "responses": {
+          "200": {
+            "description": "File content.",
+            "content": {"application/json": {"schema": {"type": "object", "properties": {
+              "path": {"type": "string"}, "content": {"type": "string"}
+            }}}}
+          },
+          "400": {"description": "Path not allowed."},
+          "404": {"description": "Not found."}
+        }
+      }
     }
   }
 }

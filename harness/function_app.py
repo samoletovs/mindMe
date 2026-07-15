@@ -13,6 +13,8 @@ Endpoints
 - GET   /api/health              uptime probe
 - POST  /api/tools/briefing_context  Foundry agent tool: get_briefing_context()
 - GET   /api/tools/weather       Foundry agent tool: get_weather()
+- GET   /api/tools/vault_recent  Foundry agent tool: get_vault_recent()
+- GET   /api/tools/vault_read    Foundry agent tool: get_vault_read()
 
 Logging policy (AGENTS.md rule 1): IDs, sizes, durations only. Never message
 content. Rule 8: httpx logger silenced before any Telegram call. Rule 9 (added
@@ -168,14 +170,23 @@ def _is_allowed_chat(chat_id: int | None) -> bool:
 
 _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _CAPTURE_PREFIX_RE = re.compile(r"^\s*(save|note|idea|n)\s*[:\-]", re.IGNORECASE)
+# Slash-command capture verbs. These are forwarded to memex (which owns the
+# capture pipeline) rather than answered by the companion. Kept in sync with
+# memex `_handle_command`: only verbs memex actually handles belong here, or the
+# forward would be silently dropped.
+_CAPTURE_COMMAND_RE = re.compile(r"^/(note|idea|task)(@\w+)?(\s|$)", re.IGNORECASE)
 
 
 def _is_capture_intent(text: str) -> bool:
-    """A message is a capture (not a chat) if it is prefixed save:/note:/idea:/n:
-    or contains a URL."""
+    """A message is a capture (not a chat) if it is prefixed save:/note:/idea:/n:,
+    is a /note or /idea slash command, or contains a URL."""
     if not text:
         return False
-    return bool(_CAPTURE_PREFIX_RE.match(text) or _URL_RE.search(text))
+    return bool(
+        _CAPTURE_PREFIX_RE.match(text)
+        or _CAPTURE_COMMAND_RE.match(text)
+        or _URL_RE.search(text)
+    )
 
 
 def _forward_to_memex(update: dict) -> bool:
@@ -459,6 +470,7 @@ def _build_briefing_snapshot() -> dict:
         span.set_attribute("areas.count", len(snapshot["areas"]))
 
         snapshot["vault_state"] = _vault_state(today)
+        snapshot["open_loops"] = _fetch_open_loops()
         return snapshot
 
 
@@ -639,6 +651,59 @@ def _vault_state(today: date | None = None) -> dict:
         return state
 
 
+# --- Open-loops projection (open ideas + tasks) via memex /state -----------
+#
+# Ideas/tasks live in mindVault (git), NOT the .me personal-os mirror, so they
+# come from memex's /state endpoint (read-only over mindVault; never .me). A
+# missing URL or a failed call degrades gracefully to "no open loops" — the
+# briefing/status still work. Hard Rule 1/9: record status + counts only, never
+# idea/task titles or the token-bearing URL.
+
+
+def _empty_open_loops() -> dict:
+    return {
+        "ideas": {"open_count": 0, "oldest_age_days": 0, "items": []},
+        "tasks": {"open_count": 0, "items": []},
+    }
+
+
+def _fetch_open_loops() -> dict:
+    """Fetch the open-loops projection (open ideas + tasks) from memex.
+
+    Returns a safe empty projection if MEMEX_STATE_URL is unset or the call
+    fails — resurfacing is a nice-to-have, never a hard dependency. The URL
+    (incl. ?code=) lives in MEMEX_STATE_URL and is never logged.
+    """
+    url = os.environ.get("MEMEX_STATE_URL")
+    if not url:
+        return _empty_open_loops()
+    with tracer.start_as_current_span("fetch_open_loops") as span:
+        try:
+            resp = _http_client().get(url)
+            span.set_attribute("http.status_code", resp.status_code)
+            if resp.status_code >= 400:
+                return _empty_open_loops()
+            data = resp.json() or {}
+        except Exception:
+            log.exception("fetch_open_loops failed")
+            return _empty_open_loops()
+        ideas = data.get("ideas") or {}
+        tasks = data.get("tasks") or {}
+        span.set_attribute("ideas.open_count", int(ideas.get("open_count", 0) or 0))
+        span.set_attribute("tasks.open_count", int(tasks.get("open_count", 0) or 0))
+    return {
+        "ideas": {
+            "open_count": int(ideas.get("open_count", 0) or 0),
+            "oldest_age_days": int(ideas.get("oldest_age_days", 0) or 0),
+            "items": ideas.get("items") or [],
+        },
+        "tasks": {
+            "open_count": int(tasks.get("open_count", 0) or 0),
+            "items": tasks.get("items") or [],
+        },
+    }
+
+
 def _load_briefing() -> dict:
     """Public entry used by the get_briefing_context tool. Builds today's
     snapshot in-process from the personal-os blob.
@@ -676,6 +741,15 @@ def _status_line() -> str:
     parts = [inbox_part, proj_part, review_part]
     if state["stale_areas"]:
         parts.append(f"🕸️ stale areas: {len(state['stale_areas'])}")
+    loops = _fetch_open_loops()
+    ideas, tasks = loops["ideas"], loops["tasks"]
+    if ideas["open_count"]:
+        idea_part = f"💡 ideas: {ideas['open_count']}"
+        if ideas["oldest_age_days"]:
+            idea_part += f" (oldest {ideas['oldest_age_days']}d)"
+        parts.append(idea_part)
+    if tasks["open_count"]:
+        parts.append(f"✅ tasks: {tasks['open_count']}")
     return " · ".join(parts)
 
 
@@ -714,6 +788,15 @@ def _compose_review_nudge(state: dict) -> str:
         names = ", ".join(item["area"] for item in stale[:3])
         piece = f"{len(stale)} stale area" + ("s" if len(stale) != 1 else "")
         bits.append(f"{piece} ({names})")
+    loops = _fetch_open_loops()
+    ideas, tasks = loops["ideas"], loops["tasks"]
+    if ideas["open_count"]:
+        piece = f"{ideas['open_count']} open idea" + ("s" if ideas["open_count"] != 1 else "")
+        if ideas["oldest_age_days"]:
+            piece += f" (oldest {ideas['oldest_age_days']}d)"
+        bits.append(piece)
+    if tasks["open_count"]:
+        bits.append(f"{tasks['open_count']} open task" + ("s" if tasks["open_count"] != 1 else ""))
     head = "🧹 Weekly review time."
     if reviews["days_since"] is not None:
         head += f" Last review {reviews['days_since']}d ago."
@@ -921,7 +1004,12 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         elif user_text == "/review":
             reply = _review_prompt()
         elif user_text == "/help":
-            reply = "/ping | /status | /review | /reset | /dig <question> | /help — anything else goes to mindMe."
+            reply = (
+                "/note <text> — save a note · /idea <text> — save an idea to revisit · "
+                "/task <what needs doing> — create a task · /dig <question> — deep research · "
+                "/status · /review · /ping · /help\n"
+                "Links and voice notes are captured automatically. Anything else → mindMe."
+            )
         else:
             reply = _ask_companion(user_text)
     except Exception:
@@ -957,7 +1045,8 @@ def morning_briefing_timer(timer: func.TimerRequest) -> None:
             "(1) today's focus and top goals; (2) what needs attention — read "
             "vault_state for the inbox backlog (count + oldest age in days), the "
             "nearest project deadline, and whether the weekly review is overdue, "
-            "and mention these only when they actually need action; (3) the "
+            "and open_loops for the oldest open idea to revisit and any open tasks; "
+            "mention these only when they actually need action; (3) the "
             f"weather. Use {_home_location()} as the default location. Be warm and concise."
         )
         reply = _ask_companion(seed)
@@ -1125,3 +1214,145 @@ def tool_weather(req: func.HttpRequest) -> func.HttpResponse:
             mimetype="application/json",
             status_code=503,
         )
+
+
+# ---------------------------------------------------------------------------
+# P4: mindVault-scoped retrieval tools (conversational vault Q&A)
+# ---------------------------------------------------------------------------
+# The companion can read the NON-sensitive mindVault repo (notes, ideas, research,
+# wiki) to answer "what are my last researches?" and follow-ups. It reads mindVault
+# via the GitHub Contents API with DIG_GITHUB_TOKEN and NEVER touches the .me
+# personal-os blob (ADR-0001 D5). A strict folder allowlist keeps reads inside safe
+# paths; the sensitive vault is a different repo and is unreachable here by design.
+
+_VAULT_KIND_DIRS = {
+    "research": "02_areas/agents/research",
+    "notes": "notes",
+    "ideas": "ideas",
+    "wiki": "wiki",
+}
+_VAULT_ALLOWED_PREFIXES = tuple(f"{d}/" for d in _VAULT_KIND_DIRS.values())
+_VAULT_READ_MAX_CHARS = 8000
+_VAULT_NAME_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})-(.+)\.md$", re.IGNORECASE)
+
+
+def _mindvault_get(path: str):
+    """GET the GitHub Contents API for a path in mindVault; parsed JSON or None on
+    404 / missing token. Token-bearing request — never logged (Hard Rule 8)."""
+    token = os.environ.get("DIG_GITHUB_TOKEN")
+    if not token:
+        return None
+    repo = os.environ.get("DIG_REPO", DIG_REPO_DEFAULT)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "mindMe/1.0",
+    }
+    resp = _http_client().get(f"{GITHUB_API}/repos/{repo}/contents/{path}", headers=headers)
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _vault_path_allowed(path: str) -> bool:
+    """Path must sit under an allowlisted mindVault folder — no traversal, no `.me`."""
+    p = (path or "").strip().lstrip("/")
+    if not p or ".." in p or "\\" in p:
+        return False
+    return p.startswith(_VAULT_ALLOWED_PREFIXES)
+
+
+def _vault_recent(kind: str, limit: int) -> list[dict]:
+    """Newest markdown items in a mindVault folder (date-prefixed names → newest
+    first). Titles/dates come from the filename — no per-file fetch."""
+    folder = _VAULT_KIND_DIRS.get(kind)
+    if not folder:
+        return []
+    entries = _mindvault_get(folder)
+    if not isinstance(entries, list):
+        return []
+    files = [
+        e for e in entries
+        if e.get("type") == "file" and (e.get("name") or "").endswith(".md")
+        and (e.get("name") or "").lower() != "readme.md"
+    ]
+    files.sort(key=lambda e: e.get("name") or "", reverse=True)
+    out: list[dict] = []
+    for e in files[:limit]:
+        name = e.get("name") or ""
+        m = _VAULT_NAME_DATE_RE.search(name)
+        out.append(
+            {
+                "title": (m.group(2) if m else name[:-3]).replace("-", " "),
+                "path": e.get("path") or f"{folder}/{name}",
+                "date": m.group(1) if m else "",
+                "url": e.get("html_url") or "",
+            }
+        )
+    return out
+
+
+@app.function_name(name="tool_vault_recent")
+@app.route(route="tools/vault_recent", methods=["GET"])
+def tool_vault_recent(req: func.HttpRequest) -> func.HttpResponse:
+    """Foundry agent tool: get_vault_recent(kind, limit). Newest items from a
+    mindVault folder (research/notes/ideas/wiki). Never reads .me."""
+    kind = (req.params.get("kind") or "research").strip().lower()
+    if kind not in _VAULT_KIND_DIRS:
+        return func.HttpResponse(
+            json.dumps({"error": "unknown kind", "accepted": sorted(_VAULT_KIND_DIRS)}),
+            mimetype="application/json", status_code=400,
+        )
+    try:
+        limit = max(1, min(int(req.params.get("limit") or 5), 20))
+    except (TypeError, ValueError):
+        limit = 5
+    try:
+        items = _vault_recent(kind, limit)
+    except Exception:
+        log.exception("vault_recent failed kind=%s", kind)
+        return func.HttpResponse(
+            json.dumps({"error": "vault unavailable"}), mimetype="application/json", status_code=503,
+        )
+    return func.HttpResponse(
+        json.dumps({"kind": kind, "items": items}), mimetype="application/json", status_code=200,
+    )
+
+
+@app.function_name(name="tool_vault_read")
+@app.route(route="tools/vault_read", methods=["GET"])
+def tool_vault_read(req: func.HttpRequest) -> func.HttpResponse:
+    """Foundry agent tool: get_vault_read(path). Markdown content of ONE
+    allowlisted mindVault file. Never reads .me."""
+    import base64
+
+    path = (req.params.get("path") or "").strip()
+    if not _vault_path_allowed(path):
+        return func.HttpResponse(
+            json.dumps({
+                "error": "path not allowed",
+                "allowed_folders": sorted(_VAULT_KIND_DIRS.values()),
+            }),
+            mimetype="application/json", status_code=400,
+        )
+    try:
+        data = _mindvault_get(path)
+    except Exception:
+        log.exception("vault_read failed")
+        return func.HttpResponse(
+            json.dumps({"error": "vault unavailable"}), mimetype="application/json", status_code=503,
+        )
+    if not isinstance(data, dict) or data.get("type") != "file":
+        return func.HttpResponse(
+            json.dumps({"error": "not found"}), mimetype="application/json", status_code=404,
+        )
+    try:
+        content = base64.b64decode(data.get("content") or "").decode("utf-8")
+    except Exception:
+        content = ""
+    return func.HttpResponse(
+        json.dumps({"path": path, "content": content[:_VAULT_READ_MAX_CHARS]}),
+        mimetype="application/json", status_code=200,
+    )
