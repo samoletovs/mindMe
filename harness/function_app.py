@@ -1231,6 +1231,10 @@ _VAULT_KIND_DIRS = {
     "ideas": "ideas",
     "wiki": "wiki",
 }
+# These folders hold atomic files named <YYYY-MM-DD>-<slug>.md. For them we
+# require a leading date and sort by it, so index.md / readme.md and any other
+# non-dated file never surface — and every returned item always carries a date.
+_VAULT_DATED_KINDS = {"research", "notes", "ideas"}
 _VAULT_ALLOWED_PREFIXES = tuple(f"{d}/" for d in _VAULT_KIND_DIRS.values())
 _VAULT_READ_MAX_CHARS = 8000
 _VAULT_NAME_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})-(.+)\.md$", re.IGNORECASE)
@@ -1265,25 +1269,28 @@ def _vault_path_allowed(path: str) -> bool:
 
 
 def _vault_recent(kind: str, limit: int) -> list[dict]:
-    """Newest markdown items in a mindVault folder (date-prefixed names → newest
-    first). Titles/dates come from the filename — no per-file fetch."""
+    """Newest markdown items in a mindVault folder. Dated folders
+    (research/notes/ideas) require a leading <YYYY-MM-DD> and sort by that date,
+    so every item carries a date and index/readme files never surface. Titles and
+    dates come from the filename — no per-file fetch."""
     folder = _VAULT_KIND_DIRS.get(kind)
     if not folder:
         return []
     entries = _mindvault_get(folder)
     if not isinstance(entries, list):
         return []
-    files = [
-        e for e in entries
-        if e.get("type") == "file" and (e.get("name") or "").endswith(".md")
-        and (e.get("name") or "").lower() != "readme.md"
-    ]
-    files.sort(key=lambda e: e.get("name") or "", reverse=True)
-    out: list[dict] = []
-    for e in files[:limit]:
+    dated = kind in _VAULT_DATED_KINDS
+    items: list[dict] = []
+    for e in entries:
+        if e.get("type") != "file":
+            continue
         name = e.get("name") or ""
-        m = _VAULT_NAME_DATE_RE.search(name)
-        out.append(
+        if not name.lower().endswith(".md") or name.lower() in ("index.md", "readme.md"):
+            continue
+        m = _VAULT_NAME_DATE_RE.match(name)
+        if dated and not m:
+            continue  # dated folders: skip anything without a leading date
+        items.append(
             {
                 "title": (m.group(2) if m else name[:-3]).replace("-", " "),
                 "path": e.get("path") or f"{folder}/{name}",
@@ -1291,7 +1298,8 @@ def _vault_recent(kind: str, limit: int) -> list[dict]:
                 "url": e.get("html_url") or "",
             }
         )
-    return out
+    items.sort(key=lambda i: (i["date"] or i["title"]), reverse=True)
+    return items[:limit]
 
 
 @app.function_name(name="tool_vault_recent")
