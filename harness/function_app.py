@@ -1111,6 +1111,38 @@ def weekly_review_timer(timer: func.TimerRequest) -> None:
         log.exception("weekly nudge failed")
 
 
+# --- Function: reaper_poll_timer -------------------------------------------
+
+@app.function_name(name="reaper_poll_timer")
+@app.timer_trigger(
+    schedule="0 */30 * * * *",  # every 30 min, all day — Azure timer runs are free
+    arg_name="timer",
+    run_on_startup=False,
+    use_monitor=True,
+)
+def reaper_poll_timer(timer: func.TimerRequest) -> None:
+    """Poll GitHub for finished Copilot-agent PRs (mindVault / familyVault) and
+    fire the existing reaper workflow via ``workflow_dispatch`` when there is real
+    work. This moves the reapers' idle polling off metered GitHub Actions minutes
+    onto this free timer; the workflows themselves still run on Actions, but only
+    on genuine completions (a few times a month) instead of ~720 idle polls. See
+    ``harness/github_reapers.py`` for the per-reaper guards and cutover notes."""
+    started = time.monotonic()
+    try:
+        from github_reapers import run_reaper_poll
+
+        summary = run_reaper_poll()
+        log.info(
+            "reaper poll complete checked=%d dispatched=%d errors=%d duration=%.2fs",
+            summary["checked"],
+            summary["dispatched"],
+            summary["errors"],
+            time.monotonic() - started,
+        )
+    except Exception:
+        log.exception("reaper poll failed")
+
+
 # --- Function: capture_drain (Phase 3 placeholder) -------------------------
 
 @app.function_name(name="capture_drain")

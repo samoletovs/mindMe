@@ -363,6 +363,15 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           name: 'DIG_REPO'
           value: 'samoletovs/mindVault'
         }
+        // Reaper poller (github_reapers.py): a fine-grained PAT with, on BOTH
+        // samoletovs/mindVault and samoletovs/familyVault — Actions: Read+Write
+        // (to workflow_dispatch the reapers), Pull requests: Read, Contents: Read.
+        // Seed the `reaper-github-token` secret before redeploy, or the poller
+        // falls back to DIG_GITHUB_TOKEN (mindVault-only) and skips familyVault.
+        {
+          name: 'REAPER_GITHUB_TOKEN'
+          value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=reaper-github-token)'
+        }
         // memex capture webhook: note/URL/YouTube/voice captures are forwarded here
         // (full URL incl. the function ?code= key), stored as a Key Vault secret so the
         // key never lands in source. Seed memex-webhook-url before any redeploy, or this
