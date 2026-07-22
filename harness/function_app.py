@@ -169,12 +169,12 @@ def _is_allowed_chat(chat_id: int | None) -> bool:
 # companion stays the default for ordinary conversation.
 
 _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
-_CAPTURE_PREFIX_RE = re.compile(r"^\s*(save|note|idea|n)\s*[:\-]", re.IGNORECASE)
+_CAPTURE_PREFIX_RE = re.compile(r"^\s*(save|note|idea|diary|journal|n)\s*[:\-]", re.IGNORECASE)
 # Slash-command capture verbs. These are forwarded to memex (which owns the
 # capture pipeline) rather than answered by the companion. Kept in sync with
 # memex `_handle_command`: only verbs memex actually handles belong here, or the
 # forward would be silently dropped.
-_CAPTURE_COMMAND_RE = re.compile(r"^/(note|idea|task)(@\w+)?(\s|$)", re.IGNORECASE)
+_CAPTURE_COMMAND_RE = re.compile(r"^/(note|idea|task|diary|journal)(@\w+)?(\s|$)", re.IGNORECASE)
 
 
 def _is_capture_intent(text: str) -> bool:
@@ -1006,9 +1006,10 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         elif user_text == "/help":
             reply = (
                 "/note <text> — save a note · /idea <text> — save an idea to revisit · "
-                "/task <what needs doing> — create a task · /dig <question> — deep research · "
+                "/task <what needs doing> — create a task · /diary <how your day went> — daily journal · "
+                "/dig <question> — deep research · "
                 "/status · /review · /ping · /help\n"
-                "Links and voice notes are captured automatically. Anything else → mindMe."
+                "Links and voice notes are captured automatically. Start a voice note with “diary” for a journal entry. Anything else → mindMe."
             )
         else:
             reply = _ask_companion(user_text)
