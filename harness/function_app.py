@@ -765,6 +765,36 @@ def _review_prompt() -> str:
     )
 
 
+def _daily_summary() -> str:
+    """/summary — concise daily snapshot from dashboard + journal + open loops."""
+    try:
+        snapshot = _build_briefing_snapshot()
+    except Exception:
+        log.exception("daily summary build failed")
+        return "daily summary unavailable — check the function logs."
+
+    focus = _clip(snapshot.get("today_focus") or "", 140)
+    if not focus:
+        goals = [_clip(goal, 60) for goal in snapshot.get("top_goals") or [] if goal]
+        focus = "; ".join(goals[:2]) if goals else "no dashboard focus captured yet"
+
+    journal = snapshot.get("yesterday") or {}
+    mood = journal.get("mood") or "n/a"
+    energy = journal.get("energy") or "n/a"
+    loops = int(journal.get("open_loops_count") or 0)
+
+    open_loops = snapshot.get("open_loops") or _empty_open_loops()
+    ideas = int((open_loops.get("ideas") or {}).get("open_count") or 0)
+    tasks = int((open_loops.get("tasks") or {}).get("open_count") or 0)
+
+    return (
+        f"🧾 Daily summary ({snapshot.get('date') or date.today().isoformat()})\n"
+        f"Focus: {focus}\n"
+        f"Journal: mood {mood}/10 · energy {energy}/10 · open loops {loops}\n"
+        f"Thoughts: {ideas} open ideas · {tasks} open tasks"
+    )
+
+
 def _compose_review_nudge(state: dict) -> str:
     """Compose the Sunday weekly-review nudge from a vault_state snapshot."""
     inbox = state["inbox"]
@@ -1003,12 +1033,14 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
             reply = _status_line()
         elif user_text == "/review":
             reply = _review_prompt()
+        elif user_text == "/summary":
+            reply = _daily_summary()
         elif user_text == "/help":
             reply = (
                 "/note <text> — save a note · /idea <text> — save an idea to revisit · "
                 "/task <what needs doing> — create a task · /diary <how your day went> — daily journal · "
                 "/dig <question> — deep research · "
-                "/status · /review · /ping · /help\n"
+                "/summary · /status · /review · /ping · /help\n"
                 "Links and voice notes are captured automatically. Start a voice note with “diary” for a journal entry. Anything else → mindMe."
             )
         else:
