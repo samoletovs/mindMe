@@ -170,11 +170,24 @@ def _is_allowed_chat(chat_id: int | None) -> bool:
 
 _URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _CAPTURE_PREFIX_RE = re.compile(r"^\s*(save|note|idea|diary|journal|n)\s*[:\-]", re.IGNORECASE)
+_GENERIC_CAPTURE_PREFIX_RE = re.compile(r"^\s*(save|n)\s*[:\-]\s*", re.IGNORECASE)
 # Slash-command capture verbs. These are forwarded to memex (which owns the
 # capture pipeline) rather than answered by the companion. Kept in sync with
 # memex `_handle_command`: only verbs memex actually handles belong here, or the
 # forward would be silently dropped.
 _CAPTURE_COMMAND_RE = re.compile(r"^/(note|idea|task|diary|journal)(@\w+)?(\s|$)", re.IGNORECASE)
+_TASK_CAPTURE_RE = re.compile(
+    r"\b(todo|to do|need to|needs to|should|must|follow up|follow-up|remind me|call|email|send|book|buy|fix)\b",
+    re.IGNORECASE,
+)
+_IDEA_CAPTURE_RE = re.compile(
+    r"\b(idea|maybe|someday|could|what if|explore|experiment|might|wish)\b",
+    re.IGNORECASE,
+)
+_DIARY_CAPTURE_RE = re.compile(
+    r"\b(today|tonight|this morning|this afternoon|this evening|felt|feeling|mood|grateful|journal|diary)\b",
+    re.IGNORECASE,
+)
 
 
 def _is_capture_intent(text: str) -> bool:
@@ -206,6 +219,22 @@ def _forward_to_memex(update: dict) -> bool:
         except httpx.HTTPError:
             log.exception("capture forward failed")
             return False
+
+
+def _capture_category_suggestion(text: str) -> str | None:
+    """Suggest a more specific quick-capture verb for ambiguous save:/n: notes."""
+    if not text or not _GENERIC_CAPTURE_PREFIX_RE.match(text):
+        return None
+    body = _GENERIC_CAPTURE_PREFIX_RE.sub("", text, count=1).strip()
+    if not body or _URL_RE.fullmatch(body):
+        return None
+    if _DIARY_CAPTURE_RE.search(body):
+        return "That reads like a journal entry — next time use /diary so it lands with your daily log."
+    if _TASK_CAPTURE_RE.search(body):
+        return "That sounds actionable — next time use /task so it can turn into an open loop."
+    if _IDEA_CAPTURE_RE.search(body):
+        return "That sounds like an idea — next time use /idea so it can resurface later."
+    return "That looks like reference material — next time use /note to keep it easy to retrieve."
 
 
 # --- dig: deep-research front door (Mode B) ---------------------------------
@@ -1022,7 +1051,10 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
     # Capture intent (save:/note:/idea:/n: or a URL) → memex capture engine.
     # Everything else is a conversation with the companion.
     if _is_capture_intent(user_text):
-        _forward_to_memex(update)
+        forwarded = _forward_to_memex(update)
+        suggestion = _capture_category_suggestion(user_text)
+        if forwarded and suggestion:
+            _telegram_send(chat_id, suggestion)
         return func.HttpResponse("ok", status_code=200)
 
     started = time.monotonic()
@@ -1041,7 +1073,8 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
                 "/task <what needs doing> — create a task · /diary <how your day went> — daily journal · "
                 "/dig <question> — deep research · "
                 "/summary · /status · /review · /ping · /help\n"
-                "Links and voice notes are captured automatically. Start a voice note with “diary” for a journal entry. Anything else → mindMe."
+                "Links and voice notes are captured automatically. Start a voice note with “diary” for a journal entry. "
+                "save:/n: still work, and mindMe may suggest a more specific capture verb for next time. Anything else → mindMe."
             )
         else:
             reply = _ask_companion(user_text)
