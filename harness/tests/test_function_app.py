@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import function_app as app
 import function_app as fa
 
@@ -122,3 +124,56 @@ def test_summary_command_sends_daily_summary(monkeypatch):
 
     assert resp.status_code == 200
     assert sent == ["summary text"]
+
+
+def test_review_command_sends_weekly_review_prompt(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "sec")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setattr(fa, "_is_capture_intent", lambda _text: False)
+    monkeypatch.setattr(fa, "_review_prompt", lambda: "review text")
+
+    sent: list[str] = []
+    monkeypatch.setattr(fa, "_telegram_send", lambda _chat_id, text: sent.append(text))
+
+    resp = fa.telegram_webhook(DummyRequest(_webhook_payload("/review"), "sec"))
+
+    assert resp.status_code == 200
+    assert sent == ["review text"]
+
+
+def test_reviews_state_uses_latest_iso_week(monkeypatch):
+    monkeypatch.setattr(
+        fa,
+        "_os_blob_props",
+        lambda _prefix: [
+            ("reviews/2026-w03-weekly.md", None),
+            ("reviews/2026-w05-weekly.md", None),
+            ("reviews/not-a-review.md", None),
+        ],
+    )
+
+    state = fa._reviews_state(date(2026, 2, 3))
+
+    assert state == {"last_weekly": "2026-01-26", "days_since": 8}
+
+
+def test_weekly_review_timer_sends_nudge(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setattr(
+        fa,
+        "_vault_state",
+        lambda: {
+            "inbox": {"count": 2, "oldest_age_days": 4},
+            "projects": {"open_count": 1, "nearest_deadline": "2026-08-01", "nearest_project": "x"},
+            "reviews": {"last_weekly": "2026-07-20", "days_since": 9},
+            "stale_areas": [],
+        },
+    )
+    monkeypatch.setattr(fa, "_compose_review_nudge", lambda _state: "nudge text")
+
+    sent: list[tuple[int, str]] = []
+    monkeypatch.setattr(fa, "_telegram_send", lambda chat_id, text: sent.append((chat_id, text)))
+
+    fa.weekly_review_timer(None)
+
+    assert sent == [(7, "nudge text")]
