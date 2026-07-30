@@ -23,20 +23,32 @@ def _clean(monkeypatch):
     vault_layout._configured.cache_clear()
 
 
-def test_the_two_vaults_can_disagree():
-    # The whole point: one agent, two vaults, independent layouts. .me still carries the
-    # numbered prefixes; mindVault has been migrated to the standard.
+def test_both_vaults_are_on_the_standard_layout():
+    # Both migrated 2026-07-30. Kept as a guard: if a vault ever deviates again, it must
+    # be declared in vault-layout.json rather than discovered in production.
+    assert vault_layout.folder(vault_layout.PERSONAL_OS, "areas") == "areas"
+    assert vault_layout.folder(vault_layout.MINDVAULT, "areas") == "areas"
+
+
+def test_a_vault_can_deviate_without_touching_code(monkeypatch, tmp_path):
+    cfg = tmp_path / "vault-layout.json"
+    cfg.write_text(
+        json.dumps({"vaults": {"personal-os": {"layout": {"areas": "02_areas"}}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(vault_layout, "_CONFIG_PATH", cfg)
+    vault_layout._configured.cache_clear()
     assert vault_layout.folder(vault_layout.PERSONAL_OS, "areas") == "02_areas"
     assert vault_layout.folder(vault_layout.MINDVAULT, "areas") == "areas"
 
 
 def test_blob_prefix_has_the_trailing_slash_listing_needs():
-    assert vault_layout.prefix(vault_layout.PERSONAL_OS, "inbox") == "00_inbox/"
+    assert vault_layout.prefix(vault_layout.PERSONAL_OS, "inbox") == "inbox/"
 
 
 def test_env_overrides_the_config_file(monkeypatch):
-    monkeypatch.setenv(vault_layout._env_key(vault_layout.PERSONAL_OS, "areas"), "areas")
-    assert vault_layout.folder(vault_layout.PERSONAL_OS, "areas") == "areas"
+    monkeypatch.setenv(vault_layout._env_key(vault_layout.PERSONAL_OS, "areas"), "02_areas")
+    assert vault_layout.folder(vault_layout.PERSONAL_OS, "areas") == "02_areas"
 
 
 def test_unknown_vault_falls_back_to_the_standard():
