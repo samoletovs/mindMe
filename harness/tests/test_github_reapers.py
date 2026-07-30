@@ -144,7 +144,7 @@ def test_poll_dispatches_dig_when_finished_research_pr_present(monkeypatch):
     monkeypatch.setenv("REAPER_GITHUB_TOKEN", "tok")
     client = FakeClient(
         prs={"samoletovs/mindVault": [_agent_pr(1, "dig: heat pumps")]},
-        files={("samoletovs/mindVault", 1): [{"filename": "02_areas/agents/research/2026-07-21-x.md"}]},
+            files={("samoletovs/mindVault", 1): [{"filename": "areas/agents/research/2026-07-21-x.md"}]},
     )
     # Act
     summary = gr.run_reaper_poll(client=client)

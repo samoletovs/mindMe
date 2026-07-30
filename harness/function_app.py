@@ -280,7 +280,7 @@ def _create_dig_issue(question: str) -> tuple[str | None, str]:
         "2. RESEARCH each sub-question via web search/fetch + relevant MCP tools; 4–8 sources each; start broad then narrow.\n"
         "3. Capture a SOURCE URL for every key claim; prefer primary/official sources.\n"
         "4. SYNTHESIZE: merge, dedupe, resolve contradictions explicitly.\n"
-        f"5. SAVE a markdown report to `{vault_layout.folder('areas')}/agents/research/YYYY-MM-DD-<slug>.md` with TL;DR, themed sections with inline citations, a 'So what (for me)' section, and a 'confidence + gaps' note.\n"
+        f"5. SAVE a markdown report to `{vault_layout.folder(vault_layout.MINDVAULT, 'areas')}/agents/research/YYYY-MM-DD-<slug>.md` with TL;DR, themed sections with inline citations, a 'So what (for me)' section, and a 'confidence + gaps' note.\n"
         "GUARDRAILS: markdown only; citations required; no invented sources/numbers; if anything sensitive surfaces, leave a reference-note (system.md §7). Open a PR titled 'dig: <question>'."
     )
     headers = {
@@ -460,7 +460,7 @@ def _list_area_h1s(limit: int = 8) -> list[str]:
     """H1 of each `<areas>/<area>/README.md`, in alphabetical order."""
     headlines: list[str] = []
     container = _os_container_client()
-    blobs = container.list_blobs(name_starts_with=vault_layout.prefix("areas"))
+    blobs = container.list_blobs(name_starts_with=vault_layout.prefix(vault_layout.PERSONAL_OS, "areas"))
     readmes = sorted(
         b.name for b in blobs
         if b.name.endswith("/README.md") and b.name.count("/") == 2
@@ -488,7 +488,7 @@ def _build_briefing_snapshot() -> dict:
             snapshot.update({"top_goals": [], "this_week": [], "today_focus": ""})
 
         journal_rel = (
-            f"{vault_layout.folder('journal')}/{today.year}/"
+            f"{vault_layout.folder(vault_layout.PERSONAL_OS, 'journal')}/{today.year}/"
             f"{today.year}-{today.month:02d}-{today.day:02d}.md"
         )
         journal_text = _read_os_text(journal_rel)
@@ -555,7 +555,7 @@ def _os_blob_props(prefix: str) -> list[tuple[str, object]]:
 def _inbox_state(today: date) -> dict:
     count = 0
     dates: list[date] = []
-    for name, last_modified in _os_blob_props(vault_layout.prefix("inbox")):
+    for name, last_modified in _os_blob_props(vault_layout.prefix(vault_layout.PERSONAL_OS, "inbox")):
         base = name.rsplit("/", 1)[-1]
         if not base.endswith(".md") or base.lower() == "readme.md":
             continue
@@ -601,7 +601,7 @@ def _projects_state(today: date) -> dict:
     open_count = 0
     nearest: date | None = None
     nearest_title = ""
-    for name, _lm in _os_blob_props(vault_layout.prefix("projects")):
+    for name, _lm in _os_blob_props(vault_layout.prefix(vault_layout.PERSONAL_OS, "projects")):
         if not name.endswith("/README.md") or name.count("/") != 2:
             continue
         text = _read_os_text(name)
@@ -638,7 +638,7 @@ def _reviews_state(today: date) -> dict:
 
 def _stale_areas_state(today: date, *, limit: int = 5) -> list[dict]:
     newest: dict[str, date] = {}
-    for name, last_modified in _os_blob_props(vault_layout.prefix("areas")):
+    for name, last_modified in _os_blob_props(vault_layout.prefix(vault_layout.PERSONAL_OS, "areas")):
         parts = name.split("/")
         if len(parts) < 3 or last_modified is None:
             continue
@@ -790,7 +790,7 @@ def _review_prompt() -> str:
     return (
         _status_line()
         + "\n\nWeekly review:\n"
-        f"1. Empty {vault_layout.prefix('inbox')} — file or drop each note.\n"
+        f"1. Empty {vault_layout.prefix(vault_layout.PERSONAL_OS, 'inbox')} — file or drop each note.\n"
         "2. Touch each open project — next action or close it.\n"
         "3. Skim any stale areas.\n"
         "4. Set this week's focus in _dashboard.md."
@@ -1331,7 +1331,7 @@ def _vault_kind_dirs() -> dict[str, str]:
     without a redeploy — this backs a security allowlist, so it must never be a stale
     snapshot taken at import time."""
     return {
-        "research": f"{vault_layout.folder('areas')}/agents/research",
+        "research": f"{vault_layout.folder(vault_layout.MINDVAULT, 'areas')}/agents/research",
         "notes": "notes",
         "ideas": "ideas",
         "wiki": "wiki",

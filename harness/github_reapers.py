@@ -79,7 +79,7 @@ TARGETS: tuple[ReaperTarget, ...] = (
         workflow="dig-reaper.yml",
         ref="main",
         kind="agent_pr",
-        path_prefixes=(f"{vault_layout.folder('areas')}/agents/research/",),
+        path_prefixes=(f"{vault_layout.folder(vault_layout.MINDVAULT, 'areas')}/agents/research/",),
     ),
     ReaperTarget(
         key="promote",
@@ -96,7 +96,7 @@ TARGETS: tuple[ReaperTarget, ...] = (
         workflow="newsletter-reaper.yml",
         ref="main",
         kind="agent_pr",
-        path_prefixes=(f"{vault_layout.folder('areas')}/agents/newsletters/",),
+        path_prefixes=(f"{vault_layout.folder(vault_layout.MINDVAULT, 'areas')}/agents/newsletters/",),
     ),
     ReaperTarget(
         key="dispatch",
@@ -104,7 +104,7 @@ TARGETS: tuple[ReaperTarget, ...] = (
         workflow="dispatch-reaper.yml",
         ref="main",
         kind="agent_pr",
-        path_prefixes=(f"{vault_layout.folder('areas')}/agents/newsletters/",),
+        path_prefixes=(f"{vault_layout.folder(vault_layout.MINDVAULT, 'areas')}/agents/newsletters/",),
         branch_prefix="copilot/dispatch",
     ),
     ReaperTarget(

@@ -64,8 +64,11 @@ ME_ROOT = Path(
     )
 )
 DASHBOARD = ME_ROOT / "home.md"
-JOURNAL_DIR_FMT = vault_layout.folder("journal") + "/{year}/{year}-{month:02d}-{day:02d}.md"
-AREAS_DIR = ME_ROOT / vault_layout.folder("areas")
+JOURNAL_DIR_FMT = (
+    vault_layout.folder(vault_layout.PERSONAL_OS, "journal")
+    + "/{year}/{year}-{month:02d}-{day:02d}.md"
+)
+AREAS_DIR = ME_ROOT / vault_layout.folder(vault_layout.PERSONAL_OS, "areas")
 
 SCHEMA_VERSION = "2.0.0"
 CORE_MAX_BYTES = int(os.environ.get("BRIEFING_CORE_MAX_BYTES", "3500"))
