@@ -97,8 +97,8 @@ def test_is_finished_title_accepts_normal_title():
 
 
 def test_all_under_prefixes_true_when_every_path_matches():
-    paths = ["02_areas/agents/research/a.md", "02_areas/agents/research/index.md"]
-    assert gr._all_under_prefixes(paths, ("02_areas/agents/research/",))
+    paths = ["areas/agents/research/a.md", "areas/agents/research/index.md"]
+    assert gr._all_under_prefixes(paths, ("areas/agents/research/",))
 
 
 def test_all_under_prefixes_false_when_a_path_escapes():
@@ -129,9 +129,9 @@ def test_pr_matches_requires_title_prefix():
 
 def test_pr_matches_requires_branch_prefix():
     target = gr.ReaperTarget("dispatch", "r", "w.yml", "main", "agent_pr",
-                             path_prefixes=("02_areas/agents/newsletters/",),
+                             path_prefixes=("areas/agents/newsletters/",),
                              branch_prefix="copilot/dispatch")
-    files = ["02_areas/agents/newsletters/x.md"]
+    files = ["areas/agents/newsletters/x.md"]
     assert gr._pr_matches(target, "digest", "copilot/dispatch-abc", files)
     assert not gr._pr_matches(target, "digest", "copilot/other", files)
 

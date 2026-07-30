@@ -98,7 +98,7 @@ no collaborators.
 
 `tool_briefing_context` builds a **fixed, shallow** snapshot in
 `_build_briefing_snapshot`: `_dashboard.md` bullets, yesterday's journal
-summary, and the H1 of each `02_areas/*/README.md`. There is **no way to query
+summary, and the H1 of each `areas/*/README.md`. There is **no way to query
 arbitrary `.me` content**. The agent cannot search projects, past journals,
 notes, decisions, or anything outside the four hardcoded slices.
 
@@ -117,7 +117,7 @@ personal content sitting in Telegram's cloud.
 
 A Telegram message that isn't a command becomes a capture: the harness enqueues
 it on `capture-events`, and a queue-triggered function appends it to the right
-place in `.me` (e.g. `05_journal/YYYY/YYYY-MM-DD.md` or an inbox file). Keep
+place in `.me` (e.g. `journal/YYYY/YYYY-MM-DD.md` or an inbox file). Keep
 captures short, and **do not echo the full stored content back** — acknowledge
 with a minimal confirmation ("captured ✓") so personal text isn't duplicated
 into the chat history.
@@ -167,7 +167,7 @@ you accept the mitigations below (which keep personal content out of Telegram's
 cloud as much as a chat channel allows):
 
 - **Pointers, not content** — default replies cite *where* ("found it in
-  `02_areas/payArc/pricing.md` — want the detail?"); verbatim excerpts are
+  `areas/payArc/pricing.md` — want the detail?"); verbatim excerpts are
   opt-in per query.
 - **Sensitivity tiering** — mark some areas/files (e.g. `private:` frontmatter
   or a `99_vault/` prefix) as *never sent to Telegram*; reachable only from the

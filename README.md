@@ -13,7 +13,7 @@ A personal AI agent that operates on my [Personal OS (mindVault)](https://github
 | Capability | Trigger | Channel |
 |---|---|---|
 | **Morning briefing** | Timer at 07:30 daily | Telegram DM |
-| **Quick capture** | I text the bot | Telegram → `00_inbox/inbox.md` in Personal OS |
+| **Quick capture** | I text the bot | Telegram → `inbox/inbox.md` in Personal OS |
 | **Status / help** | `/status`, `/help` | Telegram slash commands |
 
 Anything beyond is v2+. See [Out of scope](#out-of-scope-v1).
@@ -109,7 +109,7 @@ Layout borrows patterns from [`agentMode`](https://github.com/samoletovs/agentMo
 Phase 1 complete (2026-05-11). Phase 2 cloud-native rewrite landed 2026-05-16
 (see [docs/architecture.md](docs/architecture.md) for the trade-off decision
 that drove it). See planning doc in Personal OS:
-`01_projects/2026-personal-agent-foundation/`.
+`projects/2026-personal-agent-foundation/`.
 
 | Phase | Status | Deliverable |
 |---|---|---|

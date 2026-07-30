@@ -173,7 +173,7 @@
         "summary": "Read one markdown file from mindVault by path.",
         "description": "Returns the markdown content of a single file from the NON-sensitive mindVault repo. Use a path returned by get_vault_recent (under research/notes/ideas/wiki). Never reads private (.me) data.",
         "parameters": [
-          {"name": "path", "in": "query", "required": true, "schema": {"type": "string"}, "description": "Repo-relative path, e.g. '02_areas/agents/research/2026-07-10-x.md'."}
+          {"name": "path", "in": "query", "required": true, "schema": {"type": "string"}, "description": "Repo-relative path, e.g. 'areas/agents/research/2026-07-10-x.md'."}
         ],
         "responses": {
           "200": {

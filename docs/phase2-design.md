@@ -78,7 +78,7 @@ This is scaffolded but **NOT redeployed** yet — `create_agent.py` is updated l
 
 Runs at 07:25 via Windows Task Scheduler. Steps:
 
-1. Read `%USERPROFILE%\OneDrive\.vscode\.me\_dashboard.md` (configurable via `ME_OS_ROOT`), today's journal entry, and current `02_areas/*/README.md` headers.
+1. Read `%USERPROFILE%\OneDrive\.vscode\.me\_dashboard.md` (configurable via `ME_OS_ROOT`), today's journal entry, and current `areas/*/README.md` headers.
 2. Build a tiered sanitized JSON snapshot:
    ```json
    {
