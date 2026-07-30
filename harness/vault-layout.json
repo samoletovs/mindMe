@@ -1,0 +1,12 @@
+{
+  "_comment": "Folder-role map for the Personal OS vault. Ships with the deployment, so a rename is a config change here rather than an edit scattered through the code. Roles not listed fall back to the standard vault layout (see vault_layout.DEFAULTS). Any role can also be overridden at runtime with VAULT_LAYOUT_<ROLE>, which wins over this file.",
+  "_pending": "mindVault and .me still carry the numbered PARA prefixes because several paths are resolved by exact name. Delete the entries below in the same change that renames the folders.",
+  "layout": {
+    "inbox": "00_inbox",
+    "projects": "01_projects",
+    "areas": "02_areas",
+    "resources": "03_resources",
+    "archive": "04_archive",
+    "journal": "05_journal"
+  }
+}

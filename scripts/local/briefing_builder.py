@@ -34,6 +34,7 @@ import hashlib
 import json
 import logging
 import os
+import sys
 import re
 import time
 import zlib
@@ -50,6 +51,10 @@ from dotenv import load_dotenv
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENV_PATH = REPO_ROOT / ".env"
 
+# One definition of the folder-role map, shared with the deployed function.
+sys.path.insert(0, str(REPO_ROOT / "harness"))
+import vault_layout  # noqa: E402
+
 # Personal OS layout. Lives in OneDrive for cross-device sync.
 # Override via ME_OS_ROOT env var if the OS path moves.
 ME_ROOT = Path(
@@ -58,9 +63,9 @@ ME_ROOT = Path(
         os.path.expandvars(r"%USERPROFILE%\OneDrive\.vscode\.me"),
     )
 )
-DASHBOARD = ME_ROOT / "_dashboard.md"
-JOURNAL_DIR_FMT = "05_journal/{year}/{year}-{month:02d}-{day:02d}.md"
-AREAS_DIR = ME_ROOT / "02_areas"
+DASHBOARD = ME_ROOT / "home.md"
+JOURNAL_DIR_FMT = vault_layout.folder("journal") + "/{year}/{year}-{month:02d}-{day:02d}.md"
+AREAS_DIR = ME_ROOT / vault_layout.folder("areas")
 
 SCHEMA_VERSION = "2.0.0"
 CORE_MAX_BYTES = int(os.environ.get("BRIEFING_CORE_MAX_BYTES", "3500"))

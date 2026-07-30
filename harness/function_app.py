@@ -59,6 +59,8 @@ from azure.ai.projects import AIProjectClient
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 
+import vault_layout
+
 # Hard Rule 8: silence httpx/httpcore BEFORE constructing any Telegram client.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -278,7 +280,7 @@ def _create_dig_issue(question: str) -> tuple[str | None, str]:
         "2. RESEARCH each sub-question via web search/fetch + relevant MCP tools; 4–8 sources each; start broad then narrow.\n"
         "3. Capture a SOURCE URL for every key claim; prefer primary/official sources.\n"
         "4. SYNTHESIZE: merge, dedupe, resolve contradictions explicitly.\n"
-        "5. SAVE a markdown report to `02_areas/agents/research/YYYY-MM-DD-<slug>.md` with TL;DR, themed sections with inline citations, a 'So what (for me)' section, and a 'confidence + gaps' note.\n"
+        f"5. SAVE a markdown report to `{vault_layout.folder('areas')}/agents/research/YYYY-MM-DD-<slug>.md` with TL;DR, themed sections with inline citations, a 'So what (for me)' section, and a 'confidence + gaps' note.\n"
         "GUARDRAILS: markdown only; citations required; no invented sources/numbers; if anything sensitive surfaces, leave a reference-note (system.md §7). Open a PR titled 'dig: <question>'."
     )
     headers = {
@@ -455,10 +457,10 @@ def _extract_journal_summary(text: str, journal_date: str) -> dict:
 
 
 def _list_area_h1s(limit: int = 8) -> list[str]:
-    """H1 of each `02_areas/<area>/README.md`, in alphabetical order."""
+    """H1 of each `<areas>/<area>/README.md`, in alphabetical order."""
     headlines: list[str] = []
     container = _os_container_client()
-    blobs = container.list_blobs(name_starts_with="02_areas/")
+    blobs = container.list_blobs(name_starts_with=vault_layout.prefix("areas"))
     readmes = sorted(
         b.name for b in blobs
         if b.name.endswith("/README.md") and b.name.count("/") == 2
@@ -486,7 +488,8 @@ def _build_briefing_snapshot() -> dict:
             snapshot.update({"top_goals": [], "this_week": [], "today_focus": ""})
 
         journal_rel = (
-            f"05_journal/{today.year}/{today.year}-{today.month:02d}-{today.day:02d}.md"
+            f"{vault_layout.folder('journal')}/{today.year}/"
+            f"{today.year}-{today.month:02d}-{today.day:02d}.md"
         )
         journal_text = _read_os_text(journal_rel)
         span.set_attribute("journal.length", len(journal_text))
@@ -552,7 +555,7 @@ def _os_blob_props(prefix: str) -> list[tuple[str, object]]:
 def _inbox_state(today: date) -> dict:
     count = 0
     dates: list[date] = []
-    for name, last_modified in _os_blob_props("00_inbox/"):
+    for name, last_modified in _os_blob_props(vault_layout.prefix("inbox")):
         base = name.rsplit("/", 1)[-1]
         if not base.endswith(".md") or base.lower() == "readme.md":
             continue
@@ -598,7 +601,7 @@ def _projects_state(today: date) -> dict:
     open_count = 0
     nearest: date | None = None
     nearest_title = ""
-    for name, _lm in _os_blob_props("01_projects/"):
+    for name, _lm in _os_blob_props(vault_layout.prefix("projects")):
         if not name.endswith("/README.md") or name.count("/") != 2:
             continue
         text = _read_os_text(name)
@@ -635,7 +638,7 @@ def _reviews_state(today: date) -> dict:
 
 def _stale_areas_state(today: date, *, limit: int = 5) -> list[dict]:
     newest: dict[str, date] = {}
-    for name, last_modified in _os_blob_props("02_areas/"):
+    for name, last_modified in _os_blob_props(vault_layout.prefix("areas")):
         parts = name.split("/")
         if len(parts) < 3 or last_modified is None:
             continue
@@ -787,7 +790,7 @@ def _review_prompt() -> str:
     return (
         _status_line()
         + "\n\nWeekly review:\n"
-        "1. Empty 00_inbox/ — file or drop each note.\n"
+        f"1. Empty {vault_layout.prefix('inbox')} — file or drop each note.\n"
         "2. Touch each open project — next action or close it.\n"
         "3. Skim any stale areas.\n"
         "4. Set this week's focus in _dashboard.md."
@@ -1323,17 +1326,28 @@ def tool_weather(req: func.HttpRequest) -> func.HttpResponse:
 # personal-os blob (ADR-0001 D5). A strict folder allowlist keeps reads inside safe
 # paths; the sensitive vault is a different repo and is unreachable here by design.
 
-_VAULT_KIND_DIRS = {
-    "research": "02_areas/agents/research",
-    "notes": "notes",
-    "ideas": "ideas",
-    "wiki": "wiki",
-}
+def _vault_kind_dirs() -> dict[str, str]:
+    """Folder per readable kind. Resolved per call so a layout setting takes effect
+    without a redeploy — this backs a security allowlist, so it must never be a stale
+    snapshot taken at import time."""
+    return {
+        "research": f"{vault_layout.folder('areas')}/agents/research",
+        "notes": "notes",
+        "ideas": "ideas",
+        "wiki": "wiki",
+    }
+
+
 # These folders hold atomic files named <YYYY-MM-DD>-<slug>.md. For them we
 # require a leading date and sort by it, so index.md / readme.md and any other
 # non-dated file never surface — and every returned item always carries a date.
 _VAULT_DATED_KINDS = {"research", "notes", "ideas"}
-_VAULT_ALLOWED_PREFIXES = tuple(f"{d}/" for d in _VAULT_KIND_DIRS.values())
+
+
+def _vault_allowed_prefixes() -> tuple[str, ...]:
+    return tuple(f"{d}/" for d in _vault_kind_dirs().values())
+
+
 _VAULT_READ_MAX_CHARS = 8000
 _VAULT_NAME_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})-(.+)\.md$", re.IGNORECASE)
 
@@ -1363,7 +1377,7 @@ def _vault_path_allowed(path: str) -> bool:
     p = (path or "").strip().lstrip("/")
     if not p or ".." in p or "\\" in p:
         return False
-    return p.startswith(_VAULT_ALLOWED_PREFIXES)
+    return p.startswith(_vault_allowed_prefixes())
 
 
 def _vault_recent(kind: str, limit: int) -> list[dict]:
@@ -1371,7 +1385,7 @@ def _vault_recent(kind: str, limit: int) -> list[dict]:
     (research/notes/ideas) require a leading <YYYY-MM-DD> and sort by that date,
     so every item carries a date and index/readme files never surface. Titles and
     dates come from the filename — no per-file fetch."""
-    folder = _VAULT_KIND_DIRS.get(kind)
+    folder = _vault_kind_dirs().get(kind)
     if not folder:
         return []
     entries = _mindvault_get(folder)
@@ -1406,9 +1420,9 @@ def tool_vault_recent(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_vault_recent(kind, limit). Newest items from a
     mindVault folder (research/notes/ideas/wiki). Never reads .me."""
     kind = (req.params.get("kind") or "research").strip().lower()
-    if kind not in _VAULT_KIND_DIRS:
+    if kind not in _vault_kind_dirs():
         return func.HttpResponse(
-            json.dumps({"error": "unknown kind", "accepted": sorted(_VAULT_KIND_DIRS)}),
+            json.dumps({"error": "unknown kind", "accepted": sorted(_vault_kind_dirs())}),
             mimetype="application/json", status_code=400,
         )
     try:
@@ -1439,7 +1453,7 @@ def tool_vault_read(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             json.dumps({
                 "error": "path not allowed",
-                "allowed_folders": sorted(_VAULT_KIND_DIRS.values()),
+                "allowed_folders": sorted(_vault_kind_dirs().values()),
             }),
             mimetype="application/json", status_code=400,
         )

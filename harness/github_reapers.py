@@ -33,6 +33,8 @@ from dataclasses import dataclass
 
 import httpx
 
+import vault_layout
+
 GITHUB_API = "https://api.github.com"
 GITHUB_API_VERSION = "2022-11-28"
 _HTTP_TIMEOUT = 20.0
@@ -77,7 +79,7 @@ TARGETS: tuple[ReaperTarget, ...] = (
         workflow="dig-reaper.yml",
         ref="main",
         kind="agent_pr",
-        path_prefixes=("02_areas/agents/research/",),
+        path_prefixes=(f"{vault_layout.folder('areas')}/agents/research/",),
     ),
     ReaperTarget(
         key="promote",
@@ -94,7 +96,7 @@ TARGETS: tuple[ReaperTarget, ...] = (
         workflow="newsletter-reaper.yml",
         ref="main",
         kind="agent_pr",
-        path_prefixes=("02_areas/agents/newsletters/",),
+        path_prefixes=(f"{vault_layout.folder('areas')}/agents/newsletters/",),
     ),
     ReaperTarget(
         key="dispatch",
@@ -102,7 +104,7 @@ TARGETS: tuple[ReaperTarget, ...] = (
         workflow="dispatch-reaper.yml",
         ref="main",
         kind="agent_pr",
-        path_prefixes=("02_areas/agents/newsletters/",),
+        path_prefixes=(f"{vault_layout.folder('areas')}/agents/newsletters/",),
         branch_prefix="copilot/dispatch",
     ),
     ReaperTarget(

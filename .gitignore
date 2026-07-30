@@ -28,6 +28,7 @@ obj/
 !**/azuredeploy.parameters.json
 !harness/host.json
 !harness/**/function.json
+!harness/vault-layout.json
 !agent/openapi-tools.json
 
 # IDE
