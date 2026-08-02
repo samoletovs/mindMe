@@ -136,6 +136,23 @@ def test_pr_matches_requires_branch_prefix():
     assert not gr._pr_matches(target, "digest", "copilot/other", files)
 
 
+def test_family_promote_matches_a_real_promotion_pr():
+    """familyVault promotions land under knowledge/ and touch the root register + log.
+
+    The target used to list ``wiki/``, left over from before familyVault renamed that
+    folder. Because every changed path has to match, the guard could never fire again and
+    the reaper simply stopped - no error, just PRs sitting open. Pin the shape of a real
+    promotion so a future rename fails here rather than in silence.
+    """
+    target = next(t for t in gr.TARGETS if t.key == "family-promote")
+    files = ["knowledge/wiki/places/home/appliances.md", "index.md", "log.md"]
+    assert gr._pr_matches(target, "promote: Bosch appliances", "copilot/promote-1", files)
+    # ...and still refuses a PR that reaches outside the knowledge roots.
+    assert not gr._pr_matches(
+        target, "promote: sneaky", "copilot/promote-2", ["knowledge/a.md", "scripts/evil.sh"]
+    )
+
+
 # --- run_reaper_poll --------------------------------------------------------
 
 

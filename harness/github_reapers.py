@@ -121,7 +121,12 @@ TARGETS: tuple[ReaperTarget, ...] = (
         workflow="promote-reaper.yml",
         ref="main",
         kind="agent_pr",
-        path_prefixes=("wiki/",),
+        # familyVault keeps its knowledge under knowledge/ rather than wiki/, and a promote
+        # PR also touches the root register and log. These mirror that workflow's own guard
+        # (`^(knowledge/|people/|decisions/|index\.md$|log\.md$)`) - every changed path has
+        # to match, so listing only part of the set strands the PR instead of narrowing it.
+        path_prefixes=("knowledge/", "people/", "decisions/", "index.md", "log.md"),
+        title_prefix="promote:",
     ),
 )
 
