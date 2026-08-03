@@ -177,3 +177,137 @@ def test_weekly_review_timer_sends_nudge(monkeypatch):
     fa.weekly_review_timer(None)
 
     assert sent == [(7, "nudge text")]
+
+
+# ---------------------------------------------------------------------------
+# Voice capture tests
+# ---------------------------------------------------------------------------
+
+def _voice_payload(file_id: str = "abc123", mime: str = "audio/ogg", chat_id: int = 7) -> dict:
+    return {
+        "message": {
+            "chat": {"id": chat_id},
+            "voice": {"file_id": file_id, "mime_type": mime, "duration": 3, "file_size": 4096},
+        }
+    }
+
+
+def test_voice_note_is_transcribed_and_forwarded_as_text(monkeypatch):
+    """When Whisper is configured and download/transcription succeed, the webhook
+    forwards an update with the transcript injected as ``message.text`` and echoes
+    it back to the user prefixed with 🎤."""
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "sec")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+
+    monkeypatch.setattr(fa, "_download_telegram_file", lambda fid: b"AUDIO")
+    monkeypatch.setattr(fa, "_transcribe_voice", lambda _bytes, _mime: "book the dentist")
+
+    forwarded: list[dict] = []
+    monkeypatch.setattr(fa, "_forward_to_memex", lambda upd: forwarded.append(upd) or True)
+
+    sent: list[tuple[int, str]] = []
+    monkeypatch.setattr(fa, "_telegram_send", lambda cid, text: sent.append((cid, text)))
+
+    resp = fa.telegram_webhook(DummyRequest(_voice_payload(), "sec"))
+
+    assert resp.status_code == 200
+    # One update forwarded, with the transcript as message.text.
+    assert len(forwarded) == 1
+    assert forwarded[0]["message"]["text"] == "book the dentist"
+    # Original voice field still present so memex can archive it.
+    assert "voice" in forwarded[0]["message"]
+    # Confirmation echoed back to user.
+    assert sent == [(7, "\U0001f3a4 book the dentist")]
+
+
+def test_voice_note_falls_back_to_raw_forward_when_no_deployment(monkeypatch):
+    """When AZURE_OPENAI_WHISPER_DEPLOYMENT is not set, _transcribe_voice returns
+    None and the original update is forwarded unchanged (no confirmation message)."""
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "sec")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.delenv("AZURE_OPENAI_WHISPER_DEPLOYMENT", raising=False)
+
+    monkeypatch.setattr(fa, "_download_telegram_file", lambda fid: b"AUDIO")
+    # _transcribe_voice returns None when deployment is unset — mirror the real impl.
+    monkeypatch.setattr(fa, "_transcribe_voice", lambda _bytes, _mime: None)
+
+    forwarded: list[dict] = []
+    monkeypatch.setattr(fa, "_forward_to_memex", lambda upd: forwarded.append(upd) or True)
+
+    sent: list[tuple[int, str]] = []
+    monkeypatch.setattr(fa, "_telegram_send", lambda cid, text: sent.append((cid, text)))
+
+    payload = _voice_payload()
+    resp = fa.telegram_webhook(DummyRequest(payload, "sec"))
+
+    assert resp.status_code == 200
+    # Raw update forwarded without modification.
+    assert len(forwarded) == 1
+    assert forwarded[0] == payload
+    # No confirmation sent.
+    assert sent == []
+
+
+def test_voice_note_falls_back_to_raw_forward_on_download_error(monkeypatch):
+    """If the file download fails (network error), the raw update is forwarded and
+    no confirmation is sent."""
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "sec")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+
+    import httpx as _httpx
+
+    def _failing_download(_fid: str) -> bytes:
+        raise _httpx.HTTPError("network failure")
+
+    monkeypatch.setattr(fa, "_download_telegram_file", _failing_download)
+
+    forwarded: list[dict] = []
+    monkeypatch.setattr(fa, "_forward_to_memex", lambda upd: forwarded.append(upd) or True)
+
+    sent: list[tuple[int, str]] = []
+    monkeypatch.setattr(fa, "_telegram_send", lambda cid, text: sent.append((cid, text)))
+
+    payload = _voice_payload()
+    resp = fa.telegram_webhook(DummyRequest(payload, "sec"))
+
+    assert resp.status_code == 200
+    assert len(forwarded) == 1
+    assert forwarded[0] == payload
+    assert sent == []
+
+
+def test_transcribe_voice_returns_none_when_deployment_unset(monkeypatch):
+    """_transcribe_voice returns None immediately when the deployment env var is absent."""
+    monkeypatch.delenv("AZURE_OPENAI_WHISPER_DEPLOYMENT", raising=False)
+    assert fa._transcribe_voice(b"audio", "audio/ogg") is None
+
+
+def test_download_telegram_file_calls_getfile_then_download(monkeypatch):
+    """_download_telegram_file resolves the file_path via getFile and returns blob bytes."""
+    import httpx as _httpx
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
+
+    calls: list[str] = []
+
+    def _fake_get(url: str, **_kwargs):
+        calls.append(url)
+        req = _httpx.Request("GET", url)
+        if "getFile" in url:
+            return _httpx.Response(
+                200, json={"result": {"file_path": "voice/x.ogg"}}, request=req
+            )
+        return _httpx.Response(200, content=b"BYTES", request=req)
+
+    class _FakeClient:
+        def get(self, url: str, **kwargs):
+            return _fake_get(url, **kwargs)
+
+    monkeypatch.setattr(fa, "_http_client", lambda: _FakeClient())
+
+    result = fa._download_telegram_file("fid42")
+
+    assert result == b"BYTES"
+    assert any("getFile" in c for c in calls)
+    assert any("voice/x.ogg" in c for c in calls)
+

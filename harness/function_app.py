@@ -239,6 +239,81 @@ def _capture_category_suggestion(text: str) -> str | None:
     return "That looks like reference material — next time use /note to keep it easy to retrieve."
 
 
+# --- Voice capture helpers --------------------------------------------------
+# Voice notes arrive as Telegram `voice` / `audio` messages. We resolve the
+# file_id → download bytes → transcribe via Whisper (Azure AI Foundry). Both
+# helpers degrade gracefully: the webhook falls back to raw forwarding if
+# AZURE_OPENAI_WHISPER_DEPLOYMENT is unset or any step fails.
+#
+# Hard Rule 1/8/9: token-bearing Telegram URLs are never logged; transcript
+# content never appears in logs or span attributes.
+
+_VOICE_EXT_MAP: dict[str, str] = {
+    "mpeg": "mp3", "mp3": "mp3",
+    "mp4": "mp4", "m4a": "m4a", "x-m4a": "m4a",
+    "ogg": "ogg", "oga": "oga",
+    "webm": "webm", "wav": "wav", "flac": "flac",
+}
+
+
+def _download_telegram_file(file_id: str) -> bytes:
+    """Resolve *file_id* to a Telegram download URL and return the raw bytes.
+
+    Calls ``getFile`` first (returns the server-side ``file_path``), then
+    fetches the blob.  Both URLs contain the bot token — they are never
+    logged (Hard Rule 8).  Raises ``httpx.HTTPError`` on any network / HTTP
+    failure so the caller can handle it uniformly.
+    """
+    token = os.environ["TELEGRAM_BOT_TOKEN"]
+    meta = _http_client().get(
+        f"{TELEGRAM_API}/bot{token}/getFile",
+        params={"file_id": file_id},
+    )
+    meta.raise_for_status()
+    file_path = meta.json()["result"]["file_path"]
+    blob = _http_client().get(f"{TELEGRAM_API}/file/bot{token}/{file_path}")
+    blob.raise_for_status()
+    return blob.content
+
+
+def _transcribe_voice(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str | None:
+    """Transcribe *audio_bytes* using OpenAI Whisper via Azure AI Foundry.
+
+    Returns the stripped transcript string, or ``None`` when:
+    * ``AZURE_OPENAI_WHISPER_DEPLOYMENT`` is not set (feature disabled), or
+    * the Whisper deployment is unreachable / returns an error, or
+    * the transcript is empty after stripping.
+
+    The caller should fall back to raw-forwarding on ``None``.
+
+    Hard Rule 1: transcript text is never logged.
+    Hard Rule 9: span attributes carry byte count and status only — never
+    prompts, completions, or the transcript itself.
+    """
+    deployment = os.environ.get("AZURE_OPENAI_WHISPER_DEPLOYMENT")
+    if not deployment:
+        return None
+    sub = (mime_type or "audio/ogg").split("/")[-1].split(";")[0].strip().lower()
+    ext = _VOICE_EXT_MAP.get(sub, "ogg")
+    with tracer.start_as_current_span("voice.transcribe") as span:
+        span.set_attribute("audio.size_bytes", len(audio_bytes))
+        span.set_attribute("audio.mime_type", mime_type)
+        try:
+            _, openai_client = _foundry()
+            result = openai_client.audio.transcriptions.create(
+                model=deployment,
+                file=(f"voice.{ext}", audio_bytes, mime_type),
+            )
+            text = (result.text or "").strip()
+            span.set_attribute("transcript.length", len(text))
+            span.set_attribute("voice.status", "ok")
+            return text or None
+        except Exception:
+            log.exception("voice transcription failed size=%d", len(audio_bytes))
+            span.set_attribute("voice.status", "error")
+            return None
+
+
 # --- dig: deep-research front door (Mode B) ---------------------------------
 # `/dig <question>` opens a labelled 'dig' issue in the mindVault repo. A workflow
 # there (dig-assign.yml) assigns the Copilot coding agent, which runs the research
@@ -1023,9 +1098,30 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         log.warning("webhook rejected: unauthorized chat_id=%s", chat_id)
         return func.HttpResponse("ok", status_code=200)  # silent drop
 
-    # Voice / audio notes are always captures → memex (transcribe + draft).
+    # Voice / audio notes — transcribe in-process, forward to memex as text.
     if message.get("voice") or message.get("audio"):
-        _forward_to_memex(update)
+        media = message.get("voice") or message.get("audio") or {}
+        file_id: str | None = media.get("file_id")
+        mime_type: str = media.get("mime_type") or "audio/ogg"
+        transcript: str | None = None
+        if file_id:
+            try:
+                audio_bytes = _download_telegram_file(file_id)
+                transcript = _transcribe_voice(audio_bytes, mime_type)
+            except Exception:
+                log.exception(
+                    "voice download failed file_id_len=%d", len(file_id)
+                )
+        if transcript:
+            # Inject the transcript as message text so memex treats it as a
+            # plain-text capture. Keep the `voice` / `audio` field so memex
+            # can archive the original.  Hard Rule 1: never log the text.
+            fwd_update = {**update, "message": {**message, "text": transcript}}
+            _forward_to_memex(fwd_update)
+            _telegram_send(chat_id, f"\U0001f3a4 {transcript}")
+        else:
+            # Transcription unavailable or failed — forward raw update as before.
+            _forward_to_memex(update)
         return func.HttpResponse("ok", status_code=200)
 
     if not user_text:
