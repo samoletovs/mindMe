@@ -70,11 +70,15 @@ possible"*). **The command sets the lifecycle; the LLM still shapes the content.
 |---|---|---|---|
 | `/note` | reference | mindVault `notes/` | stored knowledge, retrieved as context |
 | `/idea` | someday/maybe | mindVault `ideas/`, `status: open` | stored **and resurfaced** |
-| `/task` | next action / project | mindVault **GitHub issue** (label `task`) | actionable, subtasks, reminders |
+| `/task` | next action / project | mindVault `tasks/` ~~GitHub issue~~ | actionable, subtasks; presence = open |
+
+> **Superseded 2026-08-04 (D4.1 only)** — `/task` writes markdown to `tasks/`, not a GitHub
+> issue. See [mindVault DR-003](https://github.com/samoletovs/mindVault/blob/main/decisions/DR-003-tasks-as-markdown.md).
+> The rest of this ADR stands.
 
 Open loops are delivered to the briefing by a memex `/state?vault=…` endpoint
-(read-only over the vault repo — ideas from the `ideas/` folder, tasks from
-`task`-labelled issues) that mindMe fetches via `MEMEX_STATE_URL`; unset →
+(read-only over the vault repo — ideas from the `ideas/` folder, tasks from the
+`tasks/` folder) that mindMe fetches via `MEMEX_STATE_URL`; unset →
 resurfacing silently disabled. Never reads `.me` (D5).
 
 - Keep the `n:` / `note:` / `idea:` prefixes (muscle memory / speed), and keep
@@ -84,8 +88,13 @@ resurfacing silently disabled. Never reads `.me` (D5).
 
 ### D4 — Fork resolutions
 
-1. **Tasks → GitHub issues** in mindVault (reuses the `/dig` machinery; issues
-   give subtask checklists + reminders). Personal vault only.
+1. ~~**Tasks → GitHub issues** in mindVault (reuses the `/dig` machinery; issues
+   give subtask checklists + reminders). Personal vault only.~~ **Superseded
+   2026-08-04 by [mindVault DR-003](https://github.com/samoletovs/mindVault/blob/main/decisions/DR-003-tasks-as-markdown.md):**
+   tasks are markdown in `tasks/`. Issues were invisible from the vault, accumulated
+   near-duplicates, and their open/closed lifecycle silently failed (the reapers'
+   `GITHUB_TOKEN` lacked `issues: write`). Issues remain for **agent work orders**
+   (`dig`, `dispatch`, `promote`, newsletters), where the issue *is* the trigger.
 2. **Idea resurfacing → morning briefing *and* weekly review** (GTD "reflect":
    surface N oldest un-reviewed open ideas).
 3. **Retrieval → deterministic first** (newest-file / frontmatter queries via
@@ -120,7 +129,7 @@ Conversational retrieval and every derived index cover **mindVault only, never
 | Phase | Work | Touches | Deploy/Azure? |
 |---|---|---|---|
 | **P1** | `/note` + `/idea` capture verbs; `idea` gets `status: open` | memex, mindMe | no (code + tests) |
-| **P1b** | `/task` → labelled GitHub issue with LLM-expanded subtasks | memex | no (code) |
+| **P1b** | `/task` → markdown task in `tasks/` with LLM-expanded subtasks (was: labelled GitHub issue — DR-003) | memex | no (code) |
 | **P2** | State projection (ideas/tasks/deadlines), rebuildable | memex/mindMe | later |
 | **P3** | Resurface open ideas/tasks in briefing + weekly review | mindMe | deploy |
 | **P4** | Conversational retrieval tools `get_vault_recent` / `get_vault_read`, mindVault-scoped, **deterministic** (embeddings deferred) | mindMe + Foundry | deploy + Azure |
