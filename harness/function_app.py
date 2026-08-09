@@ -56,6 +56,7 @@ from urllib.parse import quote
 import azure.functions as func
 import httpx
 from azure.ai.projects import AIProjectClient
+from azure.core.exceptions import ResourceExistsError
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
 
@@ -125,6 +126,12 @@ def _http_client() -> httpx.Client:
 # --- Telegram helpers -------------------------------------------------------
 
 TELEGRAM_API = "https://api.telegram.org"
+_ONBOARDING_MARKER_BLOB = "system/mindme/onboarding-v1"
+_ONBOARDING_TUTORIAL = (
+    "Welcome to mindMe — here is a quick tour.",
+    "Capture with /note, /idea, /task, or /diary. Links and voice notes are captured automatically.",
+    "Use /summary for today, /status for your vault, /review for a weekly reset, or /dig <question> for research. Send anything else to chat; /help is always available.",
+)
 
 
 def _home_location() -> str:
@@ -162,6 +169,20 @@ def _is_allowed_chat(chat_id: int | None) -> bool:
     try:
         return int(allowed_raw) == chat_id
     except ValueError:
+        return False
+
+
+def _claim_onboarding() -> bool:
+    """Return True once, using a marker in the private personal-os container."""
+    try:
+        _os_container_client().get_blob_client(_ONBOARDING_MARKER_BLOB).upload_blob(
+            b"", overwrite=False
+        )
+        return True
+    except ResourceExistsError:
+        return False
+    except Exception as exc:
+        log.warning("onboarding claim failed error=%s", type(exc).__name__)
         return False
 
 
@@ -1098,6 +1119,10 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         log.warning("webhook rejected: unauthorized chat_id=%s", chat_id)
         return func.HttpResponse("ok", status_code=200)  # silent drop
 
+    if _claim_onboarding():
+        for tutorial_message in _ONBOARDING_TUTORIAL:
+            _telegram_send(chat_id, tutorial_message)
+
     # Voice / audio notes — transcribe in-process, forward to memex as text.
     if message.get("voice") or message.get("audio"):
         media = message.get("voice") or message.get("audio") or {}
@@ -1160,6 +1185,8 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
     try:
         if user_text == "/ping":
             reply = "pong"
+        elif user_text == "/start":
+            reply = "You're all set. Send a note, task, idea, or message whenever you like."
         elif user_text == "/status":
             reply = _status_line()
         elif user_text == "/review":

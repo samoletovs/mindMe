@@ -96,6 +96,37 @@ def _webhook_payload(text: str, chat_id: int = 7) -> dict:
     return {"message": {"chat": {"id": chat_id}, "text": text}}
 
 
+def test_first_interaction_sends_onboarding_tutorial(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "sec")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setattr(fa, "_claim_onboarding", lambda: True)
+
+    sent: list[str] = []
+    monkeypatch.setattr(fa, "_telegram_send", lambda _chat_id, text: sent.append(text))
+
+    resp = fa.telegram_webhook(DummyRequest(_webhook_payload("/start"), "sec"))
+
+    assert resp.status_code == 200
+    assert sent == [
+        *fa._ONBOARDING_TUTORIAL,
+        "You're all set. Send a note, task, idea, or message whenever you like.",
+    ]
+
+
+def test_later_interaction_skips_onboarding_tutorial(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "sec")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setattr(fa, "_claim_onboarding", lambda: False)
+
+    sent: list[str] = []
+    monkeypatch.setattr(fa, "_telegram_send", lambda _chat_id, text: sent.append(text))
+
+    resp = fa.telegram_webhook(DummyRequest(_webhook_payload("/ping"), "sec"))
+
+    assert resp.status_code == 200
+    assert sent == ["pong"]
+
+
 def test_help_includes_summary_command(monkeypatch):
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "sec")
     monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
@@ -310,4 +341,3 @@ def test_download_telegram_file_calls_getfile_then_download(monkeypatch):
     assert result == b"BYTES"
     assert any("getFile" in c for c in calls)
     assert any("voice/x.ogg" in c for c in calls)
-
