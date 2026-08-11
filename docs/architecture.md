@@ -83,6 +83,20 @@ The cleanest evolution is probably one of:
 
 Pick when motivated; doesn't affect the runtime architecture.
 
+### Briefing section preferences
+
+`/briefing` in Telegram (owner chat only) picks which Personal OS slices reach
+the morning briefing: `focus`, `goals`, `week`, `journal`, `areas`, `vault`,
+`loops`, `weather`. `/briefing all` (or `reset`) restores everything, which is
+the default when no preference has been saved.
+
+The selection is stored as `system/mindme/briefing-prefs.json` inside the same
+private `personal-os/` container — section names only, no personal content, so
+the exposure boundary is unchanged. `get_briefing_context` trims its snapshot to
+the enabled sections and echoes them back in `sections`; the 07:30 timer builds
+its prompt (and the local fallback briefing its paragraphs) from the same list.
+An unreadable or missing preferences blob degrades to "all sections on".
+
 ## 4. Security model
 
 - **Container is private.** No public access. No anonymous read.

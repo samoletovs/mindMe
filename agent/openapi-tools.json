@@ -15,7 +15,7 @@
       "post": {
         "operationId": "get_briefing_context",
         "summary": "Get today's sanitized briefing context built from the user's Personal OS.",
-        "description": "Returns a tiered context snapshot decrypted on the server side. Use tier=core for morning briefing, tier=extended for ranked summaries, tier=deep for compressed fallback excerpts.",
+        "description": "Returns a tiered context snapshot decrypted on the server side. Use tier=core for morning briefing, tier=extended for ranked summaries, tier=deep for compressed fallback excerpts. The snapshot only contains the sections the owner enabled with the /briefing command; the enabled names are echoed in `sections`.",
         "parameters": [
           {
             "name": "tier",

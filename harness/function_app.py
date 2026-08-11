@@ -832,15 +832,136 @@ def _fetch_open_loops() -> dict:
     }
 
 
+# --- Briefing customization (section preferences) --------------------------
+#
+# The owner chooses which slices of the Personal OS make it into the morning
+# briefing. Preferences are a tiny JSON document in the same private
+# `personal-os` container (section names only — no personal content, so Hard
+# Rule 4 boundary is unchanged). Missing/invalid preferences fall back to "all
+# sections on", which is exactly the pre-customization behaviour.
+
+_BRIEFING_PREFS_BLOB = "system/mindme/briefing-prefs.json"
+
+# name -> (help text, snapshot keys the section owns)
+_BRIEFING_SECTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "focus": ("today's focus from _dashboard.md", ("today_focus",)),
+    "goals": ("top goals from _dashboard.md", ("top_goals",)),
+    "week": ("this week's dashboard bullets", ("this_week",)),
+    "journal": ("yesterday's journal (mood, energy, open loops)", ("yesterday",)),
+    "areas": ("life areas", ("areas",)),
+    "vault": ("inbox backlog, deadlines, weekly-review age", ("vault_state",)),
+    "loops": ("open ideas and tasks", ("open_loops",)),
+    "weather": ("local weather", ()),
+}
+BRIEFING_SECTION_NAMES: tuple[str, ...] = tuple(_BRIEFING_SECTIONS)
+
+
+def _normalize_briefing_sections(sections: object) -> list[str]:
+    """Keep known section names, de-duplicated and in canonical order."""
+    if not isinstance(sections, (list, tuple, set)):
+        return list(BRIEFING_SECTION_NAMES)
+    chosen = {
+        item.strip().lower()
+        for item in sections
+        if isinstance(item, str) and item.strip().lower() in _BRIEFING_SECTIONS
+    }
+    return [name for name in BRIEFING_SECTION_NAMES if name in chosen]
+
+
+def _briefing_prefs() -> list[str]:
+    """Enabled briefing sections. Defaults to every section on any failure."""
+    raw = _read_os_text(_BRIEFING_PREFS_BLOB)
+    if not raw:
+        return list(BRIEFING_SECTION_NAMES)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        log.warning("briefing prefs unreadable — falling back to all sections")
+        return list(BRIEFING_SECTION_NAMES)
+    if not isinstance(data, dict):
+        return list(BRIEFING_SECTION_NAMES)
+    return _normalize_briefing_sections(data.get("sections"))
+
+
+def _save_briefing_prefs(sections: list[str]) -> bool:
+    """Persist the enabled sections. Returns False if the write failed.
+
+    Hard Rule 1/9: only the section count is logged — never Personal OS content.
+    """
+    payload = json.dumps({"sections": _normalize_briefing_sections(sections)})
+    try:
+        _os_container_client().get_blob_client(_BRIEFING_PREFS_BLOB).upload_blob(
+            payload.encode("utf-8"), overwrite=True
+        )
+    except Exception as exc:
+        log.warning("briefing prefs save failed error=%s", type(exc).__name__)
+        return False
+    return True
+
+
+def _apply_briefing_prefs(snapshot: dict, sections: list[str]) -> dict:
+    """Drop the snapshot keys owned by disabled sections."""
+    enabled = set(sections)
+    filtered = dict(snapshot)
+    for name, (_help, keys) in _BRIEFING_SECTIONS.items():
+        if name in enabled:
+            continue
+        for key in keys:
+            filtered.pop(key, None)
+    filtered["sections"] = list(sections)
+    return filtered
+
+
+def _briefing_settings_text(sections: list[str]) -> str:
+    """/briefing — current selection plus usage help."""
+    enabled = set(sections)
+    lines = [
+        f"{'✅' if name in enabled else '⬜'} {name} — {help_text}"
+        for name, (help_text, _keys) in _BRIEFING_SECTIONS.items()
+    ]
+    return (
+        "🌅 Morning briefing sections\n"
+        + "\n".join(lines)
+        + "\n\nUse /briefing <sections> to choose (e.g. /briefing focus goals weather), "
+        "/briefing all for everything, or /briefing reset to restore the default."
+    )
+
+
+def _handle_briefing_command(argument: str) -> str:
+    """Handle `/briefing [all|reset|<sections>]` and return the reply text."""
+    arg = (argument or "").strip()
+    if not arg:
+        return _briefing_settings_text(_briefing_prefs())
+
+    requested = [part for part in re.split(r"[\s,]+", arg.lower()) if part]
+    if requested in (["all"], ["reset"]):
+        sections = list(BRIEFING_SECTION_NAMES)
+    else:
+        unknown = [name for name in requested if name not in _BRIEFING_SECTIONS]
+        if unknown:
+            return (
+                "unknown section: "
+                + ", ".join(sorted(set(unknown)))
+                + "\nvalid sections: "
+                + ", ".join(BRIEFING_SECTION_NAMES)
+            )
+        sections = _normalize_briefing_sections(requested)
+
+    if not _save_briefing_prefs(sections):
+        return "couldn't save your briefing preferences — try again later."
+    return "🌅 Briefing updated.\n" + _briefing_settings_text(sections)
+
+
 def _load_briefing() -> dict:
     """Public entry used by the get_briefing_context tool. Builds today's
-    snapshot in-process from the personal-os blob.
+    snapshot in-process from the personal-os blob, then trims it to the
+    sections the owner selected with /briefing.
 
     Note: this function was previously referenced by tool_briefing_context but
     never defined, which made the tool always return 503 (briefing not
     available). Defining it here restores the briefing context.
     """
-    return _build_briefing_snapshot()
+    return _apply_briefing_prefs(_build_briefing_snapshot(), _briefing_prefs())
 
 
 def _status_line() -> str:
@@ -1041,7 +1162,7 @@ def _weather_summary(location: str) -> dict:
 def _compose_local_briefing() -> str:
     """Fallback morning briefing assembled locally from the Personal OS."""
     snapshot = _load_briefing()
-    weather = _weather_summary(_home_location())
+    sections = set(snapshot.get("sections") or BRIEFING_SECTION_NAMES)
 
     focus_parts: list[str] = []
     today_focus = _clip(snapshot.get("today_focus") or "", 180)
@@ -1083,11 +1204,22 @@ def _compose_local_briefing() -> str:
         )
     paragraph_2 = " ".join(needs_attention).strip() or "Vault looks calm right now."
 
-    paragraph_3 = (
-        f"Weather in {weather.get('location')}: {weather.get('temp_c')}°C "
-        f"(feels {weather.get('feels_like_c')}°C), {weather.get('description')}."
-    )
-    return "\n\n".join([paragraph_1, paragraph_2, paragraph_3])
+    paragraphs: list[str] = []
+    if sections & {"focus", "goals", "week"}:
+        paragraphs.append(paragraph_1)
+    if sections & {"vault", "journal"}:
+        paragraphs.append(paragraph_2)
+    if "weather" in sections:
+        weather = _weather_summary(_home_location())
+        paragraphs.append(
+            f"Weather in {weather.get('location')}: {weather.get('temp_c')}°C "
+            f"(feels {weather.get('feels_like_c')}°C), {weather.get('description')}."
+        )
+    if not paragraphs:
+        paragraphs.append(
+            "Every briefing section is switched off — use /briefing to turn some back on."
+        )
+    return "\n\n".join(paragraphs)
 
 
 # --- Function: telegram_webhook --------------------------------------------
@@ -1193,12 +1325,15 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
             reply = _review_prompt()
         elif user_text == "/summary":
             reply = _daily_summary()
+        elif user_text == "/briefing" or user_text.startswith("/briefing "):
+            reply = _handle_briefing_command(user_text[len("/briefing"):])
         elif user_text == "/help":
             reply = (
                 "/note <text> — save a note · /idea <text> — save an idea to revisit · "
                 "/task <what needs doing> — create a task · /diary <how your day went> — daily journal · "
                 "/dig <question> — deep research · "
-                "/summary · /status · /review · /ping · /help\n"
+                "/summary · /status · /review · /briefing · /ping · /help\n"
+                "/briefing picks which Personal OS sections land in your morning briefing.\n"
                 "Links and voice notes are captured automatically. Start a voice note with “diary” for a journal entry. "
                 "save:/n: still work, and mindMe may suggest a more specific capture verb for next time. Anything else → mindMe."
             )
@@ -1217,6 +1352,65 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse("ok", status_code=200)
 
 
+def _briefing_seed(sections: list[str]) -> str:
+    """Prompt for the hosted companion, limited to the selected sections."""
+    enabled = set(sections)
+    parts: list[str] = []
+    if enabled & {"focus", "goals", "week"}:
+        wanted = [
+            label
+            for name, label in (
+                ("focus", "today's focus"),
+                ("goals", "top goals"),
+                ("week", "this week's bullets"),
+            )
+            if name in enabled
+        ]
+        parts.append(" and ".join(wanted))
+    attention: list[str] = []
+    if "vault" in enabled:
+        attention.append(
+            "read vault_state for the inbox backlog (count + oldest age in days), the "
+            "nearest project deadline, and whether the weekly review is overdue"
+        )
+    if "loops" in enabled:
+        attention.append(
+            "read open_loops for the oldest open idea to revisit and any open tasks"
+        )
+    if "journal" in enabled:
+        attention.append("read yesterday for mood, energy, and unfinished loops")
+    if "areas" in enabled:
+        attention.append("mention a life area only if it clearly needs a nudge")
+    if attention:
+        parts.append(
+            "what needs attention — "
+            + "; ".join(attention)
+            + "; mention these only when they actually need action"
+        )
+    if "weather" in enabled:
+        parts.append("the weather")
+
+    if not parts:
+        return (
+            "Send a short, warm good-morning note. My briefing sections are all "
+            "switched off, so do not call any tools and do not invent details."
+        )
+
+    numbered = "; ".join(f"({i}) {part}" for i, part in enumerate(parts, start=1))
+    tools = ["get_briefing_context for today's data"]
+    if "weather" in enabled:
+        tools.append("get_weather for the weather")
+    return (
+        "Compose my morning briefing. Call "
+        + " and ".join(tools)
+        + f". Keep it to {len(parts)} short paragraph"
+        + ("s" if len(parts) != 1 else "")
+        + f": {numbered}. "
+        + (f"Use {_home_location()} as the default location. " if "weather" in enabled else "")
+        + "Be warm and concise."
+    )
+
+
 # --- Function: morning_briefing_timer --------------------------------------
 
 @app.function_name(name="morning_briefing_timer")
@@ -1231,17 +1425,7 @@ def morning_briefing_timer(timer: func.TimerRequest) -> None:
     chat_id = int(os.environ["TELEGRAM_ALLOWED_CHAT_ID"])
 
     try:
-        seed = (
-            "Compose my morning briefing. Call get_briefing_context for today's "
-            "data and get_weather for the weather. Keep it to 3 short paragraphs: "
-            "(1) today's focus and top goals; (2) what needs attention — read "
-            "vault_state for the inbox backlog (count + oldest age in days), the "
-            "nearest project deadline, and whether the weekly review is overdue, "
-            "and open_loops for the oldest open idea to revisit and any open tasks; "
-            "mention these only when they actually need action; (3) the "
-            f"weather. Use {_home_location()} as the default location. Be warm and concise."
-        )
-        reply = _ask_companion(seed)
+        reply = _ask_companion(_briefing_seed(_briefing_prefs()))
         _telegram_send(chat_id, reply)
         log.info(
             "briefing sent chat=%s out_len=%d duration=%.2fs",

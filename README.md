@@ -15,6 +15,7 @@ A personal AI agent that operates on my [Personal OS (mindVault)](https://github
 | **Morning briefing** | Timer at 07:30 daily | Telegram DM |
 | **Quick capture** | I text the bot | Telegram → `inbox/inbox.md` in Personal OS |
 | **Status / help** | `/status`, `/help` | Telegram slash commands |
+| **Briefing customization** | `/briefing [sections]` | Telegram slash command → `system/mindme/briefing-prefs.json` in `personal-os/` |
 
 Anything beyond is v2+. See [Out of scope](#out-of-scope-v1).
 

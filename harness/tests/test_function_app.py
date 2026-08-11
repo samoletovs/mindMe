@@ -341,3 +341,157 @@ def test_download_telegram_file_calls_getfile_then_download(monkeypatch):
     assert result == b"BYTES"
     assert any("getFile" in c for c in calls)
     assert any("voice/x.ogg" in c for c in calls)
+
+
+# ---------------------------------------------------------------------------
+# Morning briefing customization (/briefing)
+# ---------------------------------------------------------------------------
+
+def test_briefing_prefs_default_to_every_section(monkeypatch):
+    monkeypatch.setattr(fa, "_read_os_text", lambda _path: "")
+
+    assert fa._briefing_prefs() == list(fa.BRIEFING_SECTION_NAMES)
+
+
+def test_briefing_prefs_keep_known_sections_in_canonical_order(monkeypatch):
+    monkeypatch.setattr(
+        fa,
+        "_read_os_text",
+        lambda _path: '{"sections": ["weather", "bogus", "focus", "focus"]}',
+    )
+
+    assert fa._briefing_prefs() == ["focus", "weather"]
+
+
+def test_briefing_prefs_fall_back_to_all_sections_on_invalid_json(monkeypatch):
+    monkeypatch.setattr(fa, "_read_os_text", lambda _path: "{not json")
+
+    assert fa._briefing_prefs() == list(fa.BRIEFING_SECTION_NAMES)
+
+
+def test_load_briefing_drops_disabled_sections(monkeypatch):
+    monkeypatch.setattr(
+        fa,
+        "_build_briefing_snapshot",
+        lambda: {
+            "date": "2026-08-11",
+            "today_focus": "ship it",
+            "top_goals": ["a"],
+            "this_week": ["b"],
+            "yesterday": {"open_loops_count": 1},
+            "areas": ["health"],
+            "vault_state": {"inbox": {"count": 2}},
+            "open_loops": {"ideas": {}, "tasks": {}},
+        },
+    )
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["focus", "vault"])
+
+    data = fa._load_briefing()
+
+    assert data["sections"] == ["focus", "vault"]
+    assert data["today_focus"] == "ship it"
+    assert data["vault_state"] == {"inbox": {"count": 2}}
+    assert data["date"] == "2026-08-11"
+    for dropped in ("top_goals", "this_week", "yesterday", "areas", "open_loops"):
+        assert dropped not in data
+
+
+def test_briefing_command_without_argument_lists_sections(monkeypatch):
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["focus", "weather"])
+
+    reply = fa._handle_briefing_command("")
+
+    assert "✅ focus" in reply
+    assert "✅ weather" in reply
+    assert "⬜ goals" in reply
+
+
+def test_briefing_command_saves_selected_sections(monkeypatch):
+    saved: list[list[str]] = []
+    monkeypatch.setattr(fa, "_save_briefing_prefs", lambda sections: saved.append(sections) or True)
+
+    reply = fa._handle_briefing_command(" weather, focus ")
+
+    assert saved == [["focus", "weather"]]
+    assert reply.startswith("🌅 Briefing updated.")
+
+
+def test_briefing_command_reset_restores_all_sections(monkeypatch):
+    saved: list[list[str]] = []
+    monkeypatch.setattr(fa, "_save_briefing_prefs", lambda sections: saved.append(sections) or True)
+
+    fa._handle_briefing_command("reset")
+
+    assert saved == [list(fa.BRIEFING_SECTION_NAMES)]
+
+
+def test_briefing_command_rejects_unknown_section(monkeypatch):
+    monkeypatch.setattr(
+        fa,
+        "_save_briefing_prefs",
+        lambda _sections: (_ for _ in ()).throw(AssertionError("must not save")),
+    )
+
+    reply = fa._handle_briefing_command("focus nonsense")
+
+    assert "unknown section: nonsense" in reply
+
+
+def test_briefing_command_reports_save_failure(monkeypatch):
+    monkeypatch.setattr(fa, "_save_briefing_prefs", lambda _sections: False)
+
+    assert fa._handle_briefing_command("focus") == (
+        "couldn't save your briefing preferences — try again later."
+    )
+
+
+def test_webhook_routes_briefing_command(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "sec")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setattr(fa, "_handle_briefing_command", lambda arg: f"sections:{arg.strip()}")
+
+    sent: list[str] = []
+    monkeypatch.setattr(fa, "_telegram_send", lambda _chat_id, text: sent.append(text))
+
+    resp = fa.telegram_webhook(DummyRequest(_webhook_payload("/briefing focus"), "sec"))
+
+    assert resp.status_code == 200
+    assert sent == ["sections:focus"]
+
+
+def test_local_briefing_skips_weather_when_disabled(monkeypatch):
+    monkeypatch.setattr(
+        fa,
+        "_load_briefing",
+        lambda: {
+            "date": "2026-08-11",
+            "today_focus": "ship it",
+            "vault_state": {"inbox": {"count": 1, "oldest_age_days": 2}},
+            "sections": ["focus", "vault"],
+        },
+    )
+    monkeypatch.setattr(
+        fa,
+        "_weather_summary",
+        lambda _location: (_ for _ in ()).throw(AssertionError("weather must not be fetched")),
+    )
+
+    text = fa._compose_local_briefing()
+
+    assert "ship it" in text
+    assert "Weather" not in text
+
+
+def test_briefing_seed_mentions_only_enabled_sections():
+    seed = fa._briefing_seed(["focus", "weather"])
+
+    assert "get_weather" in seed
+    assert "2 short paragraphs" in seed
+    assert "vault_state" not in seed
+    assert "open_loops" not in seed
+
+
+def test_briefing_seed_without_sections_asks_for_a_plain_note():
+    seed = fa._briefing_seed([])
+
+    assert "do not call any tools" in seed
