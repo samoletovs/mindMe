@@ -923,12 +923,25 @@ def _briefing_settings_text(sections: list[str]) -> str:
         "🌅 Morning briefing sections\n"
         + "\n".join(lines)
         + "\n\nUse /briefing <sections> to choose (e.g. /briefing focus goals weather), "
-        "/briefing all for everything, or /briefing reset to restore the default."
+        "/briefing -<section> +<section> to exclude/include one at a time "
+        "(e.g. /briefing -weather), /briefing all for everything, or "
+        "/briefing reset to restore the default."
     )
 
 
 def _handle_briefing_command(argument: str) -> str:
-    """Handle `/briefing [all|reset|<sections>]` and return the reply text."""
+    """Handle `/briefing [all|reset|<sections>|+/-<sections>]` and return the
+    reply text.
+
+    Plain section names on their own (e.g. `focus goals weather`) replace the
+    whole selection. As soon as any token is prefixed with `+` or `-` (e.g.
+    `-weather +journal`), the whole command switches to incremental mode: it
+    adjusts today's saved selection instead of replacing it, so the owner can
+    exclude or include one topic without retyping the rest. In that mode, any
+    plain (unprefixed) token is treated as an implicit `+<section>` (added to
+    the selection), matching the mixed example `focus -weather` == `+focus
+    -weather`.
+    """
     arg = (argument or "").strip()
     if not arg:
         return _briefing_settings_text(_briefing_prefs())
@@ -936,6 +949,23 @@ def _handle_briefing_command(argument: str) -> str:
     requested = [part for part in re.split(r"[\s,]+", arg.lower()) if part]
     if requested in (["all"], ["reset"]):
         sections = list(BRIEFING_SECTION_NAMES)
+    elif any(part[0] in "+-" for part in requested):
+        names = [part[1:] if part[0] in "+-" else part for part in requested]
+        unknown = [name for name in names if name not in _BRIEFING_SECTIONS]
+        if unknown:
+            return (
+                "unknown section: "
+                + ", ".join(sorted(set(unknown)))
+                + "\nvalid sections: "
+                + ", ".join(BRIEFING_SECTION_NAMES)
+            )
+        current = set(_briefing_prefs())
+        for part, name in zip(requested, names):
+            if part[0] == "-":
+                current.discard(name)
+            else:
+                current.add(name)
+        sections = _normalize_briefing_sections(current)
     else:
         unknown = [name for name in requested if name not in _BRIEFING_SECTIONS]
         if unknown:

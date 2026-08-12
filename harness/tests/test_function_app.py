@@ -437,6 +437,58 @@ def test_briefing_command_rejects_unknown_section(monkeypatch):
     assert "unknown section: nonsense" in reply
 
 
+def test_briefing_command_excludes_one_section_from_current_selection(monkeypatch):
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: list(fa.BRIEFING_SECTION_NAMES))
+    saved: list[list[str]] = []
+    monkeypatch.setattr(fa, "_save_briefing_prefs", lambda sections: saved.append(sections) or True)
+
+    fa._handle_briefing_command("-weather")
+
+    assert saved == [[name for name in fa.BRIEFING_SECTION_NAMES if name != "weather"]]
+
+
+def test_briefing_command_includes_one_section_back(monkeypatch):
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["focus"])
+    saved: list[list[str]] = []
+    monkeypatch.setattr(fa, "_save_briefing_prefs", lambda sections: saved.append(sections) or True)
+
+    fa._handle_briefing_command("+weather")
+
+    assert saved == [["focus", "weather"]]
+
+
+def test_briefing_command_mixes_include_and_exclude_tokens(monkeypatch):
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["focus", "goals"])
+    saved: list[list[str]] = []
+    monkeypatch.setattr(fa, "_save_briefing_prefs", lambda sections: saved.append(sections) or True)
+
+    fa._handle_briefing_command("-goals +journal")
+
+    assert saved == [["focus", "journal"]]
+
+
+def test_briefing_command_treats_bare_token_as_implicit_add_in_incremental_mode(monkeypatch):
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["goals"])
+    saved: list[list[str]] = []
+    monkeypatch.setattr(fa, "_save_briefing_prefs", lambda sections: saved.append(sections) or True)
+
+    fa._handle_briefing_command("focus -weather")
+
+    assert saved == [["focus", "goals"]]
+
+
+def test_briefing_command_incremental_rejects_unknown_section(monkeypatch):
+    monkeypatch.setattr(
+        fa,
+        "_save_briefing_prefs",
+        lambda _sections: (_ for _ in ()).throw(AssertionError("must not save")),
+    )
+
+    reply = fa._handle_briefing_command("-nonsense")
+
+    assert "unknown section: nonsense" in reply
+
+
 def test_briefing_command_reports_save_failure(monkeypatch):
     monkeypatch.setattr(fa, "_save_briefing_prefs", lambda _sections: False)
 

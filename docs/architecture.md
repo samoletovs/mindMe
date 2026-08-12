@@ -88,7 +88,10 @@ Pick when motivated; doesn't affect the runtime architecture.
 `/briefing` in Telegram (owner chat only) picks which Personal OS slices reach
 the morning briefing: `focus`, `goals`, `week`, `journal`, `areas`, `vault`,
 `loops`, `weather`. `/briefing all` (or `reset`) restores everything, which is
-the default when no preference has been saved.
+the default when no preference has been saved. `/briefing -<section>` /
+`+<section>` (e.g. `/briefing -weather`) toggles one section on or off without
+retyping the whole selection; plain section names (no `+`/`-`) still replace
+the entire selection at once.
 
 The selection is stored as `system/mindme/briefing-prefs.json` inside the same
 private `personal-os/` container — section names only, no personal content, so
