@@ -1,0 +1,10 @@
+# Test-only deps for the harness unit tests. The tests import the real
+# harness modules, so install the runtime deps too:
+#
+#   python -m pip install -r harness/requirements.txt -r harness/requirements-dev.txt
+#   python -m pytest
+#
+# Never deployed — `func azure functionapp publish` only reads requirements.txt.
+
+pytest==9.1.1
+pytest-asyncio==1.4.0

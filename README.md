@@ -80,8 +80,10 @@ mindMe/
 ├── harness/                  # Azure Functions (Telegram receiver + timers)
 │   ├── README.md
 │   ├── requirements.txt
+│   ├── requirements-dev.txt  # pytest deps for the unit tests
 │   ├── host.json
-│   └── function_app.py
+│   ├── function_app.py
+│   └── tests/                # `python -m pytest` (see harness/README.md)
 ├── infrastructure/           # Bicep deployment definitions
 │   ├── main.bicep
 │   └── main.bicepparam

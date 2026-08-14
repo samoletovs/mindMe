@@ -24,6 +24,21 @@ cp local.settings.json.example local.settings.json
 func start
 ```
 
+## Tests
+
+Unit tests live in [`tests/`](tests) and mock every external dependency
+(GitHub REST, Telegram, Foundry, Storage) — they need no secrets and touch no
+personal data. They import the harness modules directly, so the runtime deps
+have to be installed alongside the test deps:
+
+```powershell
+python -m pip install -r harness/requirements.txt -r harness/requirements-dev.txt
+python -m pytest          # config in pytest.ini at the repo root
+```
+
+CI runs the same command on every push and pull request
+(`.github/workflows/tests.yml`).
+
 ## Deploy
 
 After `az deployment group create -g foundrylab-rg -f infrastructure/main.bicep`:
