@@ -369,15 +369,27 @@ def _create_dig_issue(question: str) -> tuple[str | None, str]:
     repo = os.environ.get("DIG_REPO", DIG_REPO_DEFAULT)
     title = "[dig] " + (question[:DIG_TITLE_MAX_LENGTH].strip() or "research request")
     body = (
-        "Deep-research request fired from Telegram (Mode B).\n\n"
+        "Deep-research request fired from Telegram (Mode B). A dig report is a DECISION AID, not a summary.\n\n"
         f"## Question\n{question}\n\n"
-        "## Execution method (lead research agent — orchestrator/worker)\n"
-        "1. PLAN: restate the question; default to standard effort (3–4 subagents); decompose into non-overlapping sub-questions.\n"
-        "2. RESEARCH each sub-question via web search/fetch + relevant MCP tools; 4–8 sources each; start broad then narrow.\n"
-        "3. Capture a SOURCE URL for every key claim; prefer primary/official sources.\n"
-        "4. SYNTHESIZE: merge, dedupe, resolve contradictions explicitly.\n"
-        f"5. SAVE a markdown report to `{vault_layout.folder(vault_layout.MINDVAULT, 'areas')}/agents/research/YYYY-MM-DD-<slug>.md` with TL;DR, themed sections with inline citations, a 'So what (for me)' section, and a 'confidence + gaps' note.\n"
-        "GUARDRAILS: markdown only; citations required; no invented sources/numbers; if anything sensitive surfaces, leave a reference-note (system.md §7). Open a PR titled 'dig: <question>'."
+        "## Execution method\n"
+        "**Follow `.github/prompts/dig.prompt.md` in this repo verbatim — it is the single source of truth for the "
+        "dig method.** Read it first, then run it end to end: §0 context pack → §1 scope + language lock → §2 tier + "
+        "domain source-pack → §3 fan out → §4 merge → §5 verify → §6 gap check → §7 self-eval gate → §8 save.\n\n"
+        "Run-specific notes:\n"
+        "- **Write the report in the same language as the Question above**, and research in English *and* the topic's "
+        "native language (§1 language lock). A non-English report gets the same depth as an English one — same sections, "
+        "same tables, same citation density; never a shorter report because the language costs more tokens.\n"
+        "- **Pick the tier from stakes x scope** (§2) — a broad survey earns `deep` even at low stakes. Do not default to `standard`.\n"
+        "- Running headless: don't ask clarifying questions — state assumptions and proceed.\n"
+        f"- Save to `{vault_layout.folder(vault_layout.MINDVAULT, 'areas')}/agents/research/YYYY-MM-DD-<slug>.md`; "
+        "open a PR titled `dig: <short-slug>` and mark it ready for review.\n\n"
+        "If that prompt file is missing, fall back to: scope-lock brief -> tier + domain source-pack -> non-overlapping "
+        "sub-questions (6-8 sources each; >=8 distinct domains; <=1/3 of citations from any one domain; primary/official "
+        "over encyclopedias) -> merge + resolve contradictions -> VERIFY every cited URL opens AND supports its claim -> "
+        "self-eval against the seven /dig-eval dimensions -> save with BLUF, recommendation + pre-mortem, findings "
+        "(tables for chronologies/comparisons), assumptions with falsifiers, 'So what (for me)', and calibrated confidence + gaps.\n"
+        "GUARDRAILS: markdown only; concise + objective (no hype); citations required (primary > SEO); triangulate "
+        "load-bearing claims; no invented sources/numbers; if anything sensitive surfaces, leave a reference-note (system.md §7)."
     )
     headers = {
         "Authorization": f"Bearer {token}",
