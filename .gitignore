@@ -54,3 +54,6 @@ Thumbs.db
 *.enc
 briefing-context.json
 scripts/dev/_oneshot_*.ps1
+
+# Local-only personal-info pattern overrides
+scripts/.leak-patterns.local.txt
