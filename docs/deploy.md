@@ -1,5 +1,32 @@
 # Deploying the Function App
 
+## Verified release: 2026-09-06
+
+- Runtime: `f1cf61b` (`4cbdf14` plus the concurrent-sync freshness regression fix).
+- Foundry companion: `companion:5`, using the `mindme-tools` project connection.
+- Receiver dependency: memex `b63f68e`, deployed first through
+  [CI/CD run 34021238753](https://github.com/samoletovs/memex/actions/runs/34021238753).
+- mindMe [Tests run 34021243722](https://github.com/samoletovs/mindMe/actions/runs/34021243722)
+  passed. Local Python 3.11 validation: **217 mindMe tests, 229 memex tests**.
+- All four tools rejected missing and incorrect keys with HTTP 401. A valid key
+  reached invalid-path validation (HTTP 400), without reading a file.
+- A temporary weather-only agent used the real project connection and returned
+  actual weather fields through the secured tool. The temporary agent was deleted.
+- The deployed companion returned `pong` with tools disabled. An authenticated
+  synthetic `/ping` also exercised the real Telegram delivery path successfully.
+- A synthetic no-op update at memex returned `200 ok`, then `200 duplicate` on
+  replay. It invoked no capture, LLM, queue, GitHub write, or Telegram send.
+- Bicep compiled and both leak audits passed. The existing infrastructure was
+  reused, not redeployed; telemetry safety settings and the tool connection were
+  configured separately. No new paid service or model deployment was introduced.
+
+No personal content was inspected or refreshed. The sync manifest's blob
+metadata was last modified on 2026-07-30; personal capture, a real briefing,
+vault retrieval, and a research job were deliberately not used as smoke tests.
+Those user workflows still need a consented acceptance trial with fresh inputs.
+Freshly created temporary Foundry agents briefly returned 404 during propagation;
+the verification retried that specific condition with a bounded delay.
+
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the
 > Foundry `companion` agent calls back to this app. Do not infer the current
