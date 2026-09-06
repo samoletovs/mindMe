@@ -2,22 +2,30 @@
 
 > *Mind me, so I can mind what matters.*
 
-A personal AI agent that operates on my [Personal OS (mindVault)](https://github.com/samoletovs/mindVault) to reduce daily friction. Reads my dashboard and journal, sends a morning briefing, captures thoughts to my inbox, and stays out of the way the rest of the time.
+A single-user Telegram companion for a [Personal OS (mindVault)](https://github.com/samoletovs/mindVault). It sends briefings, hands captures to memex, reads selected vault material, and starts research requests. Its success criterion is calmer mornings, not more messages.
 
 **Name:** *mindMe* — imperative "mind me" (attend to me, look after me) layered with the camelCase compound "my mind, externalized". A second mind, attentive to one. Renamed from `comes` on 2026-05-11.
 
 ---
 
-## What it does (v1 scope)
+## What it does now
 
 | Capability | Trigger | Channel |
 |---|---|---|
-| **Morning briefing** | Timer at 07:30 daily | Telegram DM |
-| **Quick capture** | I text the bot | Telegram → `inbox/inbox.md` in Personal OS |
-| **Status / help** | `/status`, `/help` | Telegram slash commands |
+| **Morning briefing** | Daily at **07:30 UTC** | Selected dashboard text, previous day's journal summary, vault counts, open ideas/tasks, optional weather |
+| **Quick capture** | `/note`, `/idea`, `/task`, `/diary`, capture prefixes, or a URL | Forwarded to **memex**, which owns storage and review; ordinary text is conversation, not capture |
+| **Voice capture** | Voice/audio message | Forwarded to memex; local transcription requires `AZURE_OPENAI_WHISPER_DEPLOYMENT` |
+| **Vault status / daily summary** | `/status`, `/summary` | Counts, focus, journal summary, and mirror-freshness warnings |
+| **Weekly review** | `/review`; Sunday **18:00 UTC** nudge | A checklist and current counts, not an interactive review or task completion |
 | **Briefing customization** | `/briefing [sections]` | Telegram slash command → `system/mindme/briefing-prefs.json` in `personal-os/` |
+| **Vault questions** | Ordinary conversation | Foundry can list recent research/notes/ideas/wiki files and read one allowed markdown file |
+| **Deep research** | `/dig <question>` | Creates a research issue in mindVault; downstream Copilot workflows produce the report |
+| **Workflow housekeeping** | Every 30 minutes | Dispatches vault reaper workflows when candidate work exists |
 
-Anything beyond is v2+. See [Out of scope](#out-of-scope-v1).
+The companion is currently **single-turn**: it does not remember the previous chat
+message. It has no semantic search, calendar integration, autonomous reminders, or
+complete/do-later task workflow. `/task` captures an action; it does not schedule it.
+Onboarding, `/start`, `/ping`, and `/help` are also available.
 
 ---
 
@@ -37,18 +45,21 @@ Anything beyond is v2+. See [Out of scope](#out-of-scope-v1).
 │  Storage Account                                 │
 │   ├─ personal-os/      ← OS markdown mirror      │
 │   ├─ briefing-context/ ← LEGACY, no longer read  │
-│   └─ Queue (Phase 3)                             │
+│   └─ legacy capture queue (not the active flow)  │
 │  Key Vault   (bot token; legacy encryption key)  │
 │  App Insights                                    │
 │                                                  │
 │  Function App (Python, Flex Consumption)         │
 │   ├─ telegram_webhook        (HTTP)              │
-│   ├─ morning_briefing_timer  (07:30 CRON)        │
-│   ├─ capture_drain           (Queue trigger)     │
+│   ├─ morning_briefing_timer  (07:30 UTC)         │
+│   ├─ weekly_review_timer    (Sun 18:00 UTC)      │
+│   ├─ reaper_poll_timer      (every 30 minutes)   │
+│   ├─ capture forwarding → memex                │
 │   ├─ tool_briefing_context   (HTTP, agent tool)  │
 │   │     reads personal-os/ blobs, builds         │
-│   │     sanitized JSON in-process                │
-│   └─ tool_weather            (HTTP, agent tool)  │
+│   │     selected context JSON in-process         │
+│   ├─ tool_weather            (HTTP, agent tool)  │
+│   └─ vault_recent / vault_read → mindVault      │
 │         │                                        │
 │         ↓ calls                                  │
 │  Foundry project: mindMe                         │
@@ -67,7 +78,10 @@ mirrored to a **private** blob container (`personal-os/`) guarded by
 managed-identity RBAC and Microsoft-managed at-rest encryption. The previous
 application-layer AES-GCM briefing blob is now legacy only. See
 `docs/architecture.md` for the trade-off discussion and the current security
-boundary.
+boundary. Agent tools require a Function key supplied through a Foundry project
+connection; only the health probe and secret-verified Telegram webhook are anonymous.
+The snapshot selects fields; it is **not a general-purpose personal-data sanitizer**.
+Dashboard bullets and area/project titles can reach the companion and Telegram.
 
 ---
 
@@ -109,19 +123,22 @@ Layout borrows patterns from [`agentMode`](https://github.com/samoletovs/agentMo
 
 ## Status
 
-Phase 1 complete (2026-05-11). Phase 2 cloud-native rewrite landed 2026-05-16
-(see [docs/architecture.md](docs/architecture.md) for the trade-off decision
-that drove it). See planning doc in Personal OS:
-`projects/2026-personal-agent-foundation/`.
+The Function App is deployed; see [the deployment record](docs/deploy.md).
+The September 2026 review found that healthy HTTP responses did not establish
+end-to-end usefulness. The private mirror's sync manifest was last modified
+**2026-07-30**, and the queried seven-day telemetry contained no recorded briefing
+sends. That is missing evidence of delivery, not proof that every briefing failed.
 
-| Phase | Status | Deliverable |
-|---|---|---|
-| 1. Foundation | ✅ complete | Repo, Foundry project, Telegram bot, end-to-end smoke test (ping → pong via Foundry) |
-| 2. Morning briefing | 🟡 in progress | Function App reads `personal-os/` blob, builds snapshot, calls agent, sends Telegram. Awaiting Function App deploy + first 07:30 observation. |
-| 3. Quick capture | ⏳ | Capability #2 working end-to-end |
-| 4. Stabilize | ⏳ | Foundry evals, prompt optimizer, foundryLab cross-link |
+Reliability guards now cover authenticated tools, retryable capture failures,
+complete delivery of long Telegram replies, yesterday's journal, explicit
+unavailable states, section-safe fallbacks, and mirror freshness. A mirror two
+calendar days old is labelled stale. Local sync compares content hashes and refuses
+to publish a successful manifest after file/transfer errors.
 
-Target ship date for v1: **2026-06-15**.
+No personal data was refreshed as part of that review. The mirror remains
+**upload-only**: deleting a local file does not delete its cloud copy. After the
+next successful sync, the source inventory excludes retained, deleted files from
+runtime reads. Legacy manifests without an inventory cannot certify freshness.
 
 ---
 
@@ -136,7 +153,28 @@ Target ship date for v1: **2026-06-15**.
 
 ## Out of scope (v1)
 
-Voice, vision, multi-agent orchestration, family-context bridge, long-term memory, calendar integration, web browsing, RPA. All deferred to v2+.
+Vision, multi-agent orchestration, family-context bridge, long-term memory,
+calendar integration, and RPA remain outside the current scope. Voice forwarding
+and research requests are already implemented.
+
+## What would make it valuable
+
+1. **Fresh, approved inputs.** Decide which non-sensitive mindVault files should
+   feed the briefing; do not automatically expand uploads from the sensitive vault.
+   Add reliable event-driven refresh and an explicit deletion policy.
+2. **Close a loop, not just capture it.** Surface at most three actionable items,
+   with Done / Later / Drop actions persisted by memex. Show overdue work, not
+   just the nearest future deadline.
+3. **A genuinely conversational review.** Keep short-lived chat context with an
+   explicit reset and retention policy, then guide one weekly-review step at a time.
+4. **Make delivery observable.** Record last attempted/delivered briefing,
+   source age, capture acceptance, and downstream completion separately.
+   Choose the owner's local timezone explicitly; current timers use UTC.
+5. **Prove value before adding RAG or more agents.** Run a two-week trial:
+   useful briefing on at least 10 of 14 days, zero silently lost captures,
+   at least five tasks closed from Telegram, and less than one minute of
+   daily inbox maintenance. If that fails, simplify the loop rather than
+   adding more generated text.
 
 ---
 

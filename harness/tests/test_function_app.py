@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 import function_app as app
 import function_app as fa
 
@@ -363,10 +365,11 @@ def test_briefing_prefs_keep_known_sections_in_canonical_order(monkeypatch):
     assert fa._briefing_prefs() == ["focus", "weather"]
 
 
-def test_briefing_prefs_fall_back_to_all_sections_on_invalid_json(monkeypatch):
+def test_briefing_prefs_do_not_reenable_sections_on_invalid_json(monkeypatch):
     monkeypatch.setattr(fa, "_read_os_text", lambda _path: "{not json")
 
-    assert fa._briefing_prefs() == list(fa.BRIEFING_SECTION_NAMES)
+    with pytest.raises(ValueError, match="preferences"):
+        fa._briefing_prefs()
 
 
 def test_load_briefing_drops_disabled_sections(monkeypatch):

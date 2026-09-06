@@ -1,4 +1,4 @@
-"""mindMe Function App — Phase 2 entry points.
+"""mindMe Function App entry points.
 
 Programming model: Azure Functions Python v2 (decorator-based, single file).
 All handlers share the module-level Foundry client and Telegram HTTP client to
@@ -7,9 +7,9 @@ avoid cold-start per request.
 Endpoints
 ---------
 - POST  /api/telegram_webhook    Telegram update receiver (replaces long-poll)
-- TIMER 0 30 7 * * *             morning_briefing_timer (07:30 Sweden time)
-- TIMER 0 0 18 * * 0             weekly_review_timer (Sun 18:00, review nudge)
-- QUEUE capture-events           capture_drain (Phase 3 placeholder)
+- TIMER 0 30 7 * * *             morning_briefing_timer (07:30 UTC)
+- TIMER 0 0 18 * * 0             weekly_review_timer (Sun 18:00 UTC, review nudge)
+- QUEUE capture-events           capture_drain (unsupported legacy queue)
 - GET   /api/health              uptime probe
 - POST  /api/tools/briefing_context  Foundry agent tool: get_briefing_context()
 - GET   /api/tools/weather       Foundry agent tool: get_weather()
@@ -33,15 +33,18 @@ from __future__ import annotations
 # OTel-aware library also picks it up.
 import os as _os_for_otel_env
 
-_os_for_otel_env.environ.setdefault(
-    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", "false"
-)
+_os_for_otel_env.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"] = "false"
+_os_for_otel_env.environ["AZURE_TRACING_ENABLED"] = "false"
 # httpx / requests / urllib auto-instrumentation would capture full URLs.
 # Telegram URLs contain the bot token in the path. Disable them outright; we
 # emit manual spans for the few HTTP calls we make.
-_os_for_otel_env.environ.setdefault(
-    "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS",
-    "httpx,requests,urllib,urllib3,aiohttp-client",
+_os_for_otel_env.environ["OTEL_PYTHON_DISABLED_INSTRUMENTATIONS"] = ",".join(
+    sorted(
+        (
+            set(_os_for_otel_env.environ.get("OTEL_PYTHON_DISABLED_INSTRUMENTATIONS", "").split(","))
+            | {"httpx", "requests", "urllib", "urllib3", "aiohttp-client", "azure_sdk"}
+        ) - {""}
+    )
 )
 del _os_for_otel_env
 
@@ -49,23 +52,34 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
-from datetime import date
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from pathlib import PurePosixPath
 from urllib.parse import quote
 
 import azure.functions as func
 import httpx
 from azure.ai.projects import AIProjectClient
-from azure.core.exceptions import ResourceExistsError
+from azure.core.exceptions import AzureError, ResourceExistsError, ResourceNotFoundError
+from azure.core.settings import settings as azure_settings
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
+from openai import OpenAIError
 
 import vault_layout
 
 # Hard Rule 8: silence httpx/httpcore BEFORE constructing any Telegram client.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("azure.identity").setLevel(logging.WARNING)
+logging.getLogger("azure").setLevel(logging.CRITICAL + 1)
+for _logger_name, _logger in logging.Logger.manager.loggerDict.copy().items():
+    if _logger_name.startswith("azure.") and isinstance(_logger, logging.Logger):
+        _logger.setLevel(logging.NOTSET)
 
 # --- Azure Monitor OpenTelemetry (Application Insights) ---------------------
 # Wires traces, metrics, and logs to App Insights via the connection string
@@ -78,6 +92,8 @@ try:
         configure_azure_monitor()
 except ImportError:  # pragma: no cover — local dev without the package installed
     pass
+
+azure_settings.tracing_enabled = False
 
 from opentelemetry import trace
 
@@ -138,25 +154,65 @@ def _home_location() -> str:
     return (os.environ.get("MINDME_HOME_LOCATION") or "Riga").strip() or "Riga"
 
 
+class TelegramDeliveryError(RuntimeError):
+    """A delivery failure that is safe for host logs and telemetry."""
+
+
+def _telegram_chunks(text: str) -> list[str]:
+    if not text:
+        raise ValueError("Telegram message must not be empty")
+    chunks: list[str] = []
+    start = 0
+    units = 0
+    for index, char in enumerate(text):
+        width = 2 if ord(char) > 0xFFFF else 1
+        if units + width > 4096:
+            chunks.append(text[start:index])
+            start = index
+            units = 0
+        units += width
+    chunks.append(text[start:])
+    return chunks
+
+
 def _telegram_send(chat_id: int, text: str) -> None:
     """Send a Telegram message. URL contains the token — caller must trust the
     pre-silenced httpx logger (Hard Rule 8). Span attributes carry size/status
     only (Hard Rule 9) — NEVER the URL or message text."""
-    with tracer.start_as_current_span("telegram.send") as span:
+    with tracer.start_as_current_span(
+        "telegram.send", record_exception=False, set_status_on_exception=False
+    ) as span:
         span.set_attribute("chat_id", chat_id)
         span.set_attribute("message.length", len(text))
         token = os.environ["TELEGRAM_BOT_TOKEN"]
         url = f"{TELEGRAM_API}/bot{token}/sendMessage"
-        resp = _http_client().post(url, json={"chat_id": chat_id, "text": text})
-        span.set_attribute("http.status_code", resp.status_code)
-        resp.raise_for_status()
+        for chunk in _telegram_chunks(text):
+            try:
+                resp = _http_client().post(url, json={"chat_id": chat_id, "text": chunk})
+                span.set_attribute("http.status_code", resp.status_code)
+                resp.raise_for_status()
+                payload = resp.json()
+                if not isinstance(payload, dict) or payload.get("ok") is not True:
+                    raise TelegramDeliveryError("Telegram did not confirm delivery")
+            except (httpx.HTTPError, ValueError) as exc:
+                raise TelegramDeliveryError(
+                    f"Telegram delivery failed ({type(exc).__name__})"
+                ) from None
 
 
 def _verify_telegram_secret(req: func.HttpRequest) -> bool:
     expected = os.environ.get("TELEGRAM_WEBHOOK_SECRET")
     if not expected:
         return False
-    return req.headers.get("X-Telegram-Bot-Api-Secret-Token") == expected
+    actual = req.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    return secrets.compare_digest(actual.encode(), expected.encode())
+
+
+def _capture_feedback(chat_id: int, text: str) -> None:
+    try:
+        _telegram_send(chat_id, text)
+    except TelegramDeliveryError:
+        log.error("optional capture feedback delivery failed")
 
 
 def _is_allowed_chat(chat_id: int | None) -> bool:
@@ -234,13 +290,18 @@ def _forward_to_memex(update: dict) -> bool:
     if not target:
         log.warning("capture forward skipped: MEMEX_WEBHOOK_URL not set")
         return False
-    with tracer.start_as_current_span("capture.forward") as span:
+    with tracer.start_as_current_span(
+        "capture.forward", record_exception=False, set_status_on_exception=False
+    ) as span:
         try:
             resp = _http_client().post(target, json=update)
             span.set_attribute("http.status_code", resp.status_code)
-            return resp.status_code < 400
-        except httpx.HTTPError:
-            log.exception("capture forward failed")
+            if not 200 <= resp.status_code < 300:
+                log.error("capture forward rejected status=%d", resp.status_code)
+                return False
+            return True
+        except httpx.HTTPError as exc:
+            log.error("capture forward failed error=%s", type(exc).__name__)
             return False
 
 
@@ -316,7 +377,9 @@ def _transcribe_voice(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str |
         return None
     sub = (mime_type or "audio/ogg").split("/")[-1].split(";")[0].strip().lower()
     ext = _VOICE_EXT_MAP.get(sub, "ogg")
-    with tracer.start_as_current_span("voice.transcribe") as span:
+    with tracer.start_as_current_span(
+        "voice.transcribe", record_exception=False, set_status_on_exception=False
+    ) as span:
         span.set_attribute("audio.size_bytes", len(audio_bytes))
         span.set_attribute("audio.mime_type", mime_type)
         try:
@@ -329,8 +392,8 @@ def _transcribe_voice(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str |
             span.set_attribute("transcript.length", len(text))
             span.set_attribute("voice.status", "ok")
             return text or None
-        except Exception:
-            log.exception("voice transcription failed size=%d", len(audio_bytes))
+        except Exception as exc:
+            log.error("voice transcription failed size=%d error=%s", len(audio_bytes), type(exc).__name__)
             span.set_attribute("voice.status", "error")
             return None
 
@@ -396,7 +459,9 @@ def _create_dig_issue(question: str) -> tuple[str | None, str]:
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    with tracer.start_as_current_span("dig.create_issue") as span:
+    with tracer.start_as_current_span(
+        "dig.create_issue", record_exception=False, set_status_on_exception=False
+    ) as span:
         span.set_attribute("question.length", len(question))
         try:
             resp = _http_client().post(
@@ -405,8 +470,8 @@ def _create_dig_issue(question: str) -> tuple[str | None, str]:
                 headers=headers,
             )
             span.set_attribute("http.status_code", resp.status_code)
-        except httpx.HTTPError:
-            log.exception("dig issue create failed (network)")
+        except httpx.HTTPError as exc:
+            log.error("dig issue create failed error=%s", type(exc).__name__)
             span.set_attribute("dig.status", "network_error")
             return None, "network_error"
         if resp.status_code >= 400:
@@ -443,11 +508,13 @@ def _create_dig_issue(question: str) -> tuple[str | None, str]:
 # --- Foundry call -----------------------------------------------------------
 
 def _ask_companion(user_text: str, conversation_id: str | None = None) -> str:
-    """Forward to the hosted prompt agent. Returns plain text or '(empty reply)'.
+    """Forward to the hosted prompt agent. Returns plain text; rejects empty replies.
 
     Span attributes carry agent name, input/output **lengths**, and conversation
     presence flag only (Hard Rule 9) — NEVER prompts or completions."""
-    with tracer.start_as_current_span("ask_companion") as span:
+    with tracer.start_as_current_span(
+        "ask_companion", record_exception=False, set_status_on_exception=False
+    ) as span:
         span.set_attribute("input.length", len(user_text))
         span.set_attribute("has_conversation_id", conversation_id is not None)
 
@@ -455,12 +522,8 @@ def _ask_companion(user_text: str, conversation_id: str | None = None) -> str:
         agent_name = os.environ.get("AZURE_AI_AGENT_NAME", "companion")
         span.set_attribute("agent.name", agent_name)
 
-        if conversation_id is None:
-            conv = openai_client.conversations.create()
-            conversation_id = conv.id
-
         response = openai_client.responses.create(
-            conversation=conversation_id,
+            **({"conversation": conversation_id} if conversation_id else {"store": False}),
             input=user_text,
             extra_body={
                 "agent_reference": {
@@ -469,7 +532,9 @@ def _ask_companion(user_text: str, conversation_id: str | None = None) -> str:
                 }
             },
         )
-        text = (response.output_text or "").strip() or "(empty reply)"
+        text = (response.output_text or "").strip()
+        if not text:
+            raise ValueError("Companion returned no text")
         span.set_attribute("output.length", len(text))
         return text
 
@@ -487,6 +552,81 @@ PERSONAL_OS_CONTAINER_DEFAULT = "personal-os"
 _personal_os_container = None
 
 
+@dataclass(frozen=True)
+class _MirrorInventory:
+    manifest: dict
+    source_files: frozenset[str] | None
+
+
+_mirror_inventory_context: ContextVar[_MirrorInventory | None] = ContextVar(
+    "mirror_inventory", default=None
+)
+
+
+def _load_mirror_inventory() -> _MirrorInventory:
+    raw = _read_os_text("_manifest.json")
+    if not raw:
+        return _MirrorInventory({}, None)
+    try:
+        manifest = json.loads(raw)
+    except json.JSONDecodeError:
+        raise ValueError("Invalid mirror inventory manifest") from None
+    if not isinstance(manifest, dict):
+        raise ValueError("Invalid mirror inventory manifest")
+    if "source_files" not in manifest:
+        return _MirrorInventory(manifest, None)
+    names = manifest["source_files"]
+    if not isinstance(names, list):
+        raise ValueError("Invalid mirror source inventory")
+    for name in names:
+        if not isinstance(name, str) or not name or "\\" in name or ":" in name:
+            raise ValueError("Invalid mirror source inventory")
+        path = PurePosixPath(name)
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or path.as_posix() != name
+            or path.suffix.lower() != ".md"
+            or any(ord(character) < 32 for character in name)
+        ):
+            raise ValueError("Invalid mirror source inventory")
+    if len(set(names)) != len(names):
+        raise ValueError("Invalid mirror source inventory")
+    return _MirrorInventory(manifest, frozenset(names))
+
+
+def _current_mirror_inventory() -> _MirrorInventory:
+    inventory = _mirror_inventory_context.get()
+    return inventory if inventory is not None else _load_mirror_inventory()
+
+
+@contextmanager
+def _mirror_inventory_scope() -> Iterator[_MirrorInventory]:
+    """Pin one validated inventory to a snapshot, then discard it on every exit."""
+    existing = _mirror_inventory_context.get()
+    if existing is not None:
+        yield existing
+        return
+    inventory = _load_mirror_inventory()
+    token = _mirror_inventory_context.set(inventory)
+    try:
+        yield inventory
+    finally:
+        _mirror_inventory_context.reset(token)
+
+
+def _is_managed_os_blob(name: str) -> bool:
+    return name == "_manifest.json" or name.startswith("system/mindme/")
+
+
+def _mirror_blob_visible(name: str, inventory: _MirrorInventory) -> bool:
+    return (
+        _is_managed_os_blob(name)
+        or inventory.source_files is None
+        or name in inventory.source_files
+    )
+
+
 def _os_container_client():
     global _personal_os_container
     if _personal_os_container is None:
@@ -498,11 +638,14 @@ def _os_container_client():
 
 
 def _read_os_text(rel_path: str) -> str:
-    """Read a markdown blob by relative path; return '' if it doesn't exist."""
+    """Read a visible source/managed blob; absent or inventoried-out files are empty."""
+    if not _is_managed_os_blob(rel_path):
+        if not _mirror_blob_visible(rel_path, _current_mirror_inventory()):
+            return ""
     blob = _os_container_client().get_blob_client(rel_path)
     try:
         data = blob.download_blob().readall()
-    except Exception:
+    except ResourceNotFoundError:
         return ""
     return data.decode("utf-8", errors="replace")
 
@@ -564,14 +707,14 @@ def _extract_journal_summary(text: str, journal_date: str) -> dict:
     }
 
 
+@_mirror_inventory_scope()
 def _list_area_h1s(limit: int = 8) -> list[str]:
     """H1 of each `<areas>/<area>/README.md`, in alphabetical order."""
     headlines: list[str] = []
-    container = _os_container_client()
-    blobs = container.list_blobs(name_starts_with=vault_layout.prefix(vault_layout.PERSONAL_OS, "areas"))
+    blobs = _os_blob_props(vault_layout.prefix(vault_layout.PERSONAL_OS, "areas"))
     readmes = sorted(
-        b.name for b in blobs
-        if b.name.endswith("/README.md") and b.name.count("/") == 2
+        name for name, _modified in blobs
+        if name.endswith("/README.md") and name.count("/") == 2
     )
     for name in readmes:
         text = _read_os_text(name)
@@ -583,8 +726,11 @@ def _list_area_h1s(limit: int = 8) -> list[str]:
     return headlines
 
 
+@_mirror_inventory_scope()
 def _build_briefing_snapshot() -> dict:
-    with tracer.start_as_current_span("build_briefing_snapshot") as span:
+    with tracer.start_as_current_span(
+        "build_briefing_snapshot", record_exception=False, set_status_on_exception=False
+    ) as span:
         today = date.today()
         snapshot: dict = {"date": today.isoformat()}
 
@@ -595,9 +741,10 @@ def _build_briefing_snapshot() -> dict:
         else:
             snapshot.update({"top_goals": [], "this_week": [], "today_focus": ""})
 
+        yesterday = today - timedelta(days=1)
         journal_rel = (
-            f"{vault_layout.folder(vault_layout.PERSONAL_OS, 'journal')}/{today.year}/"
-            f"{today.year}-{today.month:02d}-{today.day:02d}.md"
+            f"{vault_layout.folder(vault_layout.PERSONAL_OS, 'journal')}/{yesterday.year}/"
+            f"{yesterday.isoformat()}.md"
         )
         journal_text = _read_os_text(journal_rel)
         span.set_attribute("journal.length", len(journal_text))
@@ -610,6 +757,7 @@ def _build_briefing_snapshot() -> dict:
         span.set_attribute("areas.count", len(snapshot["areas"]))
 
         snapshot["vault_state"] = _vault_state(today)
+        snapshot["source_freshness"] = snapshot["vault_state"].get("mirror", {})
         snapshot["open_loops"] = _fetch_open_loops()
         return snapshot
 
@@ -649,15 +797,13 @@ def _parse_iso_date(text: str) -> date | None:
 
 
 def _os_blob_props(prefix: str) -> list[tuple[str, object]]:
-    """(name, last_modified) for blobs under `prefix`. [] on any failure."""
-    try:
-        return [
-            (b.name, b.last_modified)
-            for b in _os_container_client().list_blobs(name_starts_with=prefix)
-        ]
-    except Exception:
-        log.exception("blob list failed prefix_len=%d", len(prefix))
-        return []
+    """Visible (name, last_modified) pairs under `prefix`; failures propagate."""
+    inventory = _current_mirror_inventory()
+    return [
+        (b.name, b.last_modified)
+        for b in _os_container_client().list_blobs(name_starts_with=prefix)
+        if _mirror_blob_visible(b.name, inventory)
+    ]
 
 
 def _inbox_state(today: date) -> dict:
@@ -705,6 +851,7 @@ def _project_status(text: str) -> tuple[bool, date | None]:
     return is_open, deadline
 
 
+@_mirror_inventory_scope()
 def _projects_state(today: date) -> dict:
     open_count = 0
     nearest: date | None = None
@@ -763,22 +910,52 @@ def _stale_areas_state(today: date, *, limit: int = 5) -> list[dict]:
     return stale[:limit]
 
 
+def _mirror_freshness(today: date) -> dict:
+    try:
+        inventory = _current_mirror_inventory()
+        data = inventory.manifest
+        if not isinstance(data.get("synced_at_utc"), str):
+            raise ValueError("Missing sync timestamp")
+        synced_at = datetime.fromisoformat(data["synced_at_utc"])
+        if synced_at.tzinfo is None or synced_at.date() > today:
+            raise ValueError("Invalid sync timestamp")
+    except ValueError as exc:
+        log.warning("mirror freshness unavailable error=%s", type(exc).__name__)
+        return {"status": "unknown", "last_synced_at": None, "age_days": None}
+    age_days = (today - synced_at.date()).days
+    return {
+        "status": (
+            "stale" if age_days >= 2
+            else "unknown" if inventory.source_files is None
+            else "current"
+        ),
+        "last_synced_at": synced_at.isoformat(),
+        "age_days": age_days,
+        "inventory": "legacy" if inventory.source_files is None else "complete",
+    }
+
+
+def _freshness_warning(freshness: dict) -> str:
+    if freshness.get("status") == "stale":
+        return f"Personal context may be stale: mirror last synced {freshness['age_days']}d ago."
+    if freshness.get("status") != "current":
+        return "Personal context freshness is unknown."
+    return ""
+
+
+@_mirror_inventory_scope()
 def _vault_state(today: date | None = None) -> dict:
     today = today or date.today()
-    state = {
-        "inbox": {"count": 0, "oldest_age_days": 0},
-        "projects": {"open_count": 0, "nearest_deadline": None, "nearest_project": ""},
-        "reviews": {"last_weekly": None, "days_since": None},
-        "stale_areas": [],
-    }
-    with tracer.start_as_current_span("vault_state") as span:
-        try:
-            state["inbox"] = _inbox_state(today)
-            state["projects"] = _projects_state(today)
-            state["reviews"] = _reviews_state(today)
-            state["stale_areas"] = _stale_areas_state(today)
-        except Exception:
-            log.exception("vault_state build failed")
+    with tracer.start_as_current_span(
+        "vault_state", record_exception=False, set_status_on_exception=False
+    ) as span:
+        state = {
+            "inbox": _inbox_state(today),
+            "projects": _projects_state(today),
+            "reviews": _reviews_state(today),
+            "stale_areas": _stale_areas_state(today),
+            "mirror": _mirror_freshness(today),
+        }
         span.set_attribute("inbox.count", state["inbox"]["count"])
         span.set_attribute("inbox.oldest_age_days", state["inbox"]["oldest_age_days"])
         span.set_attribute("projects.open", state["projects"]["open_count"])
@@ -795,43 +972,64 @@ def _vault_state(today: date | None = None) -> dict:
 #
 # Ideas/tasks live in mindVault (git), NOT the .me personal-os mirror, so they
 # come from memex's /state endpoint (read-only over mindVault; never .me). A
-# missing URL or a failed call degrades gracefully to "no open loops" — the
-# briefing/status still work. Hard Rule 1/9: record status + counts only, never
+# missing URL or a failed call is reported as unavailable, not zero open loops.
+# Hard Rule 1/9: record status + counts only, never
 # idea/task titles or the token-bearing URL.
 
 
-def _empty_open_loops() -> dict:
+def _empty_open_loops(status: str = "unavailable") -> dict:
     return {
-        "ideas": {"open_count": 0, "oldest_age_days": 0, "items": []},
-        "tasks": {"open_count": 0, "items": []},
+        "status": status,
+        "ideas": {"open_count": None, "oldest_age_days": None, "items": []},
+        "tasks": {"open_count": None, "items": []},
     }
 
 
 def _fetch_open_loops() -> dict:
     """Fetch the open-loops projection (open ideas + tasks) from memex.
 
-    Returns a safe empty projection if MEMEX_STATE_URL is unset or the call
-    fails — resurfacing is a nice-to-have, never a hard dependency. The URL
+    Returns an explicit unavailable projection if MEMEX_STATE_URL is unset or
+    the call fails. The URL
     (incl. ?code=) lives in MEMEX_STATE_URL and is never logged.
     """
     url = os.environ.get("MEMEX_STATE_URL")
     if not url:
-        return _empty_open_loops()
-    with tracer.start_as_current_span("fetch_open_loops") as span:
+        log.warning("open loops unavailable: MEMEX_STATE_URL not set")
+        return _empty_open_loops("not_configured")
+    with tracer.start_as_current_span(
+        "fetch_open_loops", record_exception=False, set_status_on_exception=False
+    ) as span:
         try:
             resp = _http_client().get(url)
             span.set_attribute("http.status_code", resp.status_code)
-            if resp.status_code >= 400:
-                return _empty_open_loops()
-            data = resp.json() or {}
-        except Exception:
-            log.exception("fetch_open_loops failed")
+            resp.raise_for_status()
+            data = resp.json()
+            if not isinstance(data, dict):
+                raise ValueError("Invalid open-loops projection")
+            for kind in ("ideas", "tasks"):
+                group = data.get(kind)
+                if not isinstance(group, dict):
+                    raise ValueError("Missing open-loops group")
+                count = group.get("open_count")
+                if type(count) is not int or count < 0:
+                    raise ValueError("Invalid open-loops count")
+                if not isinstance(group.get("items"), list):
+                    raise ValueError("Invalid open-loops items")
+                if any(not isinstance(item, dict) for item in group["items"]):
+                    raise ValueError("Invalid open-loops item")
+            age = data["ideas"].get("oldest_age_days")
+            if type(age) is not int or age < 0:
+                raise ValueError("Invalid open-loops age")
+        except (httpx.HTTPError, ValueError) as exc:
+            log.error("fetch_open_loops failed error=%s", type(exc).__name__)
+            span.set_attribute("loops.status", "unavailable")
             return _empty_open_loops()
         ideas = data.get("ideas") or {}
         tasks = data.get("tasks") or {}
         span.set_attribute("ideas.open_count", int(ideas.get("open_count", 0) or 0))
         span.set_attribute("tasks.open_count", int(tasks.get("open_count", 0) or 0))
     return {
+        "status": "available",
         "ideas": {
             "open_count": int(ideas.get("open_count", 0) or 0),
             "oldest_age_days": int(ideas.get("oldest_age_days", 0) or 0),
@@ -849,8 +1047,8 @@ def _fetch_open_loops() -> dict:
 # The owner chooses which slices of the Personal OS make it into the morning
 # briefing. Preferences are a tiny JSON document in the same private
 # `personal-os` container (section names only — no personal content, so Hard
-# Rule 4 boundary is unchanged). Missing/invalid preferences fall back to "all
-# sections on", which is exactly the pre-customization behaviour.
+# Rule 4 boundary is unchanged). Only missing preferences default to all sections;
+# unreadable preferences must never re-enable sections the owner switched off.
 
 _BRIEFING_PREFS_BLOB = "system/mindme/briefing-prefs.json"
 
@@ -881,17 +1079,16 @@ def _normalize_briefing_sections(sections: object) -> list[str]:
 
 
 def _briefing_prefs() -> list[str]:
-    """Enabled briefing sections. Defaults to every section on any failure."""
+    """Enabled sections; only an absent preferences document uses the default."""
     raw = _read_os_text(_BRIEFING_PREFS_BLOB)
     if not raw:
         return list(BRIEFING_SECTION_NAMES)
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        log.warning("briefing prefs unreadable — falling back to all sections")
-        return list(BRIEFING_SECTION_NAMES)
-    if not isinstance(data, dict):
-        return list(BRIEFING_SECTION_NAMES)
+        raise ValueError("Briefing preferences are unreadable") from None
+    if not isinstance(data, dict) or not isinstance(data.get("sections"), list):
+        raise ValueError("Invalid briefing preferences")
     return _normalize_briefing_sections(data.get("sections"))
 
 
@@ -905,7 +1102,7 @@ def _save_briefing_prefs(sections: list[str]) -> bool:
         _os_container_client().get_blob_client(_BRIEFING_PREFS_BLOB).upload_blob(
             payload.encode("utf-8"), overwrite=True
         )
-    except Exception as exc:
+    except AzureError as exc:
         log.warning("briefing prefs save failed error=%s", type(exc).__name__)
         return False
     return True
@@ -1010,8 +1207,8 @@ def _status_line() -> str:
     """One-line vault snapshot for the /status command (owner chat only)."""
     try:
         state = _vault_state()
-    except Exception:
-        log.exception("status build failed")
+    except (AzureError, ValueError) as exc:
+        log.error("status build failed error=%s", type(exc).__name__)
         return "status unavailable — check the function logs."
     inbox = state["inbox"]
     projects = state["projects"]
@@ -1032,8 +1229,13 @@ def _status_line() -> str:
     parts = [inbox_part, proj_part, review_part]
     if state["stale_areas"]:
         parts.append(f"🕸️ stale areas: {len(state['stale_areas'])}")
+    warning = _freshness_warning(state.get("mirror", {}))
+    if warning:
+        parts.append(warning)
     loops = _fetch_open_loops()
     ideas, tasks = loops["ideas"], loops["tasks"]
+    if loops["status"] != "available":
+        parts.append("ideas/tasks: unavailable")
     if ideas["open_count"]:
         idea_part = f"💡 ideas: {ideas['open_count']}"
         if ideas["oldest_age_days"]:
@@ -1060,8 +1262,8 @@ def _daily_summary() -> str:
     """/summary — concise daily snapshot from dashboard + journal + open loops."""
     try:
         snapshot = _build_briefing_snapshot()
-    except Exception:
-        log.exception("daily summary build failed")
+    except (AzureError, ValueError) as exc:
+        log.error("daily summary build failed error=%s", type(exc).__name__)
         return "daily summary unavailable — check the function logs."
 
     focus = _clip(snapshot.get("today_focus") or "", 140)
@@ -1075,14 +1277,22 @@ def _daily_summary() -> str:
     loops = int(journal.get("open_loops_count") or 0)
 
     open_loops = snapshot.get("open_loops") or _empty_open_loops()
-    ideas = int((open_loops.get("ideas") or {}).get("open_count") or 0)
-    tasks = int((open_loops.get("tasks") or {}).get("open_count") or 0)
+    if open_loops.get("status") == "available":
+        thoughts = (
+            f"{open_loops['ideas']['open_count']} open ideas · "
+            f"{open_loops['tasks']['open_count']} open tasks"
+        )
+    else:
+        thoughts = "ideas/tasks unavailable"
 
+    warning = _freshness_warning(snapshot.get("source_freshness", {}))
+    freshness_line = f"{warning}\n" if warning else ""
     return (
         f"🧾 Daily summary ({snapshot.get('date') or date.today().isoformat()})\n"
+        f"{freshness_line}"
         f"Focus: {focus}\n"
-        f"Journal: mood {mood}/10 · energy {energy}/10 · open loops {loops}\n"
-        f"Thoughts: {ideas} open ideas · {tasks} open tasks"
+        f"Yesterday's journal: mood {mood}/10 · energy {energy}/10 · open loops {loops}\n"
+        f"Thoughts: {thoughts}"
     )
 
 
@@ -1111,6 +1321,8 @@ def _compose_review_nudge(state: dict) -> str:
         bits.append(f"{piece} ({names})")
     loops = _fetch_open_loops()
     ideas, tasks = loops["ideas"], loops["tasks"]
+    if loops["status"] != "available":
+        bits.append("ideas/tasks unavailable")
     if ideas["open_count"]:
         piece = f"{ideas['open_count']} open idea" + ("s" if ideas["open_count"] != 1 else "")
         if ideas["oldest_age_days"]:
@@ -1121,6 +1333,9 @@ def _compose_review_nudge(state: dict) -> str:
     head = "🧹 Weekly review time."
     if reviews["days_since"] is not None:
         head += f" Last review {reviews['days_since']}d ago."
+    warning = _freshness_warning(state.get("mirror", {}))
+    if warning:
+        bits.append(warning)
     body = " · ".join(bits) if bits else "inbox clear, projects fresh — quick win this week."
     return f"{head}\n{body}\nReply /review when you're ready."
 
@@ -1204,7 +1419,7 @@ def _weather_summary(location: str) -> dict:
 def _compose_local_briefing() -> str:
     """Fallback morning briefing assembled locally from the Personal OS."""
     snapshot = _load_briefing()
-    sections = set(snapshot.get("sections") or BRIEFING_SECTION_NAMES)
+    sections = set(snapshot.get("sections", BRIEFING_SECTION_NAMES))
 
     focus_parts: list[str] = []
     today_focus = _clip(snapshot.get("today_focus") or "", 180)
@@ -1251,16 +1466,36 @@ def _compose_local_briefing() -> str:
         paragraphs.append(paragraph_1)
     if sections & {"vault", "journal"}:
         paragraphs.append(paragraph_2)
+    if "areas" in sections and snapshot.get("areas"):
+        paragraphs.append("Life areas: " + "; ".join(snapshot["areas"]) + ".")
+    if "loops" in sections:
+        loops = snapshot.get("open_loops") or _empty_open_loops()
+        if loops["status"] == "available":
+            paragraphs.append(
+                f"Open ideas: {loops['ideas']['open_count']}. "
+                f"Open tasks: {loops['tasks']['open_count']}."
+            )
+        else:
+            paragraphs.append("Open ideas and tasks are unavailable right now.")
     if "weather" in sections:
-        weather = _weather_summary(_home_location())
-        paragraphs.append(
-            f"Weather in {weather.get('location')}: {weather.get('temp_c')}°C "
-            f"(feels {weather.get('feels_like_c')}°C), {weather.get('description')}."
-        )
+        try:
+            weather = _weather_summary(_home_location())
+        except (httpx.HTTPError, ValueError) as exc:
+            log.error("briefing weather unavailable error=%s", type(exc).__name__)
+            paragraphs.append("Weather is unavailable right now.")
+        else:
+            paragraphs.append(
+                f"Weather in {weather.get('location')}: {weather.get('temp_c')}°C "
+                f"(feels {weather.get('feels_like_c')}°C), {weather.get('description')}."
+            )
     if not paragraphs:
         paragraphs.append(
             "Every briefing section is switched off — use /briefing to turn some back on."
         )
+    if sections - {"weather"}:
+        warning = _freshness_warning(snapshot.get("source_freshness", {}))
+        if warning:
+            paragraphs.insert(0, warning)
     return "\n\n".join(paragraphs)
 
 
@@ -1276,22 +1511,42 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
     try:
         update = req.get_json()
     except ValueError:
+        log.warning("webhook rejected: invalid JSON")
+        return func.HttpResponse("bad request", status_code=400)
+    if not isinstance(update, dict):
+        log.warning("webhook rejected: invalid update")
         return func.HttpResponse("bad request", status_code=400)
 
     # Inline-keyboard button taps (note review) belong to the memex capture
     # engine — forward and return before any companion handling.
     if "callback_query" in update:
-        _forward_to_memex(update)
+        callback = update["callback_query"]
+        message = callback.get("message") if isinstance(callback, dict) else None
+        chat = message.get("chat") if isinstance(message, dict) else None
+        chat_id = chat.get("id") if isinstance(chat, dict) else None
+        if not _is_allowed_chat(chat_id):
+            log.warning("callback rejected: unauthorized chat")
+            return func.HttpResponse("ok", status_code=200)
+        if not _forward_to_memex(update):
+            return func.HttpResponse("capture unavailable", status_code=503)
         return func.HttpResponse("ok", status_code=200)
 
     message = update.get("message") or update.get("edited_message") or {}
+    if not isinstance(message, dict) or not isinstance(message.get("chat", {}), dict):
+        log.warning("webhook rejected: invalid message")
+        return func.HttpResponse("bad request", status_code=400)
     chat = message.get("chat") or {}
     chat_id = chat.get("id")
-    user_text = (message.get("text") or "").strip()
 
     if not _is_allowed_chat(chat_id):
         log.warning("webhook rejected: unauthorized chat_id=%s", chat_id)
         return func.HttpResponse("ok", status_code=200)  # silent drop
+
+    user_text = message.get("text") or ""
+    if not isinstance(user_text, str):
+        log.warning("webhook rejected: invalid text")
+        return func.HttpResponse("bad request", status_code=400)
+    user_text = user_text.strip()
 
     if _claim_onboarding():
         for tutorial_message in _ONBOARDING_TUTORIAL:
@@ -1307,20 +1562,22 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
             try:
                 audio_bytes = _download_telegram_file(file_id)
                 transcript = _transcribe_voice(audio_bytes, mime_type)
-            except Exception:
-                log.exception(
-                    "voice download failed file_id_len=%d", len(file_id)
+            except (httpx.HTTPError, KeyError, ValueError) as exc:
+                log.error(
+                    "voice download failed error=%s", type(exc).__name__
                 )
         if transcript:
             # Inject the transcript as message text so memex treats it as a
             # plain-text capture. Keep the `voice` / `audio` field so memex
             # can archive the original.  Hard Rule 1: never log the text.
             fwd_update = {**update, "message": {**message, "text": transcript}}
-            _forward_to_memex(fwd_update)
-            _telegram_send(chat_id, f"\U0001f3a4 {transcript}")
+            if not _forward_to_memex(fwd_update):
+                return func.HttpResponse("capture unavailable", status_code=503)
+            _capture_feedback(chat_id, f"\U0001f3a4 {transcript}")
         else:
             # Transcription unavailable or failed — forward raw update as before.
-            _forward_to_memex(update)
+            if not _forward_to_memex(update):
+                return func.HttpResponse("capture unavailable", status_code=503)
         return func.HttpResponse("ok", status_code=200)
 
     if not user_text:
@@ -1350,9 +1607,11 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
     # Everything else is a conversation with the companion.
     if _is_capture_intent(user_text):
         forwarded = _forward_to_memex(update)
+        if not forwarded:
+            return func.HttpResponse("capture unavailable", status_code=503)
         suggestion = _capture_category_suggestion(user_text)
-        if forwarded and suggestion:
-            _telegram_send(chat_id, suggestion)
+        if suggestion:
+            _capture_feedback(chat_id, suggestion)
         return func.HttpResponse("ok", status_code=200)
 
     started = time.monotonic()
@@ -1381,8 +1640,8 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
             )
         else:
             reply = _ask_companion(user_text)
-    except Exception:
-        log.exception("agent error chat=%s in_len=%d", chat_id, len(user_text))
+    except Exception as exc:
+        log.error("agent error chat=%s error=%s", chat_id, type(exc).__name__)
         _telegram_send(chat_id, "mindMe hit an error. check the function logs.")
         return func.HttpResponse("ok", status_code=200)
 
@@ -1449,6 +1708,7 @@ def _briefing_seed(sections: list[str]) -> str:
         + ("s" if len(parts) != 1 else "")
         + f": {numbered}. "
         + (f"Use {_home_location()} as the default location. " if "weather" in enabled else "")
+        + "Check source_freshness: explicitly warn when personal context is stale or its freshness is unknown. "
         + "Be warm and concise."
     )
 
@@ -1465,45 +1725,42 @@ def _briefing_seed(sections: list[str]) -> str:
 def morning_briefing_timer(timer: func.TimerRequest) -> None:
     started = time.monotonic()
     chat_id = int(os.environ["TELEGRAM_ALLOWED_CHAT_ID"])
+    sections: list[str] | None = None
 
     try:
-        reply = _ask_companion(_briefing_seed(_briefing_prefs()))
-        _telegram_send(chat_id, reply)
-        log.info(
-            "briefing sent chat=%s out_len=%d duration=%.2fs",
-            chat_id, len(reply), time.monotonic() - started,
-        )
-    except Exception:
-        log.exception("briefing failed")
+        sections = _briefing_prefs()
+        reply = _ask_companion(_briefing_seed(sections))
+    except (AzureError, OpenAIError, httpx.HTTPError, ValueError, KeyError) as exc:
+        log.error("briefing generation failed error=%s", type(exc).__name__)
         try:
-            try:
-                fallback = _compose_local_briefing()
-            except Exception:
-                log.exception("briefing local fallback failed")
-                try:
-                    weather = _weather_summary(_home_location())
-                    fallback = (
-                        "mindMe could not load your personal briefing context today. "
-                        f"I can still send weather: {weather.get('location')} "
-                        f"{weather.get('temp_c')}°C (feels {weather.get('feels_like_c')}°C), "
-                        f"{weather.get('description')}."
-                    )
-                except Exception:
-                    log.exception("briefing fallback weather failed")
-                    fallback = (
-                        "mindMe could not assemble today's briefing or weather. "
-                        "please try again later."
-                    )
-            _telegram_send(chat_id, fallback)
-        except Exception:
-            log.exception("briefing fallback notify failed")
+            reply = _compose_local_briefing()
+        except (AzureError, httpx.HTTPError, ValueError, KeyError) as exc:
+            log.error("briefing local fallback failed error=%s", type(exc).__name__)
+            reply = (
+                "mindMe could not load today's briefing context or preferences. "
+                "No personal briefing was generated. Please try again later."
+            )
+    # Freshness is a delivery guarantee, even if the model ignores its instructions.
+    if sections is not None and set(sections) - {"weather"}:
+        try:
+            warning = _freshness_warning(_mirror_freshness(date.today()))
+        except (AzureError, httpx.HTTPError, ValueError, KeyError) as exc:
+            log.error("briefing freshness unavailable error=%s", type(exc).__name__)
+            warning = _freshness_warning({})
+        if warning and not reply.startswith(warning):
+            reply = f"{warning}\n\n{reply}"
+    _telegram_send(chat_id, reply)
+    log.info(
+        "briefing sent chat=%s out_len=%d duration=%.2fs",
+        chat_id, len(reply), time.monotonic() - started,
+    )
 
 
 # --- Function: weekly_review_timer -----------------------------------------
 
 @app.function_name(name="weekly_review_timer")
 @app.timer_trigger(
-    schedule="0 0 18 * * 0",  # Sundays 18:00 (WEBSITE_TIME_ZONE)
+    schedule="0 0 18 * * 0",  # Sundays 18:00 UTC
     arg_name="timer",
     run_on_startup=False,
     use_monitor=True,
@@ -1525,8 +1782,9 @@ def weekly_review_timer(timer: func.TimerRequest) -> None:
             len(state["stale_areas"]),
             time.monotonic() - started,
         )
-    except Exception:
-        log.exception("weekly nudge failed")
+    except (AzureError, httpx.HTTPError, ValueError) as exc:
+        log.error("weekly nudge failed error=%s", type(exc).__name__)
+        raise RuntimeError("Weekly review could not be generated") from None
 
 
 # --- Function: reaper_poll_timer -------------------------------------------
@@ -1557,11 +1815,14 @@ def reaper_poll_timer(timer: func.TimerRequest) -> None:
             summary["errors"],
             time.monotonic() - started,
         )
-    except Exception:
-        log.exception("reaper poll failed")
+        if summary["errors"] or summary.get("skipped"):
+            raise RuntimeError("Reaper poll did not complete successfully")
+    except (httpx.HTTPError, ValueError) as exc:
+        log.error("reaper poll failed error=%s", type(exc).__name__)
+        raise RuntimeError("Reaper poll failed") from None
 
 
-# --- Function: capture_drain (Phase 3 placeholder) -------------------------
+# --- Function: capture_drain (unsupported legacy queue) --------------------
 
 @app.function_name(name="capture_drain")
 @app.queue_trigger(
@@ -1570,8 +1831,8 @@ def reaper_poll_timer(timer: func.TimerRequest) -> None:
     connection="AzureWebJobsStorage",
 )
 def capture_drain(msg: func.QueueMessage) -> None:
-    log.info("capture event received id=%s size=%d", msg.id, len(msg.get_body()))
-    # Phase 3: forward to laptop sync daemon via separate queue / signed URL.
+    log.error("legacy capture queue is unsupported id=%s size=%d", msg.id, len(msg.get_body()))
+    raise RuntimeError("Legacy capture queue is unsupported; use the memex webhook")
 
 
 # --- Function: health ------------------------------------------------------
@@ -1590,7 +1851,7 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
 # --- Foundry agent tools (HTTP endpoints) ----------------------------------
 
 @app.function_name(name="tool_briefing_context")
-@app.route(route="tools/briefing_context", methods=["POST"])
+@app.route(route="tools/briefing_context", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_briefing_context().
 
@@ -1609,7 +1870,12 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
             )
         req_json = {}
 
-    tier = _normalize_tier_name(req.params.get("tier") or req_json.get("tier"))
+    if not isinstance(req_json, dict):
+        return func.HttpResponse("JSON body must be an object", status_code=400)
+    requested_tier = req.params.get("tier") or req_json.get("tier", "core")
+    if not isinstance(requested_tier, str) or requested_tier.strip().lower() not in {"core", "extended", "deep"}:
+        return func.HttpResponse("invalid tier", status_code=400)
+    tier = _normalize_tier_name(requested_tier)
     include_meta_raw = req.params.get("include_meta")
     if include_meta_raw is None:
         include_meta_source = req_json.get("include_meta", False)
@@ -1633,8 +1899,8 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
     try:
         data = _load_briefing()
         view = _select_briefing_view(data, tier=tier, include_meta=include_meta)
-    except Exception:
-        log.exception("briefing_context build failed")
+    except (AzureError, ValueError) as exc:
+        log.error("briefing_context build failed error=%s", type(exc).__name__)
         return func.HttpResponse(
             json.dumps({"error": "briefing not available"}),
             mimetype="application/json",
@@ -1648,7 +1914,7 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.function_name(name="tool_weather")
-@app.route(route="tools/weather", methods=["GET"])
+@app.route(route="tools/weather", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def tool_weather(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_weather(location)."""
     location = req.params.get("location") or _home_location()
@@ -1657,8 +1923,8 @@ def tool_weather(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse(
             json.dumps(summary), mimetype="application/json", status_code=200
         )
-    except Exception:
-        log.exception("weather lookup failed location=%s", location)
+    except (httpx.HTTPError, ValueError) as exc:
+        log.error("weather lookup failed error=%s", type(exc).__name__)
         return func.HttpResponse(
             json.dumps({"error": "weather unavailable"}),
             mimetype="application/json",
@@ -1703,10 +1969,10 @@ _VAULT_NAME_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})-(.+)\.md$", re.IGNORECASE
 
 def _mindvault_get(path: str):
     """GET the GitHub Contents API for a path in mindVault; parsed JSON or None on
-    404 / missing token. Token-bearing request — never logged (Hard Rule 8)."""
+    404. Missing configuration fails explicitly. Requests are never logged."""
     token = os.environ.get("DIG_GITHUB_TOKEN")
     if not token:
-        return None
+        raise ValueError("Vault access is not configured")
     repo = os.environ.get("DIG_REPO", DIG_REPO_DEFAULT)
     headers = {
         "Authorization": f"Bearer {token}",
@@ -1714,7 +1980,8 @@ def _mindvault_get(path: str):
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "mindMe/1.0",
     }
-    resp = _http_client().get(f"{GITHUB_API}/repos/{repo}/contents/{path}", headers=headers)
+    safe_path = quote(path, safe="/")
+    resp = _http_client().get(f"{GITHUB_API}/repos/{repo}/contents/{safe_path}", headers=headers)
     if resp.status_code == 404:
         return None
     resp.raise_for_status()
@@ -1723,8 +1990,12 @@ def _mindvault_get(path: str):
 
 def _vault_path_allowed(path: str) -> bool:
     """Path must sit under an allowlisted mindVault folder — no traversal, no `.me`."""
-    p = (path or "").strip().lstrip("/")
-    if not p or ".." in p or "\\" in p:
+    p = (path or "").strip()
+    if not p.endswith(".md") or p.lower().endswith(".private.md"):
+        return False
+    if any(char in p for char in ("\\", "%", "?", "#")):
+        return False
+    if any(not part or part.startswith(".") for part in p.split("/")):
         return False
     return p.startswith(_vault_allowed_prefixes())
 
@@ -1748,13 +2019,16 @@ def _vault_recent(kind: str, limit: int) -> list[dict]:
         name = e.get("name") or ""
         if not name.lower().endswith(".md") or name.lower() in ("index.md", "readme.md"):
             continue
+        path = e.get("path") or f"{folder}/{name}"
+        if not _vault_path_allowed(path):
+            continue
         m = _VAULT_NAME_DATE_RE.match(name)
         if dated and not m:
             continue  # dated folders: skip anything without a leading date
         items.append(
             {
                 "title": (m.group(2) if m else name[:-3]).replace("-", " "),
-                "path": e.get("path") or f"{folder}/{name}",
+                "path": path,
                 "date": m.group(1) if m else "",
                 "url": e.get("html_url") or "",
             }
@@ -1764,7 +2038,7 @@ def _vault_recent(kind: str, limit: int) -> list[dict]:
 
 
 @app.function_name(name="tool_vault_recent")
-@app.route(route="tools/vault_recent", methods=["GET"])
+@app.route(route="tools/vault_recent", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def tool_vault_recent(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_vault_recent(kind, limit). Newest items from a
     mindVault folder (research/notes/ideas/wiki). Never reads .me."""
@@ -1780,8 +2054,8 @@ def tool_vault_recent(req: func.HttpRequest) -> func.HttpResponse:
         limit = 5
     try:
         items = _vault_recent(kind, limit)
-    except Exception:
-        log.exception("vault_recent failed kind=%s", kind)
+    except (httpx.HTTPError, ValueError) as exc:
+        log.error("vault_recent failed error=%s", type(exc).__name__)
         return func.HttpResponse(
             json.dumps({"error": "vault unavailable"}), mimetype="application/json", status_code=503,
         )
@@ -1791,11 +2065,12 @@ def tool_vault_recent(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.function_name(name="tool_vault_read")
-@app.route(route="tools/vault_read", methods=["GET"])
+@app.route(route="tools/vault_read", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def tool_vault_read(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_vault_read(path). Markdown content of ONE
     allowlisted mindVault file. Never reads .me."""
     import base64
+    import binascii
 
     path = (req.params.get("path") or "").strip()
     if not _vault_path_allowed(path):
@@ -1808,8 +2083,8 @@ def tool_vault_read(req: func.HttpRequest) -> func.HttpResponse:
         )
     try:
         data = _mindvault_get(path)
-    except Exception:
-        log.exception("vault_read failed")
+    except (httpx.HTTPError, ValueError) as exc:
+        log.error("vault_read failed error=%s", type(exc).__name__)
         return func.HttpResponse(
             json.dumps({"error": "vault unavailable"}), mimetype="application/json", status_code=503,
         )
@@ -1818,10 +2093,20 @@ def tool_vault_read(req: func.HttpRequest) -> func.HttpResponse:
             json.dumps({"error": "not found"}), mimetype="application/json", status_code=404,
         )
     try:
-        content = base64.b64decode(data.get("content") or "").decode("utf-8")
-    except Exception:
-        content = ""
+        if data.get("encoding") != "base64" or not isinstance(data.get("content"), str):
+            raise ValueError("Unsupported vault file encoding")
+        content = base64.b64decode("".join(data["content"].split()), validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        log.error("vault_read failed: invalid file encoding")
+        return func.HttpResponse(
+            json.dumps({"error": "vault content unavailable"}),
+            mimetype="application/json", status_code=502,
+        )
     return func.HttpResponse(
-        json.dumps({"path": path, "content": content[:_VAULT_READ_MAX_CHARS]}),
+        json.dumps({
+            "path": path,
+            "content": content[:_VAULT_READ_MAX_CHARS],
+            "truncated": len(content) > _VAULT_READ_MAX_CHARS,
+        }),
         mimetype="application/json", status_code=200,
     )

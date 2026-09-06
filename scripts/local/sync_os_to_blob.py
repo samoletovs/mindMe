@@ -1,28 +1,33 @@
-"""Sync the Personal OS markdown tree to Azure Blob Storage.
+r"""Sync the Personal OS markdown tree to Azure Blob Storage.
 
-Replaces the daily encrypted briefing-context blob with an authoritative cloud
-mirror of the OS, so the Function App can build the morning briefing entirely
+Replaces the daily encrypted briefing-context blob with an upload-only cloud
+copy of the OS, so the Function App can build the morning briefing entirely
 in Azure (no laptop dependency at run-time).
 
 Run this whenever you've edited the OS and want the cloud copy refreshed:
 
-    .\\.venv\\Scripts\\python.exe scripts\\local\\sync_os_to_blob.py
+    .\.venv\Scripts\python.exe scripts\local\sync_os_to_blob.py
 
 Or wire it into a VS Code task / git pre-push hook later if you want push-style
 semantics. This is NOT a scheduled task — that's the whole point.
 
 What's uploaded
 ---------------
-- Every `*.md` file under `%USERPROFILE%\\OneDrive\\.vscode\\.me` (override via
-  ME_OS_ROOT env var)
+- Every `*.md` file under `%USERPROFILE%\OneDrive\.vscode\.me` (override via
+  ME_OS_ROOT in the environment or the repo's .env)
 - Plus a tiny `_manifest.json` at the container root recording the sync time
-  and file count, so the Function can detect staleness.
+  and the complete `source_files` inventory (relative filenames only), so the
+  Function can exclude retained, deleted source files and detect staleness.
 
 What's NOT uploaded
 -------------------
 - Non-markdown files (binaries, scripts, data exports)
-- Anything under `.git`, `.venv`, `node_modules`, `__pycache__`
-- Anything matching `.gitignore` patterns at the root (best-effort)
+- Anything under `.git`, `.venv`, `node_modules`, `__pycache__`, `.vscode`, `.cache`
+- Symbolic links to files or directories
+
+`.gitignore` is NOT consulted. Deleted or newly excluded files are NOT removed
+from the container. A failed read, directory scan or upload exits nonzero and
+does not publish a fresh manifest; already uploaded files are not rolled back.
 
 Security model
 --------------
@@ -34,19 +39,23 @@ Security model
 
 Logs
 ----
-File names + sizes + counts. Never content.
+Sizes + counts + timings + error types. Never names, paths or content.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import stat
 import sys
 import time
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 
+from azure.core.exceptions import AzureError
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient, ContentSettings
 from dotenv import load_dotenv
@@ -54,15 +63,6 @@ from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENV_PATH = REPO_ROOT / ".env"
-
-ME_ROOT = Path(
-    os.environ.get(
-        "ME_OS_ROOT",
-        os.path.expandvars(r"%USERPROFILE%\OneDrive\.vscode\.me"),
-    )
-)
-
-CONTAINER = os.environ.get("AZURE_STORAGE_PERSONAL_OS_CONTAINER", "personal-os")
 
 EXCLUDE_DIRS = {".git", ".venv", "node_modules", "__pycache__", ".vscode", ".cache"}
 
@@ -74,18 +74,28 @@ def _setup_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
-    logging.getLogger("azure").setLevel(logging.WARNING)
+    # SDK credential warnings can contain paths and raw exception messages.
+    logging.getLogger("azure").setLevel(logging.CRITICAL)
+    # Explicit child levels bypass the parent's threshold; restore inheritance.
+    for name in tuple(logging.Logger.manager.loggerDict):
+        if name.startswith("azure."):
+            logging.getLogger(name).setLevel(logging.NOTSET)
 
 
-def _iter_markdown(root: Path):
-    for p in root.rglob("*.md"):
-        try:
-            rel_parts = p.relative_to(root).parts
-        except ValueError:
-            continue
-        if any(part in EXCLUDE_DIRS for part in rel_parts):
-            continue
-        yield p
+def _raise_walk_error(error: OSError) -> None:
+    raise error
+
+
+def _iter_markdown(root: Path) -> Iterator[Path]:
+    # rglob suppresses scan errors, which would falsely certify a partial tree.
+    for directory, directories, filenames in os.walk(
+        root, onerror=_raise_walk_error, followlinks=False
+    ):
+        directories[:] = sorted(name for name in directories if name not in EXCLUDE_DIRS)
+        for name in sorted(filenames):
+            path = Path(directory) / name
+            if name not in EXCLUDE_DIRS and path.match("*.md") and not path.is_symlink():
+                yield path
 
 
 def _blob_path_for(root: Path, abs_path: Path) -> str:
@@ -96,95 +106,98 @@ def _blob_path_for(root: Path, abs_path: Path) -> str:
 
 def main() -> int:
     _setup_logging()
-    load_dotenv(ENV_PATH)
-
-    account = os.environ.get("AZURE_STORAGE_ACCOUNT")
-    if not account:
-        log.error("AZURE_STORAGE_ACCOUNT not set in .env")
-        return 2
-    if not ME_ROOT.exists():
-        log.error("Personal OS root not found: %s", ME_ROOT)
+    try:
+        load_dotenv(ENV_PATH)
+    except OSError as exc:
+        log.error(f"Configuration read failed error_type={type(exc).__name__}")
         return 2
 
-    log.info("syncing %s -> %s/%s", ME_ROOT, account, CONTAINER)
-
-    credential = DefaultAzureCredential()
-    bsc = BlobServiceClient(
-        account_url=f"https://{account}.blob.core.windows.net",
-        credential=credential,
+    root_value = os.environ.get(
+        "ME_OS_ROOT",
+        os.path.expandvars(r"%USERPROFILE%\OneDrive\.vscode\.me"),
     )
-    container_client = bsc.get_container_client(CONTAINER)
+    container_name = os.environ.get("AZURE_STORAGE_PERSONAL_OS_CONTAINER", "personal-os")
+    account = os.environ.get("AZURE_STORAGE_ACCOUNT")
+    if not account or not account.strip():
+        log.error("AZURE_STORAGE_ACCOUNT is not configured")
+        return 2
+    if not root_value.strip() or not container_name.strip():
+        log.error("Personal OS root and container must not be blank")
+        return 2
+    root = Path(root_value)
+    try:
+        root_mode = root.stat().st_mode
+    except OSError as exc:
+        log.error(f"Personal OS root unavailable error_type={type(exc).__name__}")
+        return 2
+    if not stat.S_ISDIR(root_mode):
+        log.error("Personal OS root is not a directory")
+        return 2
 
     started = time.monotonic()
     uploaded = 0
     skipped_unchanged = 0
     total_bytes = 0
+    source_files: list[str] = []
 
-    md_settings = ContentSettings(content_type="text/markdown; charset=utf-8")
+    try:
+        with DefaultAzureCredential() as credential, BlobServiceClient(
+            account_url=f"https://{account}.blob.core.windows.net",
+            credential=credential,
+        ) as bsc:
+            container_client = bsc.get_container_client(container_name)
+            md_settings = ContentSettings(content_type="text/markdown; charset=utf-8")
 
-    # Build a name -> size map of existing blobs (cheap pre-filter so we skip
-    # uploads whose payload is byte-identical-sized AND mtime-newer-than-on-disk).
-    # Note: we don't fetch hashes — the size check is a cheap heuristic; we
-    # always upload when the local file is newer than the blob's last-modified.
-    log.info("listing existing blobs...")
-    existing: dict[str, tuple[int, datetime]] = {}
-    for b in container_client.list_blobs():
-        existing[b.name] = (b.size, b.last_modified)
-    log.info("existing blob count=%d", len(existing))
+            existing: dict[str, tuple[int, str | None]] = {}
+            for blob in container_client.list_blobs(include=["metadata"]):
+                existing[blob.name] = (blob.size, (blob.metadata or {}).get("sha256"))
+            log.info(f"existing blob count={len(existing)}")
 
-    for path in _iter_markdown(ME_ROOT):
-        rel = _blob_path_for(ME_ROOT, path)
-        try:
-            stat = path.stat()
-        except OSError:
-            log.warning("stat failed path=%s", rel)
-            continue
+            for path in _iter_markdown(root):
+                rel = _blob_path_for(root, path)
+                data = path.read_bytes()
+                digest = hashlib.sha256(data).hexdigest()
+                source_files.append(rel)
+                if existing.get(rel) == (len(data), digest):
+                    skipped_unchanged += 1
+                    continue
 
-        local_size = stat.st_size
-        local_mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                container_client.upload_blob(
+                    name=rel,
+                    data=data,
+                    overwrite=True,
+                    content_settings=md_settings,
+                    metadata={"sha256": digest},
+                )
+                uploaded += 1
+                total_bytes += len(data)
+                log.info(f"uploaded size={len(data)}")
 
-        meta = existing.get(rel)
-        if meta is not None:
-            blob_size, blob_modified = meta
-            if blob_size == local_size and blob_modified >= local_mtime:
-                skipped_unchanged += 1
-                continue
-
-        try:
-            data = path.read_bytes()
-        except OSError:
-            log.warning("read failed path=%s", rel)
-            continue
-
-        container_client.upload_blob(
-            name=rel,
-            data=data,
-            overwrite=True,
-            content_settings=md_settings,
+            # Publish freshness only after every candidate has been read and synced.
+            manifest = {
+                "synced_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "files_uploaded": uploaded,
+                "files_unchanged": skipped_unchanged,
+                "bytes_uploaded": total_bytes,
+                "source_files": sorted(source_files),
+            }
+            container_client.upload_blob(
+                name="_manifest.json",
+                data=json.dumps(manifest, indent=2).encode("utf-8"),
+                overwrite=True,
+                content_settings=ContentSettings(content_type="application/json"),
+            )
+    except (OSError, AzureError) as exc:
+        log.error(
+            f"sync failed error_type={type(exc).__name__} uploaded={uploaded} "
+            f"unchanged={skipped_unchanged} bytes={total_bytes}"
         )
-        uploaded += 1
-        total_bytes += len(data)
-        log.info("uploaded path=%s size=%d", rel, len(data))
-
-    # Manifest
-    manifest = {
-        "synced_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "files_uploaded": uploaded,
-        "files_unchanged": skipped_unchanged,
-        "bytes_uploaded": total_bytes,
-        "source": str(ME_ROOT),
-    }
-    container_client.upload_blob(
-        name="_manifest.json",
-        data=json.dumps(manifest, indent=2).encode("utf-8"),
-        overwrite=True,
-        content_settings=ContentSettings(content_type="application/json"),
-    )
+        return 1
 
     duration = time.monotonic() - started
     log.info(
-        "sync complete uploaded=%d unchanged=%d bytes=%d duration=%.2fs",
-        uploaded, skipped_unchanged, total_bytes, duration,
+        f"sync complete uploaded={uploaded} unchanged={skipped_unchanged} "
+        f"bytes={total_bytes} duration={duration:.2f}s"
     )
     return 0
 

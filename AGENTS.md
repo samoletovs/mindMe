@@ -24,6 +24,11 @@
 
 ## Code conventions
 
+Azure SDK auto-tracing is disabled too (`azure_sdk`, `AZURE_TRACING_ENABLED=false`,
+and the Azure Core tracing setting). SDK HTTP logs must stay suppressed: private
+blob filenames are personal data even when bodies are not logged. Keep the offline
+SDK telemetry regression alongside any tracing changes.
+
 - **Python 3.11+** with pinned `requirements.txt` files. Type hints required on public functions.
 - **Async** for I/O (HTTP, Storage, Telegram, Foundry calls). No blocking calls in Function handlers.
 - **Structured logging** via `structlog` or `logging` with JSON formatter. App Insights consumes this.
@@ -45,6 +50,10 @@
 - "deploy" → run `infrastructure/main.bicep` then `func azure functionapp publish`. Never deploy without verifying budget first.
 - "test the bot" → use `scripts/dev/smoke_agent.py` for a Foundry round-trip or DM `/ping` to the deployed Telegram bot.
 - "update the agent/tool contract" → edit `agent/openapi-tools.json`, then redeploy the hosted agent via the Foundry workflow or local bootstrap flow.
+- Agent tools require Function auth and the Foundry `mindme-tools` Custom Keys connection (`x-functions-key`). Never restore anonymous tool access to work around a missing connection.
+- Timers run in UTC on the current Linux Flex app: daily 07:30 and Sunday 18:00. Do not describe them as local time.
+- Captures are forwarded to memex, not written by the legacy queue handler. A forwarding failure must remain retryable, and callback queries must pass the same chat allowlist.
+- Briefing section preferences and the onboarding marker remain in the private container until explicitly removed. Ordinary companion calls are single-turn and use `store=False`; no durable chat memory is maintained.
 - "change the morning briefing or Telegram behavior" → edit `harness/function_app.py`, then redeploy the Function App.
 
 ## What this repo is NOT

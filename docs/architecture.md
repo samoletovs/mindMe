@@ -1,6 +1,6 @@
 # mindMe — architecture
 
-> Current architecture as of **2026-05-16**. Supersedes the original Phase 2
+> Cloud architecture introduced **2026-05-16**, reviewed **2026-09-06**. Supersedes the original Phase 2
 > design (see [phase2-design.md](phase2-design.md) for the historical record
 > and the trade-off discussion that produced this pivot).
 
@@ -70,15 +70,40 @@ The canonical Personal OS markdown lives in **two** places:
 | `%USERPROFILE%\OneDrive\.vscode\.me` on the laptop | Your editor's working copy. This is where you read, edit, and grep. |
 | `personal-os/` container in `stmindmeymcpt` | What the Function App reads at briefing time. Cloud-side authoritative copy. |
 
-The two are kept in sync by `scripts/local/sync_os_to_blob.py`, which you run
+The local tree is the source; the cloud copy is an upload-only mirror, not a
+transactional replica. It is refreshed by `scripts/local/sync_os_to_blob.py`, which you run
 **when** you've made edits worth getting into tomorrow's briefing. Not on a
 timer. The Function App does not care whether you ran it today, yesterday, or
-last week — it always reads whatever is currently in the container.
+last week — it reads the source files admitted by the latest successful inventory. The runtime
+now exposes the manifest's sync time and warns when it is at least two calendar
+days old, or when freshness is unknown. A new briefing date does not mean new inputs.
+
+### Source inventory and retained blobs
+
+Each successful local sync publishes `_manifest.json.source_files`, the complete
+list of relative markdown filenames scanned and either uploaded or hash-matched.
+The private container retains deleted/renamed blobs, but runtime text reads,
+listings and area headlines exclude source files absent from this inventory.
+An empty inventory exposes no source files. `system/mindme/` preferences and
+onboarding state are runtime-managed and are not filtered or deleted.
+
+One validated inventory is pinned to a briefing/vault snapshot using a scoped
+context, including nested reads and freshness checks. It is discarded on both
+success and failure; there is no cross-invocation inventory cache. Invalid
+inventory schemas fail the source read/snapshot rather than reverting to an
+unfiltered mirror. Legacy manifests without `source_files` still permit legacy
+reads, but recent timestamps report unknown/legacy freshness, not current.
+Older legacy timestamps retain their stale status and age.
+
+This is not a transactional content snapshot: uploads can overlap a reader, and
+already uploaded content is not rolled back after a failed sync. Inventory
+publication fixes retained-file visibility without destructive pruning.
 
 Open question (not solved today): edit workflow as you become more nomadic.
 The cleanest evolution is probably one of:
 - Wire `sync_os_to_blob.py` into a VS Code `tasks.json` and a keyboard shortcut.
-- Hang it off a git pre-push hook once `.me` becomes a private GitHub repo.
+- For the non-sensitive mindVault tier only, consider an event-driven publish
+  after approved changes. The sensitive `.me` tier must never become a git repo.
 - Replace it entirely with VS Code's "Azure Storage" extension as the editor target.
 
 Pick when motivated; doesn't affect the runtime architecture.
@@ -98,7 +123,31 @@ private `personal-os/` container — section names only, no personal content, so
 the exposure boundary is unchanged. `get_briefing_context` trims its snapshot to
 the enabled sections and echoes them back in `sections`; the 07:30 timer builds
 its prompt (and the local fallback briefing its paragraphs) from the same list.
-An unreadable or missing preferences blob degrades to "all sections on".
+Only a missing preferences blob defaults to all sections. Invalid preferences
+or storage failures must not re-enable disabled sections. Local fallback
+composition respects an empty selection and does not fetch disabled weather.
+
+### September 2026 runtime boundaries
+
+- `/api/tools/*` requires Function authentication. Foundry injects
+  `x-functions-key` from a project connection; no key is embedded in the OpenAPI
+  document. Anonymous routes are limited to liveness and the Telegram webhook
+  (which independently checks its webhook secret and chat allowlist).
+- Ordinary conversation is stateless (`store=False`), without creating orphan
+  Foundry conversation objects. Multi-turn context remains a separate feature.
+- Capture goes through memex. Failed forwarding returns 503 for Telegram retries.
+  A capture acknowledgement and downstream storage completion are different events.
+- The active snapshot is flat core context, not the legacy tiered/encrypted builder.
+  It includes selected text as well as counts; selection is not PII redaction.
+- Missing optional files differ from inaccessible storage. Unavailable task/idea
+  counts are null, not zero. Yesterday's journal is actually the previous date,
+  including at month/year boundaries.
+- Telegram messages are split without discarding characters. Delivery failures
+  surface as sanitized errors; timers cannot report success after a failed send.
+- The legacy capture queue refuses unsupported messages rather than deleting
+  them. Check its poison queue if an old producer is still writing to it.
+- Linux Flex timers currently run at 07:30 UTC daily and Sunday 18:00 UTC,
+  not Stockholm or Riga local time.
 
 ## 4. Security model
 
@@ -114,6 +163,9 @@ An unreadable or missing preferences blob degrades to "all sections on".
 - **No SAS, no account keys.** All access goes through Entra-issued tokens.
 - **Bot token + Telegram webhook secret** are still in Key Vault; the Function
   App reads them via `@Microsoft.KeyVault(...)` app-setting references.
+- **Tool authentication** uses a dedicated named Function key in the Foundry
+  `mindme-tools` Custom Keys project connection. Rotate both together. A Function
+  host key is app-scoped, not a network/private-endpoint boundary.
 
 ## 5. Re-enabling app-layer encryption (if the trade stops being acceptable)
 
@@ -154,9 +206,9 @@ What's **not** on the laptop anymore:
 | Phase | Status | Notes |
 |---|---|---|
 | 1. Foundation | ✅ complete (2026-05-11) | Repo, Foundry project, Telegram bot, end-to-end ping |
-| 2. Morning briefing | 🟡 in progress | Cloud-native rewrite complete locally (2026-05-16). Awaiting Function App deploy + 07:30 observation. |
-| 3. Quick capture | ⏳ | |
-| 4. Stabilize | ⏳ | Foundry evals, prompt optimizer |
+| 2. Morning briefing | Implemented | Cloud runtime is deployed; source freshness and actual delivery must be checked separately. See deploy.md. |
+| 3. Quick capture | Implemented via memex | Forwarding is tested; downstream persistence is owned by memex. |
+| 4. Stabilize | In progress | Reliability tests exist; usefulness evaluation and closed-loop task actions remain. |
 
 ## 8. Tracing (added 2026-05-17, agentFlow Phase 1)
 
@@ -166,6 +218,11 @@ Toolkit local viewer both consume the same data. This is the visualization
 substrate for the `agentFlow` web app (`agentflow.naurolabs.com`).
 
 ### 8.1 Wiring
+
+Manual spans disable automatic exception recording/status descriptions. Errors
+are logged by type/status only, because SDK exception messages may contain request
+URLs, credentials, or personal content. HTTP auto-instrumentation and GenAI
+content capture are forcibly disabled even if an environment setting requests them.
 
 - `mindMe/harness/function_app.py` calls `configure_azure_monitor()` at module
   load when `APPLICATIONINSIGHTS_CONNECTION_STRING` is present (always true in

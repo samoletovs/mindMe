@@ -2,7 +2,8 @@
 
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the
-> Foundry `companion` agent (currently `companion:3`) calls back to this app.
+> Foundry `companion` agent calls back to this app. Do not infer the current
+> version from this historical deployment note; query the project when rolling out.
 > The sections below are the maintenance runbook + the hard-won deploy recipe.
 
 ## ⚠️ Root cause: the 503 SCM wedge (read before touching infra)
@@ -69,6 +70,12 @@ curl.exe -s -o NUL -w "peer   %{http_code}`n" https://func-memex-f5o6h2un2sqiu.s
 
 ## Pre-deploy checklist
 
+**Privacy-preserving verification:** do not run `test_briefing_snapshot.py` or
+download private blobs as a deployment smoke test. Use the mocked test suite,
+`/api/health`, anonymous/authenticated invalid-path probes, and synthetic Foundry
+requests. Read only `_manifest.json` **blob properties** to check mirror freshness;
+its contents and the briefing are personal data.
+
 ```powershell
 # 1. Active subscription is the personal one
 az account show --query name -o tsv
@@ -82,10 +89,9 @@ az functionapp show -g foundrylab-rg -n func-mindme-ymcptc --query '{name:name, 
 az storage blob list --account-name stmindmeymcpt --container-name personal-os --auth-mode login --query 'length([])'
 # Expect: 68 (67 markdown files + _manifest.json) or more if you've re-synced
 
-# 4. Run the local smoke test one more time
-cd c:\vsCode\.nauroLabs\mindMe
-.\.venv\Scripts\python.exe scripts\local\test_briefing_snapshot.py
-# Expect: JSON with today's date, dashboard slices, area H1s
+# 4. Run mocked tests using Python 3.11 (same as the deployed runtime)
+python -m pytest
+# Expect: all checked-in tests pass; no personal content or cloud calls
 
 # 5. Ensure the dig PAT secret exists (used by `/dig` issue creation)
 az keyvault secret show --vault-name kv-mindme-ymcpt --name dig-github-token --query id -o tsv
@@ -96,6 +102,11 @@ az keyvault secret show --vault-name kv-mindme-ymcpt --name dig-github-token --q
 #    it from this secret — a missing/empty value silently breaks the capture flows.
 az keyvault secret show --vault-name kv-mindme-ymcpt --name memex-webhook-url --query id -o tsv
 # Expect: a Key Vault secret resource ID (non-empty)
+
+# 7. Before a Bicep redeploy, seed memex-state-url in Key Vault as well.
+#    MEMEX_STATE_URL is a URL containing a Function key; never print it.
+az keyvault secret show --vault-name kv-mindme-ymcpt --name memex-state-url --query id -o tsv
+# Bicep now declares the private personal-os container and this state URL setting.
 ```
 
 ## Deploy
@@ -125,6 +136,39 @@ If publish fails with a build error about a missing package, double-check
 `azure-keyvault-secrets`. Both are confirmed unused by the new code.
 
 ## Re-register the Foundry agent (when tool URLs or hostname change)
+
+### Tool authentication rollout (required)
+
+All four `/api/tools/*` endpoints require Function auth. The agent registration
+uses `MINDME_TOOLS_CONNECTION_NAME` (default `mindme-tools`) and refuses to create
+a tool-enabled version if that connection cannot be resolved.
+
+1. Create a **dedicated named host Function key**, not a master key:
+
+   ```powershell
+   az functionapp keys set -g foundrylab-rg -n func-mindme-ymcptc `
+     --key-type functionKeys --key-name mindme-tools -o none
+   ```
+
+2. Create a **project-scoped Custom Keys connection** named `mindme-tools` in the
+   Foundry `mindMe` project. Its target is the Function App's `/api` URL and its
+   only credential entry is `x-functions-key`, containing the named Function key.
+   Keep the key in the connection, not `.env`, prompts, source, or the OpenAPI spec.
+   For scripted rotation, capture the key/API response in memory and suppress
+   request/response logging. Update both ends together.
+3. Register the authenticated companion version **before** publishing the
+   Function-auth routes. The header is accepted by both the old and new app,
+   avoiding a coordination outage.
+4. Publish the harness, then verify all four routes reject a missing/wrong key.
+   Verify a valid key reaches validation using
+   `/api/tools/vault_read?path=__invalid_review_probe__` (HTTP 400, no file read).
+   Never use real personal paths to smoke-test authentication.
+5. Verify Foundry tool authentication using a synthetic, weather-only test agent
+   with the same connection. Delete that temporary agent after testing.
+
+If a test fails, repair the connection or key; do not roll back to anonymous
+private-data tools. `/api/health` remains anonymous; the Telegram webhook uses its
+own secret header and single-chat allowlist.
 
 The `companion` agent calls back to this app's `/api/tools/*` endpoints, so its
 tool URLs are pinned to the function app hostname. If you rebuild the app under a

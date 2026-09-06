@@ -162,6 +162,14 @@ resource briefingContainer 'Microsoft.Storage/storageAccounts/blobServices/conta
   }
 }
 
+resource personalOsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'personal-os'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 resource queueService 'Microsoft.Storage/storageAccounts/queueServices@2023-05-01' = {
   parent: storage
   name: 'default'
@@ -332,6 +340,10 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           value: 'briefing-context'
         }
         {
+          name: 'AZURE_STORAGE_PERSONAL_OS_CONTAINER'
+          value: personalOsContainer.name
+        }
+        {
           name: 'AZURE_STORAGE_CAPTURE_QUEUE'
           value: 'capture-events'
         }
@@ -381,6 +393,10 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=memex-webhook-url)'
         }
         {
+          name: 'MEMEX_STATE_URL'
+          value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=memex-state-url)'
+        }
+        {
           name: 'BRIEFING_ENCRYPTION_KEY'
           value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=briefing-encryption-key)'
         }
@@ -393,8 +409,12 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           value: 'false'
         }
         {
+          name: 'AZURE_TRACING_ENABLED'
+          value: 'false'
+        }
+        {
           name: 'OTEL_PYTHON_DISABLED_INSTRUMENTATIONS'
-          value: 'httpx,requests,urllib,urllib3,aiohttp-client'
+          value: 'httpx,requests,urllib,urllib3,aiohttp-client,azure_sdk'
         }
       ]
     }

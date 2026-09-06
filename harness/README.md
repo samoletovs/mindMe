@@ -8,12 +8,29 @@ mindMe. Replaces the long-poll `scripts/dev/telegram_bridge.py` in production.
 | Trigger | Name | Purpose |
 |---|---|---|
 | HTTP POST `/api/telegram_webhook` | `telegram_webhook` | Telegram update receiver. Verifies `X-Telegram-Bot-Api-Secret-Token`. Enforces allowlist. |
-| Timer `0 30 7 * * *` | `morning_briefing_timer` | Sends the daily briefing at 07:30 (server time). |
+| Timer `0 30 7 * * *` | `morning_briefing_timer` | Sends the daily briefing at 07:30 UTC. |
+| Timer `0 0 18 * * 0` | `weekly_review_timer` | Weekly-review nudge, Sunday 18:00 UTC. |
 | Timer `0 */30 * * * *` | `reaper_poll_timer` | Polls GitHub for finished Copilot-agent PRs in mindVault/familyVault and fires the existing reaper workflow via `workflow_dispatch`. Moves the reapers' idle polling off metered GitHub Actions minutes. See [github_reapers.py](github_reapers.py). |
-| Queue `capture-events` | `capture_drain` | Phase 3 placeholder. Receives Telegram captures forwarded by the webhook. |
+| Queue `capture-events` | `capture_drain` | Legacy, unsupported. Raises instead of consuming and discarding messages; Functions retries then retains them in the poison queue. Active captures go to memex. |
 | HTTP GET `/api/health` | `health` | Uptime probe. |
 | HTTP POST `/api/tools/briefing_context?tier=core|extended|deep&include_meta=true|false` | `tool_briefing_context` | Foundry agent tool: returns the requested sanitized briefing view built in-process from `personal-os/` (`core` default). |
 | HTTP GET `/api/tools/weather?location=...` | `tool_weather` | Foundry agent tool: wttr.in passthrough. |
+| HTTP GET `/api/tools/vault_recent` | `tool_vault_recent` | List recent allowed mindVault files. |
+| HTTP GET `/api/tools/vault_read` | `tool_vault_read` | Read an allowed markdown file; truncated responses are labelled. |
+
+All `/api/tools/*` routes require Function authentication through `x-functions-key`.
+The Foundry agent uses the `mindme-tools` project connection, not anonymous access.
+See [the coordinated authentication rollout](../docs/deploy.md).
+
+Failed memex forwarding returns HTTP 503 so Telegram can retry. Both messages
+and callback queries enforce the single-chat allowlist. A successful handoff
+means memex accepted the request, not that downstream classification/storage has
+finished. The health endpoint is a **liveness probe**, not a dependency check.
+
+The cloud snapshot is flat (`core`); `extended`/`deep` are legacy compatibility
+views and currently contain no entries. Storage failures are not represented as
+an empty vault, and unavailable open-loop state has null counts. The sync
+manifest supplies freshness metadata without exposing its source path.
 
 ## Local dev
 
