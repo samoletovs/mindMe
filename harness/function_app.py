@@ -1726,9 +1726,16 @@ def morning_briefing_timer(timer: func.TimerRequest) -> None:
     started = time.monotonic()
     chat_id = int(os.environ["TELEGRAM_ALLOWED_CHAT_ID"])
     sections: list[str] | None = None
+    warning = ""
 
     try:
         sections = _briefing_prefs()
+        if set(sections) - {"weather"}:
+            try:
+                warning = _freshness_warning(_mirror_freshness(date.today()))
+            except (AzureError, httpx.HTTPError, ValueError, KeyError) as exc:
+                log.error("briefing freshness unavailable error=%s", type(exc).__name__)
+                warning = _freshness_warning({})
         reply = _ask_companion(_briefing_seed(sections))
     except (AzureError, OpenAIError, httpx.HTTPError, ValueError, KeyError) as exc:
         log.error("briefing generation failed error=%s", type(exc).__name__)
@@ -1740,15 +1747,9 @@ def morning_briefing_timer(timer: func.TimerRequest) -> None:
                 "mindMe could not load today's briefing context or preferences. "
                 "No personal briefing was generated. Please try again later."
             )
-    # Freshness is a delivery guarantee, even if the model ignores its instructions.
-    if sections is not None and set(sections) - {"weather"}:
-        try:
-            warning = _freshness_warning(_mirror_freshness(date.today()))
-        except (AzureError, httpx.HTTPError, ValueError, KeyError) as exc:
-            log.error("briefing freshness unavailable error=%s", type(exc).__name__)
-            warning = _freshness_warning({})
-        if warning and not reply.startswith(warning):
-            reply = f"{warning}\n\n{reply}"
+    # A sync during generation must not certify an already-generated reply as fresh.
+    if warning and not reply.startswith(warning):
+        reply = f"{warning}\n\n{reply}"
     _telegram_send(chat_id, reply)
     log.info(
         "briefing sent chat=%s out_len=%d duration=%.2fs",

@@ -330,6 +330,25 @@ def test_timer_prepends_manifest_warning_even_when_companion_ignores_it(
     timer_calls.fallback.assert_not_called()
 
 
+def test_sync_during_generation_cannot_remove_the_stale_warning(
+    mirror: Mirror, timer_calls: TimerCalls,
+) -> None:
+    mirror.blobs["_manifest.json"] = _manifest([], "2026-07-30T07:24:22+00:00")
+
+    def generate(seed: str) -> str:
+        mirror.blobs["_manifest.json"] = _manifest([])
+        return "Synthetic reply based on older context."
+
+    timer_calls.companion.side_effect = generate
+    app.morning_briefing_timer(None)
+
+    timer_calls.send.assert_called_once_with(
+        7,
+        "Personal context may be stale: mirror last synced 38d ago.\n\n"
+        "Synthetic reply based on older context.",
+    )
+
+
 @pytest.mark.parametrize("sections", [["weather"], []])
 def test_timer_skips_metadata_and_personal_warning_without_personal_sections(
     mirror: Mirror, timer_calls: TimerCalls, sections: list[str]
