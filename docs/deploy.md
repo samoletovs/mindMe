@@ -27,6 +27,36 @@ Those user workflows still need a consented acceptance trial with fresh inputs.
 Freshly created temporary Foundry agents briefly returned 404 during propagation;
 the verification retried that specific condition with a bounded delay.
 
+## Production confirmation: 2026-09-07
+
+The first scheduled run after the release executed end to end, which is the
+evidence the 2026-09-06 entry above could not yet provide:
+
+- `morning_briefing_timer` fired at 07:30:00 UTC with no failures.
+- The agent called `tool_briefing_context` (07:30:07) and `tool_weather`
+  (07:30:18) — the authenticated tools working through the real project
+  connection in production, not only in the synthetic smoke test.
+- `briefing sent ... out_len=735 duration=23.58s` at 07:30:23 UTC.
+
+Two defects surfaced in that run:
+
+1. **`fetch_open_loops failed error=HTTPStatusError`.** `memex-state-url` had no
+   `code=` parameter, so `/state` returned 401 and open ideas/tasks had never
+   reached a briefing. Fixed by seeding the key and pointing the app setting at
+   the Key Vault reference the Bicep already declares; the reference reports
+   `Resolved`. A `/status` afterwards logged a clean `round-trip ... out_len=218`
+   with no `fetch_open_loops` error, and `/state` returns 13 open tasks.
+   The old code reported this as *zero* open loops; only the "unavailable is not
+   zero" change made it visible.
+2. **`capture_drain` fails to register its `queueTrigger` binding.** Pre-existing
+   and not on the active capture path (captures go to memex over HTTP), but the
+   host logs it as an error on every start. Left alone deliberately — the queue
+   is legacy and the handler already refuses to discard messages.
+
+**Telemetry is unreliable on this app.** A 30-minute timer shows only sporadic
+`requests` rows, and `-o table` renders these queries as blank — use `-o json`.
+Treat absence of telemetry as absence of evidence, not evidence of absence.
+
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the
 > Foundry `companion` agent calls back to this app. Do not infer the current
@@ -130,11 +160,29 @@ az keyvault secret show --vault-name kv-mindme-ymcpt --name dig-github-token --q
 az keyvault secret show --vault-name kv-mindme-ymcpt --name memex-webhook-url --query id -o tsv
 # Expect: a Key Vault secret resource ID (non-empty)
 
-# 7. Before a Bicep redeploy, seed memex-state-url in Key Vault as well.
-#    MEMEX_STATE_URL is a URL containing a Function key; never print it.
-az keyvault secret show --vault-name kv-mindme-ymcpt --name memex-state-url --query id -o tsv
-# Bicep now declares the private personal-os container and this state URL setting.
+# 7. Verify memex-state-url actually CARRIES a Function key, not just that it exists.
+#    Both URLs need `?...&code=<memex function key>`; without it memex answers 401 and
+#    the briefing loses open ideas/tasks. Check the shape, never print the value:
+az keyvault secret show --vault-name kv-mindme-ymcpt --name memex-state-url `
+  --query "contains(value, 'code=')" -o tsv
+# Expect: true. Bicep declares this as a Key Vault reference, so a redeploy takes
+# whatever this secret holds.
 ```
+
+> **Seed both memex URLs with a key.** On 2026-09-07 `memex-state-url` held
+> `.../api/state?vault=mindMe` with **no `code=` parameter**, so every call returned
+> 401 and open ideas/tasks never reached a briefing. It was invisible because the old
+> code swallowed the error and reported zero open loops; the current code reports
+> *unavailable* and logs `fetch_open_loops failed`, which is how it was found.
+>
+> Set it with the `code=` query parameter appended. On Windows, pass the value
+> through the CLI's Python directly — `az.cmd` treats the `&` in the URL as a
+> command separator and silently stores a truncated value:
+>
+> ```powershell
+> & "C:\Program Files\Microsoft SDKs\Azure\CLI2\python.exe" -IBm azure.cli `
+>   keyvault secret set --vault-name kv-mindme-ymcpt --name memex-state-url --value $full
+> ```
 
 ## Deploy
 
