@@ -11,6 +11,9 @@ from typing import Any
 
 MAX_TEXT = 700
 MAX_PROPOSALS = 1
+MAX_MODEL_SOURCES = 24
+MAX_MODEL_CHANGES = 2
+MAX_MODEL_GOALS = 5
 _SECRET = re.compile(
     r"(?i)(?:\b(?:password|api[_ -]?key|token|secret)\s*[:=]\s*\S+|"
     r"\bBearer\s+\S+|https?://\S+[?&](?:code|key|token)=\S+|"
@@ -77,18 +80,48 @@ def source_map(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return sources
 
 
+def _select_model_sources(
+    context: dict[str, Any], sources: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Reserve change/goal evidence before task-first filling; due tasks render separately."""
+    changes = [
+        sources[item["path"]] for item in context.get("changes", [])
+        if item.get("path") in sources
+    ][:MAX_MODEL_CHANGES]
+    goals = [item for item in sources.values() if item["kind"] == "goal"][:MAX_MODEL_GOALS]
+    remaining = sorted(
+        sources.values(), key=lambda item: (item["kind"] != "task", item["kind"] != "goal"),
+    )
+    selected: dict[str, dict[str, Any]] = {}
+    for item in [*changes, *goals, *remaining]:
+        selected.setdefault(item["path"], item)
+        if len(selected) == MAX_MODEL_SOURCES:
+            break
+    return list(selected.values())
+
+
 def model_input(context: dict[str, Any], memories: list[dict[str, Any]]) -> dict[str, Any]:
     """Keep operational permissions out of model-controlled data."""
     sources = source_map(context)
-    selected = sorted(
-        sources.values(), key=lambda item: (item["kind"] != "task", item["kind"] != "goal"),
-    )[:24]
+    selected = _select_model_sources(context, sources)
+    selected_paths = {item["path"] for item in selected}
+    changes = [
+        item for item in context.get("changes", [])
+        if item.get("path") in selected_paths
+    ]
+    deferred = len(sources) - len(selected)
+    warnings = list(context.get("warnings", []))
+    if deferred:
+        warnings.append(
+            f"{deferred} source records were not included in the model evidence packet; "
+            "due tasks are still listed independently."
+        )
     return {
         "date": context["date"],
         "initial_baseline": context.get("initial_baseline", False),
         "goals": [
             {key: item.get(key, "")[:700] for key in ("path", "title", "text")}
-            for item in context.get("goals", [])[:5]
+            for item in context.get("goals", [])[:MAX_MODEL_GOALS]
         ],
         "sources": [
             {key: (item.get(key, "")[:700] if isinstance(item.get(key), str) else item.get(key)) for key in (
@@ -97,13 +130,14 @@ def model_input(context: dict[str, Any], memories: list[dict[str, Any]]) -> dict
             )}
             for item in selected
         ],
-        "changed_paths": [item["path"] for item in context.get("changes", [])],
-        "change_kinds": {item["path"]: item.get("change_kind", "newly_available") for item in context.get("changes", [])},
+        "changed_paths": [item["path"] for item in changes],
+        "change_kinds": {item["path"]: item.get("change_kind", "newly_available") for item in changes},
+        "deferred_source_count": deferred,
         "corrections": [
             {"source_path": item["source_path"], "text": item["text"]}
             for item in memories[:12] if item.get("active", True)
         ],
-        "warnings": context.get("warnings", []),
+        "warnings": warnings,
         "decisions": context.get("decisions", [])[:40],
         "personal_signals": (context.get("extras") or {}).get("signals", []),
     }
@@ -194,10 +228,14 @@ def plan_schema(context: dict[str, Any]) -> dict[str, Any]:
 
 def validate_plan(
     raw: dict[str, Any], context: dict[str, Any], today: date,
+    *, evidence_paths: set[str] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(raw, dict) or set(raw) != {"focus", "changes", "proposal"}:
         raise PlanError("invalid_plan")
     sources = source_map(context)
+    if evidence_paths is None:
+        evidence_paths = {item["path"] for item in _select_model_sources(context, sources)}
+    sources = {path: item for path, item in sources.items() if path in evidence_paths}
     focus = raw["focus"]
     if focus is None:
         focus = "No evidence-backed focus recommendation today."

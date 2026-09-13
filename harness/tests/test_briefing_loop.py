@@ -279,6 +279,54 @@ def test_nonexistent_model_source_cannot_authorize_a_proposal():
         }, context, TODAY)
 
 
+def test_all_due_tasks_remain_visible_with_reserved_change_evidence(system):
+    loop, _, sent, _, inputs, raw, _ = system
+    tasks = [
+        {
+            "path": f"tasks/task-{n}.md", "title": f"Due task {n}",
+            "review_on": TODAY.isoformat(), "revision": REVISION,
+        }
+        for n in range(24)
+    ]
+    loop.loops = lambda: {"status": "available", "tasks": {"items": tasks}}
+    raw["proposal"] = None
+
+    loop.deliver(TODAY, ["loops", "knowledge"])
+
+    assert SOURCE["path"] in {item["path"] for item in inputs[-1]["sources"]}
+    assert len(inputs[-1]["sources"]) == 24
+    assert "Due task 23" in sent[0][0]
+    assert "not included in the model evidence" in sent[0][0]
+
+
+def test_model_cannot_launder_an_existing_omitted_change_into_a_delivery(system):
+    loop, store, sent, _, inputs, raw, _ = system
+    original_loader = loop.sources
+    extra = [
+        {**SOURCE, "path": f"notes/extra-{n}.md", "kind": "note"}
+        for n in range(30)
+    ]
+
+    def sources(previous, sections):
+        context = original_loader(previous, sections)
+        context["sources"].extend(extra)
+        context["changes"].extend(extra)
+        return context
+
+    loop.sources = sources
+    raw.update(
+        focus=None, proposal=None,
+        changes=[{"path": extra[-1]["path"], "why": "This source was not supplied."}],
+    )
+
+    with pytest.raises(PlanError, match="unbacked_change"):
+        loop.deliver(TODAY, ["knowledge"])
+
+    assert extra[-1]["path"] not in {item["path"] for item in inputs[-1]["sources"]}
+    assert sent == []
+    assert store.state["deliveries"] == {}
+
+
 def test_memory_deletion_is_idempotent_and_does_not_delete_source(system):
     loop, store, _, _, _, _, _ = system
     loop.deliver(TODAY, ["knowledge"])

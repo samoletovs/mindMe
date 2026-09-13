@@ -158,7 +158,12 @@ class BriefingLoop:
         if not sections:
             plan = {"focus": "Good morning. Your briefing sections are switched off.", "changes": [], "proposal": None}
         else:
-            plan = validate_plan(self.generate(model_input(context, memories)), context, today)
+            packet = model_input(context, memories)
+            evidence_paths = {item["path"] for item in packet["sources"]}
+            context["warnings"] = packet["warnings"]
+            plan = validate_plan(
+                self.generate(packet), context, today, evidence_paths=evidence_paths,
+            )
             urgent = [item for item in context["tasks"] if task_due(item, today)]
             if urgent and any(section in sections for section in ("focus", "loops")):
                 first = urgent[0]
