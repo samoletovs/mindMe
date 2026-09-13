@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from copy import deepcopy
 from datetime import date, timedelta
 from typing import Any
 
@@ -151,6 +152,44 @@ PLAN_SCHEMA: dict[str, Any] = {
     },
     "required": ["focus", "changes", "proposal"],
 }
+
+def plan_schema(context: dict[str, Any]) -> dict[str, Any]:
+    """Constrain the model to evidence it was actually given, including empty deltas."""
+    schema = deepcopy(PLAN_SCHEMA)
+    sources = {
+        item["path"]: item.get("kind")
+        for item in context.get("sources", [])
+        if isinstance(item, dict) and isinstance(item.get("path"), str)
+    }
+    focus = schema["properties"]["focus"]
+    if sources:
+        focus["anyOf"][1]["properties"]["path"]["enum"] = sorted(sources)
+    else:
+        schema["properties"]["focus"] = {"type": "null"}
+    changed = sorted(set(context.get("changed_paths", [])) & sources.keys())
+    changes = schema["properties"]["changes"]
+    if changed:
+        changes["items"]["properties"]["path"]["enum"] = changed
+    else:
+        changes["maxItems"] = 0
+    template = schema["properties"]["proposal"]["anyOf"][1]
+    proposals: list[dict[str, Any]] = [{"type": "null"}]
+    for kind, allowed in (
+        ("review_task", {"task"}),
+        ("create_task", {"idea"}),
+        ("research", {"idea", "note", "research", "wiki"}),
+    ):
+        paths = sorted(path for path, source_kind in sources.items() if source_kind in allowed)
+        if not paths:
+            continue
+        proposal = deepcopy(template)
+        proposal["properties"]["kind"]["enum"] = [kind]
+        proposal["properties"]["source_path"]["enum"] = paths
+        proposals.append(proposal)
+    schema["properties"]["proposal"] = (
+        {"anyOf": proposals} if len(proposals) > 1 else {"type": "null"}
+    )
+    return schema
 
 
 def validate_plan(
