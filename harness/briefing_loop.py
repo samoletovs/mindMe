@@ -379,6 +379,8 @@ class BriefingLoop:
         if intent == "decline" or (intent == "snooze" and not task_snooze):
             def record(current: dict[str, Any]) -> None:
                 item = current["proposals"][proposal_id]
+                if intent == "decline" and item["status"] == "declined":
+                    return
                 if item["status"] not in {"pending", "accepted", "snoozed", "failed"}:
                     raise LoopError("decision_conflict")
                 if intent == "decline":
