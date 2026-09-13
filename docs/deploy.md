@@ -1,9 +1,41 @@
 # Deploying the Function App
 
+## Verified action-briefing release: 2026-09-13
+
+- memex [PR #3](https://github.com/samoletovs/memex/pull/3) merged as `0c9730f`;
+  [CI/CD run 34757684429](https://github.com/samoletovs/memex/actions/runs/34757684429)
+  passed its quality and deployment jobs.
+- mindMe [PR #3](https://github.com/samoletovs/mindMe/pull/3) introduced the feature.
+  Live acceptance found an initial-baseline grounding failure; [PR #4](https://github.com/samoletovs/mindMe/pull/4)
+  constrained schema paths/kinds to actual inputs and made repeated declines
+  idempotent. Final deployed runtime: `c0c7a719`, remote-built for Python 3.11.
+- Full local suites: **558 mindMe tests and 316 memex tests passed**. GitHub checks
+  passed before each merge. Bicep and scoped central privacy checks passed.
+- `MINDME_ACTION_BRIEFING_ENABLED=true`, using the existing `gpt-4o-mini`
+  deployment. `MEMEX_ACTION_URL` resolves the existing vault's `memex-action-url`
+  secret with a dedicated function-scoped key, not a reused state-function key.
+- Health/auth checks passed: anonymous tools/action requests rejected, incorrect
+  webhook secret rejected, authenticated legacy `/ping` delivered.
+- The real `/briefing now` returned HTTP 200 and persisted a `sent` receipt for
+  both its summary and proposal messages. No failed output advanced delivery state.
+- A clearly labelled synthetic feedback record exercised actual Telegram reply
+  routing, duplicate decline, correction persistence, recall in a subsequent live
+  briefing, and `/memory forget`. Its memory/proposal/message binding were removed.
+  No real task or user decision was changed.
+- A real synthetic `ActionGateway` submission returned the same durable receipt on
+  replay. Test [PR #263](https://github.com/samoletovs/mindVault/pull/263) was closed
+  without merging and its temporary branch removed; canonical tasks were unchanged.
+- The non-sensitive goals/tasks were published in [mindVault PR #260](https://github.com/samoletovs/mindVault/pull/260).
+  The sensitive mirror was not uploaded or refreshed; its freshness warnings remain
+  meaningful and independent of canonical GitHub context.
+
+The personalized next scheduled morning run and usefulness over subsequent weeks
+are ongoing observation, not established by this release trial.
+
 ## Action briefing rollout
 
 The action-oriented briefing is implemented behind a default-off flag. This section
-is a rollout procedure, **not evidence of a live deployment**.
+is the repeatable rollout procedure; the verified release above records actual state.
 
 1. Run the affected mindMe and memex tests and central-pattern leak audits. Preserve
    unrelated local edits. Verify the signed-in personal Azure identity and remaining

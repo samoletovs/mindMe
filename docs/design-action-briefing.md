@@ -1,6 +1,6 @@
 # Design: action-oriented personal briefing
 
-Status: implementation approved 2026-09-13; deployment requires separate approval.
+Status: implemented, deployment approved, and live-verified 2026-09-13.
 
 ## Scope and boundaries
 
@@ -100,3 +100,9 @@ tests passed, including the shared persistence/writer consumers. The actual loca
 dashboard was parsed offline and all three generic approved priorities were
 recognized without including its private-vault pointer. No live source refresh,
 research job, task PR, Telegram send or deployment was performed.
+
+That local checkpoint is superseded by the [verified release](deploy.md#verified-action-briefing-release-2026-09-13):
+558/316 full-suite tests, deployed strict-schema validation, real Telegram delivery
+and feedback reuse/deletion, and a synthetic idempotent task submission that was
+closed without changing canonical task state. This does not measure long-term
+usefulness or authorize new research/task work without a proposal decision.
