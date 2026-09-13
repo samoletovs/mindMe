@@ -54,6 +54,18 @@ SDK telemetry regression alongside any tracing changes.
 - Timers run in UTC on the current Linux Flex app: daily 07:30 and Sunday 18:00. Do not describe them as local time.
 - Captures are forwarded to memex, not written by the legacy queue handler. A forwarding failure must remain retryable, and callback queries must pass the same chat allowlist.
 - Briefing section preferences and the onboarding marker remain in the private container until explicitly removed. Ordinary companion calls are single-turn and use `store=False`; no durable chat memory is maintained.
+- The opt-in action briefing stores scoped proposal/decision receipts and concise
+  corrections in `system/mindme/briefing-state-v1.json`, not conversation transcripts.
+  `/memory` lists corrections and `/memory forget <id>` deletes them idempotently.
+  Corrections remain until deleted/superseded or their source is removed; proposals
+  expire after 14 days, and unresolved action receipts must not be silently evicted.
+  State has explicit record/size caps. Keep content out of logs and traces.
+- `MINDME_ACTION_BRIEFING_ENABLED` defaults off. Enabling requires configured model,
+  GitHub and private state access; task execution additionally needs `MEMEX_ACTION_URL`.
+  Do not infer its authentication key from another memex function URL.
+- New approval callbacks use `brief1|...`; route only that namespace to the briefing
+  loop, after the owner allowlist. Other callbacks still belong to memex. Source
+  revisions and atomic claims must be checked before side effects.
 - "change the morning briefing or Telegram behavior" → edit `harness/function_app.py`, then redeploy the Function App.
 
 ## What this repo is NOT

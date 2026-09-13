@@ -18,6 +18,9 @@
     "TELEGRAM_ALLOWED_CHAT_ID": "",
     "MEMEX_WEBHOOK_URL": "",
     "MEMEX_STATE_URL": "",
+    "MEMEX_ACTION_URL": "",
+    "MINDME_ACTION_BRIEFING_ENABLED": "false",
+    "MINDME_BRIEFING_MODEL": "",
     "BRIEFING_ENCRYPTION_KEY": "",
 
     "// --- dig (deep research Mode B)": "PAT with issues:write on mindVault; in prod use a Key Vault reference",

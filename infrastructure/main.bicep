@@ -41,6 +41,17 @@ param foundryProjectName string = 'mindMe'
 @description('Allowed Telegram chat id (single-user allowlist, Hard Rule 2). Provided at deploy via param file (read from local env var; never committed).')
 param telegramAllowedChatId string
 
+type ActionBriefingConfig = {
+  enabled: bool
+  modelDeployment: string
+}
+
+@description('Opt-in action briefing. Use an existing model deployment and seed memex-action-url in Key Vault before enabling.')
+param actionBriefing ActionBriefingConfig = {
+  enabled: false
+  modelDeployment: ''
+}
+
 @description('Tags applied to all resources.')
 param tags object = {
   project: 'mindMe'
@@ -395,6 +406,18 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         {
           name: 'MEMEX_STATE_URL'
           value: '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=memex-state-url)'
+        }
+        {
+          name: 'MINDME_ACTION_BRIEFING_ENABLED'
+          value: string(actionBriefing.enabled)
+        }
+        {
+          name: 'MINDME_BRIEFING_MODEL'
+          value: actionBriefing.modelDeployment
+        }
+        {
+          name: 'MEMEX_ACTION_URL'
+          value: actionBriefing.enabled ? '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=memex-action-url)' : ''
         }
         {
           name: 'BRIEFING_ENCRYPTION_KEY'
