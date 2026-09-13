@@ -118,6 +118,7 @@ def test_model_has_no_tools_and_has_explicit_cost_and_privacy_limits(monkeypatch
     arguments = client.responses.create.call_args.kwargs
     assert arguments["model"] == "existing-model"
     assert arguments["store"] is False
+    assert all(item["type"] == "message" for item in arguments["input"])
     assert arguments["max_output_tokens"] == 1600
     assert "tools" not in arguments
     assert "<<<DATA_" in arguments["input"][1]["content"]

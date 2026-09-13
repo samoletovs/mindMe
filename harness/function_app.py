@@ -256,6 +256,7 @@ def _generate_action_plan(context: dict) -> dict:
         max_output_tokens=1600,
         input=[
             {
+                "type": "message",
                 "role": "system",
                 "content": (
                     "Prepare a calm, actionable personal morning briefing from supplied data. "
@@ -271,7 +272,7 @@ def _generate_action_plan(context: dict) -> dict:
                     "Source notices are limitations, not facts about the user's progress. Return the JSON schema."
                 ),
             },
-            {"role": "user", "content": f"<<<DATA_{nonce}>>>\n{content}\n<<<END_DATA_{nonce}>>>"},
+            {"type": "message", "role": "user", "content": f"<<<DATA_{nonce}>>>\n{content}\n<<<END_DATA_{nonce}>>>"},
         ],
         text={"format": {"type": "json_schema", "name": "briefing_plan", "strict": True, "schema": PLAN_SCHEMA}},
     )
