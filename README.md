@@ -46,6 +46,11 @@ on 2026-09-13**; a fresh code checkout alone does not enable it:
 See [rollout and acceptance](docs/deploy.md#action-briefing-rollout) for configuration,
 privacy controls and verified release evidence. No new schedule or service was added.
 
+The model's 24-source packet reserves evidence for changes and goals before filling with
+tasks. Omitted records are disclosed, and model-generated focus, changes, and proposals
+must cite a source actually included in that packet. Due-task rendering remains
+deterministic and is not truncated to the model's source budget.
+
 ---
 
 ## Architecture
