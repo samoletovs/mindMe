@@ -1,5 +1,45 @@
 # Deploying the Function App
 
+## Action briefing rollout
+
+The action-oriented briefing is implemented behind a default-off flag. This section
+is a rollout procedure, **not evidence of a live deployment**.
+
+1. Run the affected mindMe and memex tests and central-pattern leak audits. Preserve
+   unrelated local edits. Verify the signed-in personal Azure identity and remaining
+   project budget; deployment requires explicit approval.
+2. Deploy memex's versioned task-state/action handlers first. Verify that unauthenticated
+   `/personal_action` requests are rejected. Use synthetic inputs for any write trial,
+   and remove only specifically identified test artifacts afterward.
+3. Configure mindMe's `MEMEX_ACTION_URL` through the existing secret-setting pattern,
+   with the new endpoint's appropriate Function key. Do not log it or copy it to git.
+   Existing `MEMEX_STATE_URL` must reach the richer task-state version.
+4. Set `MINDME_BRIEFING_MODEL` to the **existing** model deployment that supports
+   structured Responses output. `AZURE_AI_MODEL_DEPLOYMENT` is an alternate existing
+   setting. No new model is provisioned; a missing deployment fails explicitly.
+   The Bicep `actionBriefing` parameter retains these settings across infrastructure
+   deployments: set `enabled` and `modelDeployment` there. Its defaults are disabled
+   and blank. The enabled action endpoint resolves the `memex-action-url` Key Vault
+   secret; no endpoint key belongs in the parameter file.
+5. Deploy mindMe with `MINDME_ACTION_BRIEFING_ENABLED=false` first. Check old commands,
+   note-review callbacks, and tool authentication. Then enable the flag only for the
+   existing owner chat. Keep the current morning/weekly schedule.
+6. Use `/briefing` to inspect section controls. `knowledge` covers new notes/research;
+   existing saved section selections are not expanded automatically. Run
+   `/briefing now`, inspect its source revisions, and confirm pending local goals
+   are not falsely described as already in the canonical GitHub source.
+7. In the owner channel, run one consented full cycle: synthetic source -> proposal ->
+   text or voice decision -> persisted receipt -> approved result -> subsequent briefing.
+   Test one decline and one dated snooze too. Verify `/memory` inspection/deletion.
+   Repeated approvals must not start repeated work.
+8. Verify source-change invalidation, a failed send/persistence outcome, and result
+   reconciliation. A queued job or opened PR is not a completed outcome. Record
+   actual deployment SHA, configuration and test evidence below only after success.
+
+Rollback: set `MINDME_ACTION_BRIEFING_ENABLED=false`. Ordinary briefing/capture remain
+on their original paths. Do not delete decision receipts during rollback: they guard
+against duplicate execution if the feature is enabled again.
+
 ## Verified release: 2026-09-06
 
 - Runtime: `f1cf61b` (`4cbdf14` plus the concurrent-sync freshness regression fix).

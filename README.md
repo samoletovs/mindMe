@@ -27,6 +27,24 @@ message. It has no semantic search, calendar integration, autonomous reminders, 
 complete/do-later task workflow. `/task` captures an action; it does not schedule it.
 Onboarding, `/start`, `/ping`, and `/help` are also available.
 
+## Opt-in action briefing
+
+The [action-briefing implementation](docs/design-action-briefing.md) adds a separate,
+feature-gated loop. It is **not enabled by a code checkout** and has not yet been
+verified in the live channel:
+
+- Canonical, revision-pinned goal/knowledge context and date-aware task state.
+- Source-linked proposals; owner approval before research, task creation or edits.
+- Proposal-specific text/voice replies, corrections, declines and dated snoozes.
+- Private decision receipts, retry-safe task handoff and read-only research-result
+  reconciliation; no claim that a submitted PR is already a completed task.
+- `/briefing now`, `/proposals`, `/memory`, and `/memory forget <id>` when enabled.
+  Reply directly to the proposal message. Bare unrelated conversation remains
+  single-turn, and existing capture/review commands are unchanged.
+
+See [rollout and acceptance](docs/deploy.md#action-briefing-rollout) for configuration,
+privacy controls and the live test still required. No new schedule or service is added.
+
 ---
 
 ## Architecture
