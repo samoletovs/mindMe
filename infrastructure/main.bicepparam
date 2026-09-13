@@ -26,6 +26,12 @@ param functionSuffix = 'ymcptc'
 param foundryAccountName = 'foundrylab-aiservices'
 param foundryProjectName = 'mindMe'
 
+// Approved and live-verified production selection; the template default stays off.
+param actionBriefing = {
+  enabled: true
+  modelDeployment: 'gpt-4o-mini'
+}
+
 // Hard Rule 2 single-user allowlist. Read from local env var so the value
 // never lives in source. Set TELEGRAM_ALLOWED_CHAT_ID in .env or the
 // session shell before running `az deployment group create -p main.bicepparam`.

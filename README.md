@@ -22,16 +22,17 @@ A single-user Telegram companion for a [Personal OS (mindVault)](https://github.
 | **Deep research** | `/dig <question>` | Creates a research issue in mindVault; downstream Copilot workflows produce the report |
 | **Workflow housekeeping** | Every 30 minutes | Dispatches vault reaper workflows when candidate work exists |
 
-The companion is currently **single-turn**: it does not remember the previous chat
-message. It has no semantic search, calendar integration, autonomous reminders, or
-complete/do-later task workflow. `/task` captures an action; it does not schedule it.
+Ordinary companion conversation remains **single-turn**: it does not remember the
+previous chat message. The action-briefing workflow below has scoped durable
+decisions and approval-gated task updates. There is no semantic search, calendar
+integration or autonomous task scheduling. `/task` captures an action; it does not schedule it.
 Onboarding, `/start`, `/ping`, and `/help` are also available.
 
 ## Opt-in action briefing
 
 The [action-briefing implementation](docs/design-action-briefing.md) adds a separate,
-feature-gated loop. It is **not enabled by a code checkout** and has not yet been
-verified in the live channel:
+feature-gated loop. It is **enabled in the existing deployment and live-verified
+on 2026-09-13**; a fresh code checkout alone does not enable it:
 
 - Canonical, revision-pinned goal/knowledge context and date-aware task state.
 - Source-linked proposals; owner approval before research, task creation or edits.
@@ -43,7 +44,7 @@ verified in the live channel:
   single-turn, and existing capture/review commands are unchanged.
 
 See [rollout and acceptance](docs/deploy.md#action-briefing-rollout) for configuration,
-privacy controls and the live test still required. No new schedule or service is added.
+privacy controls and verified release evidence. No new schedule or service was added.
 
 ---
 
