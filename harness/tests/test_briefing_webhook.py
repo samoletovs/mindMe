@@ -123,6 +123,31 @@ def test_model_has_no_tools_and_has_explicit_cost_and_privacy_limits(monkeypatch
     assert "tools" not in arguments
     assert "<<<DATA_" in arguments["input"][1]["content"]
     assert arguments["text"]["format"]["strict"] is True
+    schema = arguments["text"]["format"]["schema"]["properties"]
+    assert schema["changes"]["maxItems"] == 0
+    assert schema["focus"] == {"type": "null"}
+    assert schema["proposal"] == {"type": "null"}
+
+
+def test_model_schema_allows_only_visible_changes_and_kind_appropriate_sources():
+    from briefing_plan import plan_schema
+
+    schema = plan_schema({
+        "sources": [
+            {"path": "home.md", "kind": "goal"},
+            {"path": "tasks/check.md", "kind": "task"},
+            {"path": "ideas/experiment.md", "kind": "idea"},
+        ],
+        "changed_paths": ["ideas/experiment.md", "notes/not-in-input.md"],
+    })["properties"]
+    assert schema["changes"]["items"]["properties"]["path"]["enum"] == ["ideas/experiment.md"]
+    choices = {
+        item["properties"]["kind"]["enum"][0]: item["properties"]["source_path"]["enum"]
+        for item in schema["proposal"]["anyOf"][1:]
+    }
+    assert choices["review_task"] == ["tasks/check.md"]
+    assert choices["create_task"] == ["ideas/experiment.md"]
+    assert choices["research"] == ["ideas/experiment.md"]
 
 
 def test_all_due_items_survive_the_memex_five_item_preview(monkeypatch):

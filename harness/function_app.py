@@ -74,7 +74,7 @@ from openai import OpenAIError
 import vault_layout
 from briefing_actions import ActionError, ActionGateway
 from briefing_loop import BriefingLoop, LoopError
-from briefing_plan import PLAN_SCHEMA, PlanError
+from briefing_plan import PlanError, plan_schema
 from briefing_sources import SourceError, load_sources, read_source_revision
 from briefing_state import BriefingStore, StateError
 
@@ -274,7 +274,7 @@ def _generate_action_plan(context: dict) -> dict:
             },
             {"type": "message", "role": "user", "content": f"<<<DATA_{nonce}>>>\n{content}\n<<<END_DATA_{nonce}>>>"},
         ],
-        text={"format": {"type": "json_schema", "name": "briefing_plan", "strict": True, "schema": PLAN_SCHEMA}},
+        text={"format": {"type": "json_schema", "name": "briefing_plan", "strict": True, "schema": plan_schema(context)}},
     )
     try:
         plan = json.loads(response.output_text)

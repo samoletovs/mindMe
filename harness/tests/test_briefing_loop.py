@@ -110,6 +110,7 @@ def test_declined_idea_does_not_return_unchanged(system):
     loop, _, sent, executed, _, _, _ = system
     loop.deliver(TODAY, ["knowledge"])
     loop.reply(loop.target(2), "decline", TODAY)
+    assert "Declined and saved" in loop.reply(loop.target(2), "decline", TODAY)
     loop.deliver(date(2026, 9, 14), ["knowledge"])
     assert len([keyboard for _, keyboard in sent if keyboard]) == 1
     assert not executed
