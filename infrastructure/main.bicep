@@ -52,6 +52,9 @@ param actionBriefing ActionBriefingConfig = {
   modelDeployment: ''
 }
 
+@description('Daily proposal-only mindVault knowledge review on the existing morning timer. Requires an existing model and the memex review writer.')
+param dailyEvolveEnabled bool = false
+
 @description('Tags applied to all resources.')
 param tags object = {
   project: 'mindMe'
@@ -412,12 +415,16 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
           value: string(actionBriefing.enabled)
         }
         {
+          name: 'MINDME_DAILY_EVOLVE_ENABLED'
+          value: string(dailyEvolveEnabled)
+        }
+        {
           name: 'MINDME_BRIEFING_MODEL'
           value: actionBriefing.modelDeployment
         }
         {
           name: 'MEMEX_ACTION_URL'
-          value: actionBriefing.enabled ? '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=memex-action-url)' : ''
+          value: (actionBriefing.enabled || dailyEvolveEnabled) ? '@Microsoft.KeyVault(VaultName=${keyVaultName};SecretName=memex-action-url)' : ''
         }
         {
           name: 'BRIEFING_ENCRYPTION_KEY'

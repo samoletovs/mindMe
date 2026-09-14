@@ -109,12 +109,16 @@ def test_memory_delete_uses_the_private_control_not_companion(monkeypatch, owner
 
 def test_model_has_no_tools_and_has_explicit_cost_and_privacy_limits(monkeypatch):
     client = Mock()
+    client.with_options.return_value = client
+    http = Mock()
+    monkeypatch.setattr(fa, "_http_client", lambda: http)
     client.responses.create.return_value.output_text = json.dumps({
         "focus": None, "changes": [], "proposal": None,
     })
     monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-model")
     monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
     fa._generate_action_plan({"date": "2026-09-13", "sources": []})
+    client.with_options.assert_called_once_with(timeout=45.0, max_retries=0, http_client=http)
     arguments = client.responses.create.call_args.kwargs
     assert arguments["model"] == "existing-model"
     assert arguments["store"] is False

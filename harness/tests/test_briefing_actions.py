@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 
-from briefing_actions import ActionGateway
+from briefing_actions import ActionError, ActionGateway
 
 
 def gateway(handler, memex_url="https://synthetic.example/api/personal_action?code=test"):
@@ -105,3 +106,50 @@ def test_merged_pr_does_not_claim_a_changed_canonical_task_is_the_approved_resul
         return httpx.Response(200, json=data)
 
     assert gateway(inspect)(record, True)["status"] == "conflict"
+
+
+def test_review_envelope_pins_the_canonical_commit_outside_the_exact_receipt():
+    bodies = []
+    review = {"version": 1, "as_of": "2026-09-14"}
+    def send(req):
+        bodies.append(json.loads(req.content))
+        assert req.extensions["timeout"]["read"] == 30.0
+        return httpx.Response(202, json={
+            "action_id": "a" * 32, "status": "submitted",
+            "pr_url": "https://github.com/example/vault/pull/7",
+            "artifact_paths": [
+                "reviews/vault-evolve/2026-09-14/review.md",
+                "reviews/vault-evolve/2026-09-14/review.json",
+            ],
+        })
+    result = gateway(send).save_review("a" * 32, review, "c" * 40)
+    assert bodies == [{
+        "version": 1, "vault_id": "mindMe", "chat_id": 7,
+        "action_id": "a" * 32, "kind": "save_review",
+        "review": review, "source_revision": "c" * 40,
+    }]
+    assert len(result["artifact_paths"]) == 2
+
+
+@pytest.mark.parametrize("status,http_status", [("in_progress", 503), ("closed", 409), ("conflict", 409)])
+def test_review_gateway_preserves_retryable_and_terminal_writer_outcomes(status, http_status):
+    service = gateway(lambda req: httpx.Response(http_status, json={
+        "action_id": "a" * 32, "status": status,
+    }))
+    assert service.save_review("a" * 32, {}, "c" * 40)["status"] == status
+
+
+def test_review_gateway_refuses_success_with_missing_or_foreign_artifact_link():
+    service = gateway(lambda req: httpx.Response(202, json={
+        "action_id": "a" * 32, "status": "submitted",
+        "pr_url": "https://github.com/example/another-vault/pull/7",
+    }))
+    with pytest.raises(ActionError, match="invalid_review_result_link"):
+        service.save_review("a" * 32, {}, "c" * 40)
+
+
+def test_review_gateway_enforces_the_writers_utf8_request_limit_before_sending():
+    def unexpected(req):
+        raise AssertionError("oversized review must not reach the writer")
+    with pytest.raises(ActionError, match="review_payload_capacity"):
+        gateway(unexpected).save_review("a" * 32, {"text": "\u2603" * 20_000}, "c" * 40)

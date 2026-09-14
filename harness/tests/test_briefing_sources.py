@@ -44,6 +44,59 @@ Generated old task is not a goal.
 """
 
 
+def test_review_evidence_uses_original_byte_hash_and_does_not_invent_joined_quotes(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    raw = "# Evidence\r\nA real source sentence.\r\nBefore<details>hidden metadata</details>after\r\n"
+    vault = Vault({"notes/pilot.md": raw, "home.md": HOME})
+    result = load_sources(
+        vault.client, token=TOKEN, repo=REPO,
+        sections=["knowledge", "goals"], include_evidence=True,
+    )
+    source = next(item for item in result["sources"] if item["kind"] == "note")
+    assert source["sha256"] == hashlib.sha256(raw.encode()).hexdigest()
+    assert "A real source sentence." in source["evidence_text"]
+    assert "Beforeafter" not in source["evidence_text"]
+    assert all(line in raw for line in source["evidence_text"].splitlines())
+    assert "evidence_text" not in next(item for item in result["sources"] if item["kind"] == "goal")
+
+
+def test_review_writer_byte_and_depth_caps_do_not_change_legacy_briefing_selection(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    large = "Permitted source evidence.\n" + "x" * 64_000
+    deep = "wiki/insights/a/b/c/d/e.md"
+    files = {"notes/large.md": large, deep: "Permitted source evidence in a deep page."}
+    review_vault = Vault(files)
+    review = load_sources(review_vault.client, token=TOKEN, repo=REPO, sections=["knowledge"], include_evidence=True)
+    assert not review["sources"]
+    assert review["complete"] is False
+    assert not any("/contents/" in request.url.path for request in review_vault.requests)
+    legacy_vault = Vault(files)
+    legacy = load_sources(legacy_vault.client, token=TOKEN, repo=REPO, sections=["knowledge"])
+    assert {source["path"] for source in legacy["sources"]} == set(files)
+
+
+def test_review_aggregate_source_bytes_match_the_writer_limit(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    text = "Permitted source evidence.\n"
+    text += "x" * (64_000 - len(text))
+    vault = Vault({f"notes/source-{index}.md": text for index in range(10)})
+    result = load_sources(vault.client, token=TOKEN, repo=REPO, sections=["knowledge"], include_evidence=True)
+    assert len(result["sources"]) == 8
+    assert sum(source["byte_size"] for source in result["sources"]) == 512_000
+    assert result["complete"] is False
+
+
+def test_review_does_not_offer_focus_only_project_evidence_the_writer_cannot_authorize(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    files = {"home.md": HOME, "projects/learning/README.md": "# Learning\nRun a small experiment."}
+    vault = Vault(files)
+    review = load_sources(vault.client, token=TOKEN, repo=REPO, sections=["goals", "focus"], include_evidence=True)
+    assert all(source["kind"] != "project" for source in review["sources"])
+    legacy_vault = Vault(files)
+    legacy = load_sources(legacy_vault.client, token=TOKEN, repo=REPO, sections=["goals", "focus"])
+    assert any(source["kind"] == "project" for source in legacy["sources"])
+
+
 def blob(text: str) -> str:
     data = text.encode()
     return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()

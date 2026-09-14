@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -82,6 +83,35 @@ class ActionGateway:
             return result
         except (httpx.HTTPError, ValueError):
             return {"status": "unknown", "error": "task_result_unconfirmed"}
+
+    def save_review(self, identifier: str, review: dict[str, Any], source_revision: str) -> dict[str, Any]:
+        if not _ACTION_ID.fullmatch(identifier) or not self.memex_url or not re.fullmatch(r"[a-f0-9]{40}", source_revision):
+            raise ActionError("review_actions_not_configured")
+        url = urlsplit(self.memex_url)
+        if url.scheme != "https" or not url.netloc or url.username or url.password:
+            raise ActionError("unsafe_action_endpoint")
+        payload = {
+            "version": 1, "vault_id": "mindMe", "chat_id": self.chat_id,
+            "action_id": identifier, "kind": "save_review", "review": review,
+            "source_revision": source_revision,
+        }
+        if len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 49_152:
+            raise ActionError("review_payload_capacity")
+        try:
+            response = self.client.post(self.memex_url, json=payload, follow_redirects=False, timeout=30.0)
+            if response.status_code not in {200, 201, 202, 409, 503}:
+                raise ActionError("review_service_unavailable")
+            result = response.json()
+        except (httpx.HTTPError, ValueError):
+            raise ActionError("review_result_unconfirmed") from None
+        if (
+            not isinstance(result, dict) or result.get("action_id") != identifier
+            or result.get("status") not in {"submitted", "merged", "closed", "conflict", "failed", "in_progress"}
+        ):
+            raise ActionError("invalid_review_receipt")
+        if result.get("status") in {"submitted", "merged"} and not self._repo_url(result.get("pr_url"), "pull"):
+            raise ActionError("invalid_review_result_link")
+        return result
 
     def _task_status(self, proposal: dict[str, Any]) -> dict[str, Any]:
         result = proposal["result"]

@@ -15,6 +15,8 @@ from urllib.parse import quote
 
 import httpx
 
+from execution_budget import bounded_timeout, checkpoint
+
 GITHUB_API = "https://api.github.com"
 MAX_CONTENT_FETCHES = 16
 MAX_SOURCE_CHARS = 1500
@@ -109,11 +111,13 @@ def _json(
     params: dict[str, str | int] | None = None, missing_ok: bool = False,
     limit: int = 2_000_000,
 ) -> Any:
+    checkpoint()
     try:
         with client.stream(
             "GET", GITHUB_API + endpoint, headers=headers, params=params,
-            follow_redirects=False, timeout=20.0,
+            follow_redirects=False, timeout=bounded_timeout(20.0, stages=4),
         ) as response:
+            checkpoint()
             if response.status_code == 404 and missing_ok:
                 return _MISSING
             if response.status_code in {401, 403}:
@@ -123,10 +127,18 @@ def _json(
             if response.status_code != 200:
                 raise SourceError("source_unavailable")
             content = bytearray()
-            for chunk in response.iter_bytes():
+            chunks = iter(response.iter_bytes())
+            while True:
+                checkpoint()
+                try:
+                    chunk = next(chunks)
+                except StopIteration:
+                    break
+                checkpoint()
                 if len(content) + len(chunk) > limit:
                     raise SourceError("source_response_too_large")
                 content.extend(chunk)
+            checkpoint()
             return json.loads(content)
     except (httpx.HTTPError, ValueError, UnicodeError):
         raise SourceError("source_read_failed") from None
@@ -454,6 +466,7 @@ def load_sources(
     previous: dict[str, str] | None = None,
     known_revisions: dict[str, str] | None = None,
     scan_cursor: str | None = None,
+    include_evidence: bool = False,
 ) -> dict[str, Any]:
     """Read one canonical snapshot; the host checkpoints only displayed changes.
 
@@ -527,6 +540,7 @@ def load_sources(
             result["warnings"].append("Recent source ordering is unavailable; no filename is treated as a modification date.")
     focused_projects: set[str] = set()
     total = fetches = 0
+    evidence_bytes = 0
 
     def priority(candidate: str) -> tuple[int, int, str]:
         if known_revisions is not None:
@@ -561,6 +575,12 @@ def load_sources(
             result["complete"] = False
             result["warnings"].append("A source exceeds the bounded reader or lacks size information.")
             continue
+        if include_evidence and path != "home.md" and (
+            len(path.split("/")) > 6 or size > 64_000 or evidence_bytes + size > 512_000
+        ):
+            result["complete"] = False
+            result["warnings"].append("Some source files exceed the review writer's byte or path-depth limits.")
+            continue
         fetches += 1
         data = _json(
             client, base + "/contents/" + quote(path, safe="/"), headers,
@@ -572,6 +592,12 @@ def load_sources(
             result["scan_cursor"] = path
         kind = _kind(path)
         assert kind is not None
+        if include_evidence and kind == "project":
+            statuses = [value.casefold() for key, value in _metadata(raw)[1] if key == "status"]
+            if not statuses or any(value != "active" for value in statuses):
+                result["source_revisions"].pop(path, None)
+                result["warnings"].append("Review project evidence requires an explicitly active canonical README.")
+                continue
         material = _material(path, raw, kind, focused_projects)
         if material is None:
             result["source_revisions"].pop(path, None)
@@ -593,6 +619,16 @@ def load_sources(
             "title": title, "text": excerpt, "kind": kind,
             "url": f"https://github.com/{repo}/blob/{revision}/{quote(path, safe='/')}",
         }
+        if include_evidence and kind != "goal":
+            # Preserve literal source bytes; normalized briefing prose is not a quotation.
+            source["sha256"] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+            source["byte_size"] = size
+            evidence_bytes += size
+            original = raw.replace("\r\n", "\n").replace("\r", "\n")
+            source["evidence_text"] = "\n".join(
+                line for line in _strip_generated(_metadata(raw)[0]).splitlines()
+                if line and line in original
+            )[:MAX_SOURCE_CHARS]
         result["sources"].append(source)
         result["fingerprints"][path] = digest
         if kind == "goal":
