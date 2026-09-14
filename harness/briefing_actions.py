@@ -83,6 +83,32 @@ class ActionGateway:
         except (httpx.HTTPError, ValueError):
             return {"status": "unknown", "error": "task_result_unconfirmed"}
 
+    def save_review(self, identifier: str, review: dict[str, Any]) -> dict[str, Any]:
+        if not _ACTION_ID.fullmatch(identifier) or not self.memex_url:
+            raise ActionError("review_actions_not_configured")
+        url = urlsplit(self.memex_url)
+        if url.scheme != "https" or not url.netloc or url.username or url.password:
+            raise ActionError("unsafe_action_endpoint")
+        payload = {
+            "version": 1, "vault_id": "mindMe", "chat_id": self.chat_id,
+            "action_id": identifier, "kind": "save_review", "review": review,
+        }
+        try:
+            response = self.client.post(self.memex_url, json=payload, follow_redirects=False)
+            if response.status_code not in {200, 201, 202, 409}:
+                raise ActionError("review_service_unavailable")
+            result = response.json()
+        except (httpx.HTTPError, ValueError):
+            raise ActionError("review_result_unconfirmed") from None
+        if (
+            not isinstance(result, dict) or result.get("action_id") != identifier
+            or result.get("status") not in {"submitted", "merged", "conflict", "failed", "in_progress"}
+        ):
+            raise ActionError("invalid_review_receipt")
+        if result.get("status") in {"submitted", "merged"} and not self._repo_url(result.get("pr_url"), "pull"):
+            raise ActionError("invalid_review_result_link")
+        return result
+
     def _task_status(self, proposal: dict[str, Any]) -> dict[str, Any]:
         result = proposal["result"]
         number = result["pr_url"].rsplit("/", 1)[-1]

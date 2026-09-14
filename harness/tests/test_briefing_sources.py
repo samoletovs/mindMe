@@ -44,6 +44,22 @@ Generated old task is not a goal.
 """
 
 
+def test_review_evidence_uses_original_byte_hash_and_does_not_invent_joined_quotes(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    raw = "# Evidence\r\nA real source sentence.\r\nBefore<details>hidden metadata</details>after\r\n"
+    vault = Vault({"notes/pilot.md": raw, "home.md": HOME})
+    result = load_sources(
+        vault.client, token=TOKEN, repo=REPO,
+        sections=["knowledge", "goals"], include_evidence=True,
+    )
+    source = next(item for item in result["sources"] if item["kind"] == "note")
+    assert source["sha256"] == hashlib.sha256(raw.encode()).hexdigest()
+    assert "A real source sentence." in source["evidence_text"]
+    assert "Beforeafter" not in source["evidence_text"]
+    assert all(line in raw for line in source["evidence_text"].splitlines())
+    assert "evidence_text" not in next(item for item in result["sources"] if item["kind"] == "goal")
+
+
 def blob(text: str) -> str:
     data = text.encode()
     return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()

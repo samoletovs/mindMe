@@ -32,6 +32,9 @@ param actionBriefing = {
   modelDeployment: 'gpt-4o-mini'
 }
 
+// Daily mindVault review approved 2026-09-14; no work-vault scheduling.
+param dailyEvolveEnabled = true
+
 // Hard Rule 2 single-user allowlist. Read from local env var so the value
 // never lives in source. Set TELEGRAM_ALLOWED_CHAT_ID in .env or the
 // session shell before running `az deployment group create -p main.bicepparam`.

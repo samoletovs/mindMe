@@ -454,6 +454,7 @@ def load_sources(
     previous: dict[str, str] | None = None,
     known_revisions: dict[str, str] | None = None,
     scan_cursor: str | None = None,
+    include_evidence: bool = False,
 ) -> dict[str, Any]:
     """Read one canonical snapshot; the host checkpoints only displayed changes.
 
@@ -593,6 +594,14 @@ def load_sources(
             "title": title, "text": excerpt, "kind": kind,
             "url": f"https://github.com/{repo}/blob/{revision}/{quote(path, safe='/')}",
         }
+        if include_evidence and kind != "goal":
+            # Preserve literal source bytes; normalized briefing prose is not a quotation.
+            source["sha256"] = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+            original = raw.replace("\r\n", "\n").replace("\r", "\n")
+            source["evidence_text"] = "\n".join(
+                line for line in _strip_generated(_metadata(raw)[0]).splitlines()
+                if line and line in original
+            )[:MAX_SOURCE_CHARS]
         result["sources"].append(source)
         result["fingerprints"][path] = digest
         if kind == "goal":

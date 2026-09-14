@@ -67,6 +67,13 @@ SDK telemetry regression alongside any tracing changes.
   loop, after the owner allowlist. Other callbacks still belong to memex. Source
   revisions and atomic claims must be checked before side effects.
 - "change the morning briefing or Telegram behavior" → edit `harness/function_app.py`, then redeploy the Function App.
+- Daily `vault-evolve` is a separate default-off cloud adapter (`MINDME_DAILY_EVOLVE_ENABLED`),
+  gated by the saved `knowledge` section on the existing morning timer. It reads only
+  safe mindVault sources, never a work vault/private mirror. Its `evolve1|` callbacks
+  save scoped feedback, not action approval. Preserve original capture callbacks.
+  See [the runtime contract](docs/vault-evolve.md); review artifacts are proposal-only,
+  and a submitted PR is not canonical publication. Its separate private state expires
+  after 14 days; do not add unbounded chat memory or silent delivery retries.
 
 ## What this repo is NOT
 

@@ -301,9 +301,9 @@ class BriefingStore:
     returns. Failed writes never return the callback's result.
     """
 
-    def __init__(self, container: ContainerClient) -> None:
+    def __init__(self, container: ContainerClient, *, blob_name: str = STATE_BLOB) -> None:
         try:
-            self._blob = container.get_blob_client(STATE_BLOB)
+            self._blob = container.get_blob_client(blob_name)
         except AzureError:
             raise StateError("state_client_unavailable") from None
 
