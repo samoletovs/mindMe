@@ -25,6 +25,8 @@ def context():
     return {
         "date": TODAY.isoformat(), "sources": [copy.deepcopy(SOURCE)], "goals": [],
         "source_status": "available", "warnings": [],
+        "revision": "c" * 40, "inventory_paths": [SOURCE["path"]],
+        "source_revisions": {SOURCE["path"]: SOURCE["revision"]},
         "processed_revisions": {SOURCE["path"]: SOURCE["revision"]},
         "scan_cursor": SOURCE["path"],
     }
@@ -37,6 +39,14 @@ def generated():
         "relationship": "none", "evidence": [{"source": "S1", "quote_id": "Q1"}],
         "action": "curate", "next_step": "Propose a caveat on the comparison before attributing the gain.",
     }]}
+
+
+def delivered_review(review, feedback=None):
+    return {
+        "review": review, "feedback": feedback or {},
+        "parts": [{"finding": None}, *[{"finding": row["id"]} for row in review["findings"]]],
+        "message_ids": list(range(100, 101 + len(review["findings"]))),
+    }
 
 
 def test_receipt_resolves_literal_evidence_and_never_approves_proposed_edits():
@@ -100,7 +110,7 @@ def test_goal_private_mirror_and_generated_review_are_not_quote_sources():
 def test_paraphrasing_does_not_repeat_an_unchanged_delivered_finding():
     packet = evidence_packet(context(), [])
     review = complete_review(generated(), packet)
-    next_packet = evidence_packet(context(), [{"review": review, "feedback": {"F1": {"text": "Already familiar"}}}])
+    next_packet = evidence_packet(context(), [delivered_review(review, {"F1": {"text": "Already familiar"}})])
     raw = generated()
     raw["findings"][0]["statement"] = "The experiment varies more than one factor."
     assert complete_review(raw, next_packet)["findings"] == []
@@ -110,7 +120,7 @@ def test_changed_source_version_can_produce_a_new_finding():
     review = complete_review(generated(), evidence_packet(context(), []))
     changed = context()
     changed["sources"][0]["sha256"] = "b" * 64
-    packet = evidence_packet(changed, [{"review": review}])
+    packet = evidence_packet(changed, [delivered_review(review)])
     assert complete_review(generated(), packet)["findings"]
 
 
@@ -136,8 +146,8 @@ def system():
         generations.append(packet)
         return generated()
 
-    def publish(identifier, review):
-        publishes.append((identifier, copy.deepcopy(review)))
+    def publish(identifier, review, source_revision):
+        publishes.append((identifier, copy.deepcopy(review), source_revision))
         return {"action_id": identifier, "status": "submitted", "pr_url": "https://github.com/example/mindVault/pull/2"}
 
     def send(text, keyboard):
@@ -218,11 +228,11 @@ def test_uncertain_publication_reuses_prepared_review_and_same_action_id(system)
     loop, store, _, publishes, generations, _ = system
     original = loop.publish
     calls = []
-    def publish(identifier, review):
-        calls.append((identifier, copy.deepcopy(review)))
+    def publish(identifier, review, source_revision):
+        calls.append((identifier, copy.deepcopy(review), source_revision))
         if len(calls) == 1:
             raise EvolveError("unconfirmed_write")
-        return original(identifier, review)
+        return original(identifier, review, source_revision)
     loop.publish = publish
     with pytest.raises(EvolveError, match="unconfirmed_write"):
         loop.run(TODAY)
@@ -262,3 +272,109 @@ def test_live_lease_prevents_concurrent_generation_or_delivery(system):
     with pytest.raises(EvolveError, match="daily_review_busy"):
         loop.run(TODAY)
     assert not sends and not publishes and not generations
+
+
+def test_distinct_evidence_on_the_same_page_is_not_silently_dropped():
+    data = context()
+    data["sources"][0]["evidence_text"] += "\nThe control group used the original procedure."
+    packet = evidence_packet(data, [])
+    raw = generated()
+    second = copy.deepcopy(raw["findings"][0])
+    second.update(statement="A control group is recorded.", evidence=[{"source": "S1", "quote_id": "Q2"}])
+    raw["findings"].append(second)
+    review = complete_review(raw, packet)
+    assert len(review["findings"]) == 2
+    prior = copy.deepcopy(review)
+    prior["findings"] = prior["findings"][:1]
+    next_packet = evidence_packet(data, [delivered_review(prior)])
+    assert complete_review({"findings": [second]}, next_packet)["findings"][0]["statement"] == "A control group is recorded."
+
+
+def test_never_delivered_findings_do_not_suppress_a_later_success(system):
+    loop, store, sends, publishes, generations, _ = system
+    original = loop.publish
+    loop.publish = lambda *args: {"status": "in_progress"}
+    with pytest.raises(EvolveError, match="publication_unconfirmed"):
+        loop.run(TODAY)
+    loop.publish = original
+    loop.run(date(2026, 9, 15))
+    assert len(publishes) == 1 and len(sends) == 2
+    assert len(store.read()["deliveries"]["2026-09-15"]["review"]["findings"]) == 1
+
+
+def test_daily_processing_purges_deleted_source_derivatives_even_without_feedback_access(system):
+    loop, store, _, _, _, data = system
+    loop.run(TODAY)
+    loop.feedback("2026-09-14", "F1", "Distinct scoped feedback", TODAY)
+    data.update(inventory_paths=[], source_revisions={}, sources=[], processed_revisions={})
+    loop.generate = lambda packet: {"findings": []}
+    loop.run(date(2026, 9, 15))
+    assert b"Distinct scoped feedback" not in _encode(store.read())
+    assert b"The pilot changed two variables" not in _encode(store.read())
+
+
+def test_private_reclassification_purges_derivatives_instead_of_only_raising(system):
+    from briefing_sources import SourceError
+    loop, store, _, _, _, _ = system
+    loop.run(TODAY)
+    loop.feedback("2026-09-14", "F1", "Distinct scoped feedback", TODAY)
+    def private(path):
+        raise SourceError("source_no_longer_permitted")
+    loop.revision = private
+    assert loop.feedback_command("feedback") == "No current knowledge-review feedback is stored."
+    assert b"Distinct scoped feedback" not in _encode(store.read())
+
+
+def test_resume_never_sends_a_stale_prepared_finding(system):
+    loop, store, sends, _, _, _ = system
+    original = loop.send
+    def partial(text, keyboard):
+        if keyboard:
+            raise EvolveError("unconfirmed_delivery")
+        return original(text, keyboard)
+    loop.send = partial
+    with pytest.raises(EvolveError):
+        loop.run(TODAY)
+    loop.revision = lambda path: None
+    loop.send = original
+    with pytest.raises(EvolveError, match="review_source_changed"):
+        loop.run(TODAY, retry_delivery=True)
+    assert len(sends) == 1
+    assert store.read()["deliveries"]["2026-09-14"]["phase"] == "invalidated"
+    assert store.read()["last_delivered"] is None
+
+
+def test_concurrent_invalidation_cannot_be_overwritten_by_delivery_completion(system):
+    loop, store, sends, _, _, _ = system
+    original = loop.send
+    def invalidate_during_send(text, keyboard):
+        loop._invalidate("2026-09-14")
+        return original(text, keyboard)
+    loop.send = invalidate_during_send
+    with pytest.raises(EvolveError, match="claim_lost"):
+        loop.run(TODAY)
+    assert len(sends) == 1
+    assert store.read()["deliveries"]["2026-09-14"]["phase"] == "invalidated"
+    assert store.read()["last_delivered"] is None
+
+
+def test_expired_feedback_is_not_accepted_without_an_intervening_daily_run(system):
+    loop, store, _, _, _, _ = system
+    loop.run(TODAY)
+    assert "No feedback" in loop.feedback("2026-09-14", "F1", "Useful", date(2026, 10, 15))
+    assert "2026-09-14" not in store.read()["deliveries"]
+
+
+def test_snooze_cannot_outlive_its_original_review_record(system):
+    loop, store, _, _, _, _ = system
+    loop.run(TODAY)
+    result = loop.feedback("2026-09-14", "F1", "snooze 2026-10-03", date(2026, 9, 20))
+    assert "before this review" in result
+    assert not store.read()["deliveries"]["2026-09-14"]["feedback"]
+
+
+def test_publisher_receives_the_pinned_commit_not_a_blob_revision(system):
+    loop, _, _, publishes, _, data = system
+    loop.run(TODAY)
+    assert publishes[0][2] == data["revision"]
+    assert publishes[0][2] != SOURCE["revision"]

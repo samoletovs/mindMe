@@ -78,6 +78,10 @@ from briefing_plan import PlanError, plan_schema
 from briefing_sources import SourceError, load_sources, read_source_revision
 from briefing_state import BriefingStore, StateError
 from evolve_loop import DailyEvolve, EVOLVE_STATE_BLOB
+from execution_budget import (
+    BudgetExceeded, BudgetRequestsTransport, bounded_timeout, checkpoint, execution_budget,
+    http_request_hook, http_response_hook, remaining_seconds, sdk_timeouts,
+)
 from vault_evolve import EvolveError, review_schema
 
 # Hard Rule 8: silence httpx/httpcore BEFORE constructing any Telegram client.
@@ -112,7 +116,7 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 # --- Module-level singletons ------------------------------------------------
 
-_credential = DefaultAzureCredential()
+_credential = DefaultAzureCredential(transport=BudgetRequestsTransport())
 _project: AIProjectClient | None = None
 _openai = None
 _blob: BlobServiceClient | None = None
@@ -135,6 +139,7 @@ def _blob_client() -> BlobServiceClient:
         _blob = BlobServiceClient(
             account_url=f"https://{account}.blob.core.windows.net",
             credential=_credential,
+            transport=BudgetRequestsTransport(),
         )
     return _blob
 
@@ -142,7 +147,10 @@ def _blob_client() -> BlobServiceClient:
 def _http_client() -> httpx.Client:
     global _http
     if _http is None:
-        _http = httpx.Client(timeout=15.0)
+        _http = httpx.Client(
+            timeout=15.0,
+            event_hooks={"request": [http_request_hook], "response": [http_response_hook]},
+        )
     return _http
 
 
@@ -248,6 +256,7 @@ def _daily_evolve_enabled() -> bool:
 
 
 def _generate_evolve_review(context: dict) -> dict:
+    checkpoint()
     model = os.environ.get("MINDME_BRIEFING_MODEL") or os.environ.get("AZURE_AI_MODEL_DEPLOYMENT")
     if not model:
         raise EvolveError("review_model_not_configured")
@@ -256,7 +265,9 @@ def _generate_evolve_review(context: dict) -> dict:
         raise EvolveError("review_context_limit")
     nonce = secrets.token_hex(16)
     _, client = _foundry()
-    response = client.responses.create(
+    response = client.with_options(
+        timeout=bounded_timeout(45.0, stages=4), max_retries=0, http_client=_http_client(),
+    ).responses.create(
         model=model, store=False, max_output_tokens=2400,
         input=[
             {"type": "message", "role": "system", "content": (
@@ -285,6 +296,7 @@ def _generate_evolve_review(context: dict) -> dict:
         ],
         text={"format": {"type": "json_schema", "name": "vault_evolve_review", "strict": True, "schema": review_schema(context)}},
     )
+    checkpoint()
     try:
         result = json.loads(response.output_text)
     except (ValueError, TypeError):
@@ -331,6 +343,7 @@ def _evolve_reply(message: dict, text: str) -> str | None:
 
 
 def _generate_action_plan(context: dict) -> dict:
+    checkpoint()
     model = os.environ.get("MINDME_BRIEFING_MODEL") or os.environ.get("AZURE_AI_MODEL_DEPLOYMENT")
     if not model:
         raise PlanError("briefing_model_not_configured")
@@ -339,7 +352,9 @@ def _generate_action_plan(context: dict) -> dict:
         raise PlanError("briefing_context_limit")
     nonce = secrets.token_hex(16)
     _, client = _foundry()
-    response = client.responses.create(
+    response = client.with_options(
+        timeout=bounded_timeout(45.0, stages=4), max_retries=0, http_client=_http_client(),
+    ).responses.create(
         model=model,
         store=False,
         max_output_tokens=1600,
@@ -365,6 +380,7 @@ def _generate_action_plan(context: dict) -> dict:
         ],
         text={"format": {"type": "json_schema", "name": "briefing_plan", "strict": True, "schema": plan_schema(context)}},
     )
+    checkpoint()
     try:
         plan = json.loads(response.output_text)
     except (ValueError, TypeError):
@@ -793,6 +809,7 @@ def _ask_companion(user_text: str, conversation_id: str | None = None) -> str:
 
     Span attributes carry agent name, input/output **lengths**, and conversation
     presence flag only (Hard Rule 9) — NEVER prompts or completions."""
+    checkpoint()
     with tracer.start_as_current_span(
         "ask_companion", record_exception=False, set_status_on_exception=False
     ) as span:
@@ -800,6 +817,11 @@ def _ask_companion(user_text: str, conversation_id: str | None = None) -> str:
         span.set_attribute("has_conversation_id", conversation_id is not None)
 
         _, openai_client = _foundry()
+        if remaining_seconds() is not None:
+            openai_client = openai_client.with_options(
+                timeout=bounded_timeout(45.0, stages=4), max_retries=0,
+                http_client=_http_client(),
+            )
         agent_name = os.environ.get("AZURE_AI_AGENT_NAME", "companion")
         span.set_attribute("agent.name", agent_name)
 
@@ -813,6 +835,7 @@ def _ask_companion(user_text: str, conversation_id: str | None = None) -> str:
                 }
             },
         )
+        checkpoint()
         text = (response.output_text or "").strip()
         if not text:
             raise ValueError("Companion returned no text")
@@ -920,12 +943,18 @@ def _os_container_client():
 
 def _read_os_text(rel_path: str) -> str:
     """Read a visible source/managed blob; absent or inventoried-out files are empty."""
+    checkpoint()
     if not _is_managed_os_blob(rel_path):
         if not _mirror_blob_visible(rel_path, _current_mirror_inventory()):
             return ""
     blob = _os_container_client().get_blob_client(rel_path)
     try:
-        data = blob.download_blob().readall()
+        download = blob.download_blob(
+            **(sdk_timeouts() if remaining_seconds() is not None else {}),
+        )
+        checkpoint()
+        data = download.readall()
+        checkpoint()
     except ResourceNotFoundError:
         return ""
     return data.decode("utf-8", errors="replace")
@@ -1079,12 +1108,22 @@ def _parse_iso_date(text: str) -> date | None:
 
 def _os_blob_props(prefix: str) -> list[tuple[str, object]]:
     """Visible (name, last_modified) pairs under `prefix`; failures propagate."""
+    checkpoint()
     inventory = _current_mirror_inventory()
-    return [
-        (b.name, b.last_modified)
-        for b in _os_container_client().list_blobs(name_starts_with=prefix)
-        if _mirror_blob_visible(b.name, inventory)
-    ]
+    blobs = iter(_os_container_client().list_blobs(
+        name_starts_with=prefix,
+        **(sdk_timeouts() if remaining_seconds() is not None else {}),
+    ))
+    result: list[tuple[str, object]] = []
+    while True:
+        checkpoint()
+        try:
+            blob = next(blobs)
+        except StopIteration:
+            return result
+        checkpoint()
+        if _mirror_blob_visible(blob.name, inventory):
+            result.append((blob.name, blob.last_modified))
 
 
 def _inbox_state(today: date) -> dict:
@@ -1916,6 +1955,14 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
 
     # Voice / audio notes — transcribe in-process, forward to memex as text.
     if message.get("voice") or message.get("audio"):
+        review_reply = False
+        replied_to = message.get("reply_to_message")
+        if _daily_evolve_enabled() and isinstance(replied_to, dict):
+            try:
+                review_reply = _evolve_loop().target(replied_to.get("message_id")) is not None
+            except (EvolveError, StateError, SourceError, AzureError, httpx.HTTPError) as exc:
+                log.error("voice review binding failed error=%s", type(exc).__name__)
+                return func.HttpResponse("review unavailable", status_code=503)
         media = message.get("voice") or message.get("audio") or {}
         file_id: str | None = media.get("file_id")
         mime_type: str = media.get("mime_type") or "audio/ogg"
@@ -1945,6 +1992,9 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
                 return func.HttpResponse("capture unavailable", status_code=503)
             _capture_feedback(chat_id, f"\U0001f3a4 {transcript}")
         else:
+            if review_reply:
+                _telegram_send(chat_id, "I could not transcribe this review reply. Please retry or reply with text; it was not saved as a separate capture.")
+                return func.HttpResponse("review transcription unavailable", status_code=503)
             # Transcription unavailable or failed — forward raw update as before.
             if not _forward_to_memex(update):
                 return func.HttpResponse("capture unavailable", status_code=503)
@@ -1959,16 +2009,32 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
                 _telegram_send(chat_id, "Daily knowledge review is disabled.")
                 return func.HttpResponse("ok", status_code=200)
             argument = user_text[7:].strip()
-            loop = _evolve_loop()
-            if argument in {"now", "retry"}:
-                result = loop.run(date.today(), retry_delivery=argument == "retry")
-            elif argument == "feedback" or argument.startswith("forget "):
-                result = loop.feedback_command(argument)
-            elif not argument:
-                result = loop.show(date.today())
-            else:
-                result = "Use /evolve, /evolve now, /evolve feedback or /evolve forget YYYY-MM-DD. /evolve retry explicitly retries an unconfirmed delivery and may repeat its last message."
-            _telegram_send(chat_id, result)
+            with execution_budget(180):
+                try:
+                    with execution_budget(150, reserve=30):
+                        loop = _evolve_loop()
+                        if argument in {"now", "retry"}:
+                            result = loop.run(date.today(), retry_delivery=argument == "retry")
+                        elif argument == "feedback" or argument.startswith("forget "):
+                            result = loop.feedback_command(argument)
+                        elif not argument:
+                            result = loop.show(date.today())
+                        else:
+                            result = "Use /evolve, /evolve now, /evolve feedback or /evolve forget YYYY-MM-DD. /evolve retry explicitly retries an unconfirmed delivery and may repeat its last message."
+                except (BudgetExceeded, EvolveError, StateError, SourceError, PlanError, ActionError, AzureError, OpenAIError, httpx.HTTPError, TelegramDeliveryError) as exc:
+                    log.error("daily knowledge review unavailable error=%s", type(exc).__name__)
+                    try:
+                        with execution_budget(10):
+                            _telegram_send(chat_id, "The knowledge review could not finish. No successful publication or delivery is claimed. Use /evolve to inspect its retained state.")
+                    except (BudgetExceeded, TelegramDeliveryError):
+                        log.error("knowledge review failure notice unavailable")
+                    return func.HttpResponse("review unavailable", status_code=503)
+                try:
+                    with execution_budget(10):
+                        _telegram_send(chat_id, result)
+                except (BudgetExceeded, TelegramDeliveryError):
+                    log.error("knowledge review command receipt unavailable")
+                    return func.HttpResponse("review receipt unavailable", status_code=503)
             return func.HttpResponse("ok", status_code=200)
         reply = _evolve_reply(message, user_text) or _proposal_reply(message, user_text)
         if reply is not None:
@@ -2138,24 +2204,31 @@ def morning_briefing_timer(timer: func.TimerRequest) -> None:
     if not _daily_evolve_enabled():
         _deliver_morning_briefing()
         return
-    failed = False
-    try:
-        _deliver_morning_briefing()
-    except (RuntimeError, TelegramDeliveryError):
-        failed = True
-        log.error("morning briefing incomplete; independent knowledge review still eligible")
-    if "knowledge" in _briefing_prefs():
+    with execution_budget(270):
+        failed = False
         try:
-            _evolve_loop().run(date.today())
-        except (EvolveError, StateError, SourceError, PlanError, ActionError, AzureError, OpenAIError, httpx.HTTPError, TelegramDeliveryError) as exc:
+            with execution_budget(75):
+                _deliver_morning_briefing()
+        except (RuntimeError, TelegramDeliveryError):
+            failed = True
+            log.error("morning briefing incomplete; independent knowledge review still eligible")
+        try:
+            with execution_budget(170, reserve=20):
+                if "knowledge" in _briefing_prefs():
+                    _evolve_loop().run(date.today())
+        except (BudgetExceeded, EvolveError, StateError, SourceError, PlanError, ActionError, AzureError, OpenAIError, httpx.HTTPError, TelegramDeliveryError) as exc:
             failed = True
             log.error("daily knowledge review failed error=%s", type(exc).__name__)
-            _telegram_send(
-                int(os.environ["TELEGRAM_ALLOWED_CHAT_ID"]),
-                "Today's knowledge review could not be completed. No successful publication or delivery is claimed. Use /evolve to inspect the retained state; /evolve now retries safe preparation. An unconfirmed delivery needs explicit /evolve retry.",
-            )
-    if failed:
-        raise RuntimeError("Morning delivery incomplete") from None
+            try:
+                with execution_budget(10):
+                    _telegram_send(
+                        int(os.environ["TELEGRAM_ALLOWED_CHAT_ID"]),
+                        "Today's knowledge review could not be completed. No successful publication or delivery is claimed. Use /evolve to inspect the retained state; /evolve now retries safe preparation. An unconfirmed delivery needs explicit /evolve retry.",
+                    )
+            except (BudgetExceeded, TelegramDeliveryError):
+                log.error("knowledge review failure notice unavailable")
+        if failed:
+            raise RuntimeError("Morning delivery incomplete") from None
 
 
 def _deliver_morning_briefing() -> None:

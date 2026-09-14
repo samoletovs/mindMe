@@ -81,6 +81,19 @@ def test_voice_review_feedback_uses_the_same_binding_without_forwarding(monkeypa
     forwarded.assert_not_called()
 
 
+def test_failed_voice_transcription_of_review_reply_never_becomes_a_capture(monkeypatch, owner):
+    loop, sent, forwarded = owner
+    monkeypatch.setattr(fa, "_download_telegram_file", lambda value: b"synthetic")
+    monkeypatch.setattr(fa, "_transcribe_voice", lambda content, mime: None)
+    response = fa.telegram_webhook(request({
+        "message": {"chat": {"id": 7}, "voice": {"file_id": "synthetic"}, "reply_to_message": {"message_id": 9}},
+    }))
+    assert response.status_code == 503
+    forwarded.assert_not_called()
+    loop.feedback.assert_not_called()
+    assert "not saved as a separate capture" in sent.call_args.args[1]
+
+
 def test_capture_callbacks_still_forward_to_memex(owner):
     loop, _, forwarded = owner
     response = fa.telegram_webhook(request({
@@ -93,10 +106,14 @@ def test_capture_callbacks_still_forward_to_memex(owner):
 
 def test_review_model_is_bounded_has_no_tools_and_does_not_store_conversation(monkeypatch):
     client = Mock()
+    client.with_options.return_value = client
+    http = Mock()
+    monkeypatch.setattr(fa, "_http_client", lambda: http)
     client.responses.create.return_value.output_text = json.dumps({"findings": []})
     monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-model")
     monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
     fa._generate_evolve_review({"sources": []})
+    client.with_options.assert_called_once_with(timeout=45.0, max_retries=0, http_client=http)
     args = client.responses.create.call_args.kwargs
     assert args["model"] == "existing-model"
     assert args["store"] is False and "tools" not in args

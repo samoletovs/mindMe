@@ -56,7 +56,14 @@ def evidence_packet(context: dict[str, Any], previous: list[dict[str, Any]]) -> 
     for record in previous:
         report = record.get("review", {})
         manifest = {source["id"]: source for source in report.get("sources", [])}
+        delivered_findings = {
+            part.get("finding")
+            for index, part in enumerate(record.get("parts", []))
+            if index < len(record.get("message_ids", []))
+        }
         for finding in report.get("findings", []):
+            if finding["id"] not in delivered_findings:
+                continue
             cited = [manifest[item["source"]] for item in finding["evidence"]]
             if any(paths.get(source["path"]) != source["sha256"] for source in cited):
                 continue
@@ -86,7 +93,10 @@ def evidence_packet(context: dict[str, Any], previous: list[dict[str, Any]]) -> 
 
 def finding_signature(finding: dict[str, Any], manifest: dict[str, Any]) -> str:
     versions = sorted({
-        (manifest[item["source"]]["path"], manifest[item["source"]]["sha256"])
+        (
+            manifest[item["source"]]["path"], manifest[item["source"]]["sha256"],
+            item["quote"].replace("\r\n", "\n").replace("\r", "\n"),
+        )
         for item in finding["evidence"]
     })
     return fingerprint([finding["kind"], versions])

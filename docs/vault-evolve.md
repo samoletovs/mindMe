@@ -31,6 +31,8 @@ checking as proof of factual correctness or knowledge acquisition.
 - At most 16 source fetches, 12 evidence sources, 9,000 quotation characters and
   three findings per review. Model output is capped at 2,400 tokens on the existing
   configured briefing model; at most two generation attempts per UTC day.
+  Review files are capped at 64,000 bytes each, 512,000 bytes total and six path
+  components, matching the writer without narrowing legacy briefing reads.
 - The model selects supplied source/quotation IDs. Code restores the actual
   literal quotations, raw-byte SHA-256 hashes and proposal-only receipt.
   Source revisions are rechecked before publication. memex independently checks
@@ -46,15 +48,17 @@ The existing private container holds
 review/delivery receipts and scoped feedback. It uses the existing 1 MiB CAS
 store at a separate blob path; action-briefing state is not repurposed.
 
-Findings produce an immutable same-stem Markdown/JSON pair under
-`reviews/vault-evolve/YYYY-MM-DD` through the existing authenticated memex
+Findings produce immutable `review.md` and `review.json` files under
+`reviews/vault-evolve/YYYY-MM-DD/` through the existing authenticated memex
 `personal_action` writer. A submitted PR is described as **not yet canonical**;
 neither submission nor Telegram delivery means its proposals are approved.
 Quiet/no-action reviews remain private and do not create empty vault PRs.
 Published reviews are derived artifacts, never sources for the next review.
 
 One date-bound action ID is reused after an uncertain write; prepared content is
-not regenerated or substituted. A CAS claim prevents simultaneous preparation.
+not regenerated or substituted. The canonical commit pin remains outside the
+exact v1 receipt in the writer request envelope and is reused unchanged. A CAS
+claim prevents simultaneous preparation.
 Message IDs are checkpointed after each confirmed Telegram send. An interrupted
 send with unknown outcome blocks automatic retry: `/evolve retry` explicitly
 accepts that the last message may be duplicated. Completed daily runs are no-ops.
@@ -80,9 +84,17 @@ The existing `brief1|` proposal approvals and memex capture callbacks are unchan
 
 Feedback expires with the 14-day review window and is not a new permanent profile.
 Deletion removes it from future model inputs; it is not retained in cached prompts.
-A changed/deleted source prevents stale feedback acceptance and removes derived
-review text on access. Valid unchanged findings are suppressed by evidence version
-and finding kind, not by model wording, for the retained review window.
+A changed/deleted or newly excluded source invalidates retained derived text on
+the next daily scan or relevant interactive read. Delivery retries recheck sources
+and cannot overwrite a concurrent invalidation. Expiry applies on access too,
+not just when the timer runs; accepted snoozes cannot outlive their review record.
+Only confirmed delivered findings suppress repetition, identified by source
+versions, finding kind and exact quoted evidence rather than model wording.
+Distinct evidence from the same page remains eligible for a new finding.
+
+The writer uses an immutable per-day PR, not an accumulating mutable review branch.
+Unmerged review PRs can therefore accumulate; quiet days do not add one. A branch-only
+uncertain write requires operator reconciliation instead of blind retry or revival.
 
 ## Release and rollback
 

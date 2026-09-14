@@ -18,6 +18,8 @@ from azure.core.exceptions import (
 )
 from azure.storage.blob import ContainerClient
 
+from execution_budget import checkpoint, sdk_timeouts
+
 STATE_BLOB = "system/mindme/briefing-state-v1.json"
 MAX_STATE_BYTES = 1024 * 1024
 MAX_CAS_ATTEMPTS = 4
@@ -308,8 +310,12 @@ class BriefingStore:
             raise StateError("state_client_unavailable") from None
 
     def _load(self) -> tuple[dict[str, Any], str | None]:
+        checkpoint()
         try:
-            download = self._blob.download_blob(logging_enable=False, max_concurrency=1)
+            download = self._blob.download_blob(
+                logging_enable=False, max_concurrency=1, **sdk_timeouts(),
+            )
+            checkpoint()
         except ResourceNotFoundError as error:
             if getattr(error, "error_code", None) in {None, "BlobNotFound"}:
                 return empty_state(), None
@@ -324,7 +330,9 @@ class BriefingStore:
         if size > MAX_STATE_BYTES:
             raise StateError("state_payload_capacity")
         try:
+            checkpoint()
             payload = download.readall()
+            checkpoint()
         except AzureError:
             raise StateError("state_read_unavailable") from None
         if not isinstance(payload, bytes) or len(payload) > MAX_STATE_BYTES:
@@ -344,6 +352,7 @@ class BriefingStore:
 
     def update(self, mutate: Callable[[dict[str, Any]], T]) -> T:
         for _ in range(MAX_CAS_ATTEMPTS):
+            checkpoint()
             state, etag = self._load()
             removed = {
                 key: copy.deepcopy(record) for key, record in state["proposals"].items()
@@ -354,13 +363,16 @@ class BriefingStore:
             _check_tombstones(removed, state["proposals"])
             try:
                 if etag is None:
-                    self._blob.upload_blob(payload, overwrite=False, logging_enable=False, retry_total=0)
+                    self._blob.upload_blob(
+                        payload, overwrite=False, logging_enable=False, **sdk_timeouts(),
+                    )
                 else:
                     self._blob.upload_blob(
                         payload, overwrite=True, etag=etag,
                         match_condition=MatchConditions.IfNotModified,
-                        logging_enable=False, retry_total=0,
+                        logging_enable=False, **sdk_timeouts(),
                     )
+                checkpoint()
             except ResourceModifiedError:
                 continue
             except ResourceExistsError:
