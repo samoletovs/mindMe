@@ -311,6 +311,8 @@ def test_daily_processing_purges_deleted_source_derivatives_even_without_feedbac
     loop.run(date(2026, 9, 15))
     assert b"Distinct scoped feedback" not in _encode(store.read())
     assert b"The pilot changed two variables" not in _encode(store.read())
+    assert loop.target(102) == ("2026-09-14", "F1")
+    assert "No feedback" in loop.feedback("2026-09-14", "F1", "Known", TODAY)
 
 
 def test_private_reclassification_purges_derivatives_instead_of_only_raising(system):

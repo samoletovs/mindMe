@@ -592,6 +592,12 @@ def load_sources(
             result["scan_cursor"] = path
         kind = _kind(path)
         assert kind is not None
+        if include_evidence and kind == "project":
+            statuses = [value.casefold() for key, value in _metadata(raw)[1] if key == "status"]
+            if not statuses or any(value != "active" for value in statuses):
+                result["source_revisions"].pop(path, None)
+                result["warnings"].append("Review project evidence requires an explicitly active canonical README.")
+                continue
         material = _material(path, raw, kind, focused_projects)
         if material is None:
             result["source_revisions"].pop(path, None)

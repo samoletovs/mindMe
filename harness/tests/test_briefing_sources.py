@@ -86,6 +86,17 @@ def test_review_aggregate_source_bytes_match_the_writer_limit(monkeypatch):
     assert result["complete"] is False
 
 
+def test_review_does_not_offer_focus_only_project_evidence_the_writer_cannot_authorize(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    files = {"home.md": HOME, "projects/learning/README.md": "# Learning\nRun a small experiment."}
+    vault = Vault(files)
+    review = load_sources(vault.client, token=TOKEN, repo=REPO, sections=["goals", "focus"], include_evidence=True)
+    assert all(source["kind"] != "project" for source in review["sources"])
+    legacy_vault = Vault(files)
+    legacy = load_sources(legacy_vault.client, token=TOKEN, repo=REPO, sections=["goals", "focus"])
+    assert any(source["kind"] == "project" for source in legacy["sources"])
+
+
 def blob(text: str) -> str:
     data = text.encode()
     return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()

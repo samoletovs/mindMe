@@ -49,6 +49,12 @@ class DailyEvolve:
         def remove(state: dict[str, Any]) -> None:
             current = state["deliveries"].get(key)
             if current:
+                parts = current.get("parts", [])
+                current["bindings"] = {
+                    str(message_id): parts[index]["finding"]
+                    for index, message_id in enumerate(current["message_ids"])
+                    if index < len(parts) and parts[index].get("finding")
+                } or current.get("bindings", {})
                 for field in ("review", "packet", "parts", "feedback", "owner", "inflight"):
                     current.pop(field, None)
                 current.update(phase="invalidated", status="failed", lease_until=0)
@@ -105,7 +111,7 @@ class DailyEvolve:
                     if current and current.get("owner") == owner:
                         current["lease_until"] = 0
                 if claim_attempted:
-                    with execution_budget(15):
+                    with execution_budget(15, outcome=True):
                         self.store.update(release)
 
     def _run_work(
@@ -265,6 +271,8 @@ class DailyEvolve:
         if type(message_id) is not int:
             return None
         for key, record in self.store.read()["deliveries"].items():
+            if finding := record.get("bindings", {}).get(str(message_id)):
+                return key, finding
             for index, identifier in enumerate(record["message_ids"]):
                 if identifier == message_id:
                     parts = record.get("parts", [])

@@ -25,6 +25,12 @@ checking as proof of factual correctness or knowledge acquisition.
 - The host timeout is five minutes for the combined timer workload, within the
   existing consumption plan. An HTTP caller can time out earlier; inspect retained
   state before retrying rather than inferring failure or success from that timeout.
+  Invocation-local elapsed budgets reserve cleanup time: 270 seconds for the timer,
+  75 for the original briefing, up to 170 for the independent review, and 180 for
+  on-demand controls. Sources, model, publication and delivery have child limits.
+  Two admitted SDK I/O workers and one separate outcome worker bound buffered
+  reads/authentication without an unbounded queue. A timed-out issued mutation may
+  still finish remotely; it is reconciled, never described as cancelled.
 - Only the configured personal **mindVault** repository is permitted. Work vaults,
   the private mirror, raw/ignored material and generated reviews are excluded.
   Source selection and approved focus extraction reuse the existing safe reader.
@@ -33,6 +39,8 @@ checking as proof of factual correctness or knowledge acquisition.
   configured briefing model; at most two generation attempts per UTC day.
   Review files are capped at 64,000 bytes each, 512,000 bytes total and six path
   components, matching the writer without narrowing legacy briefing reads.
+  Project evidence requires `status: active`; a focus link alone is not independent
+  authorization for the writer to admit a project README.
 - The model selects supplied source/quotation IDs. Code restores the actual
   literal quotations, raw-byte SHA-256 hashes and proposal-only receipt.
   Source revisions are rechecked before publication. memex independently checks
@@ -91,6 +99,8 @@ not just when the timer runs; accepted snoozes cannot outlive their review recor
 Only confirmed delivered findings suppress repetition, identified by source
 versions, finding kind and exact quoted evidence rather than model wording.
 Distinct evidence from the same page remains eligible for a new finding.
+Content-free finding/message bindings survive invalidation for the retained review
+window, so a reply to removed evidence is refused instead of becoming a new capture.
 
 The writer uses an immutable per-day PR, not an accumulating mutable review branch.
 Unmerged review PRs can therefore accumulate; quiet days do not add one. A branch-only

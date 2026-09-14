@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import Context
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -19,6 +23,7 @@ from openai import APIConnectionError, APITimeoutError, OpenAI
 import execution_budget as budget
 import function_app as fa
 from briefing_sources import _json
+from briefing_actions import ActionGateway
 from briefing_state import BriefingStore, StateError, empty_state
 from evolve_loop import DailyEvolve
 from test_briefing_loop import MemoryStore
@@ -42,6 +47,76 @@ def client_for(handler) -> httpx.Client:
             "response": [budget.http_response_hook],
         },
     )
+
+
+@contextmanager
+def local_response(*, drip: bool = False, delay: float = 0) -> Iterator[str]:
+    finished = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.do_GET()
+
+        def do_GET(self) -> None:
+            body = b"x" * 40 if drip else json.dumps({
+                "action_id": "a" * 32, "status": "submitted",
+                "pr_url": "https://github.com/example/vault/pull/1",
+            }).encode()
+            try:
+                time.sleep(delay)
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                for chunk in ([bytes([byte]) for byte in body] if drip else [body]):
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                    if drip:
+                        time.sleep(0.05)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                finished.set()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        finished.wait(3)
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_real_drip_fed_sdk_response_cannot_overrun_the_elapsed_budget(streaming: bool) -> None:
+    with local_response(drip=True) as url, budget.BudgetRequestsTransport() as transport:
+        started = time.monotonic()
+        with pytest.raises(budget.BudgetExceeded), budget.execution_budget(0.4):
+            response = transport.send(HttpRequest("GET", url), stream=streaming)
+            if streaming:
+                budget.sdk_response_hook(SimpleNamespace(http_response=response))
+                list(response.stream_download(None))
+        assert time.monotonic() - started < 0.9
+
+
+def test_real_delayed_writer_uses_its_response_allowance_not_one_quarter() -> None:
+    with local_response(delay=9.2) as url, httpx.Client() as forward:
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.extensions["timeout"]["read"] == 30
+            return forward.post(url, content=request.content, timeout=httpx.Timeout(**request.extensions["timeout"]))
+
+        with client_for(handler) as client, budget.execution_budget(35):
+            gateway = ActionGateway(
+                client=client, token="synthetic", repo="example/vault",
+                memex_url="https://synthetic.example/api/personal_action", chat_id=7,
+            )
+            assert gateway.save_review("a" * 32, {}, "c" * 40)["status"] == "submitted"
 
 
 def test_child_expiration_preserves_parent_time_for_release(clock) -> None:
@@ -77,7 +152,7 @@ def test_http_timeouts_shrink_and_overrides_cannot_extend_deadline(clock) -> Non
         clock[0] = 20
         client.get("https://synthetic.example", timeout=None)
     assert len(calls) == 2
-    assert set(calls[0].values()) == {5}
+    assert calls[0] == {"connect": 1, "write": 1, "pool": 1, "read": 17}
     assert set(calls[1].values()) == {1}
 
 
@@ -268,7 +343,7 @@ def test_real_model_sdk_does_not_retry_timeout_with_default_ten_minute_settings(
             else:
                 fa._generate_evolve_review({"sources": []})
     assert len(calls) == 1
-    assert set(calls[0].values()) == {10}
+    assert calls[0] == {"connect": 1, "write": 1, "pool": 1, "read": 10}
 
 
 def test_real_model_body_cannot_keep_running_by_trickling_chunks(clock, monkeypatch) -> None:

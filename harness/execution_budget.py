@@ -9,15 +9,24 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
-from contextvars import ContextVar
-from typing import Any
+from contextvars import ContextVar, copy_context
+from threading import BoundedSemaphore
+from typing import Any, TypeVar
 
 import httpx
 from azure.core.pipeline import PipelineRequest, PipelineResponse
 from azure.core.pipeline.transport import HttpRequest, HttpResponse, RequestsTransport
 
 _deadline: ContextVar[float | None] = ContextVar("execution_deadline", default=None)
+_outcome: ContextVar[bool] = ContextVar("execution_outcome", default=False)
+_io_worker: ContextVar[bool] = ContextVar("execution_io_worker", default=False)
+_work_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mindme-io")
+_work_slots = BoundedSemaphore(2)
+_outcome_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mindme-outcome")
+_outcome_slots = BoundedSemaphore(1)
+_T = TypeVar("_T")
 
 
 class BudgetExceeded(RuntimeError):
@@ -39,7 +48,7 @@ def checkpoint() -> None:
 
 
 @contextmanager
-def execution_budget(seconds: float, *, reserve: float = 0) -> Iterator[None]:
+def execution_budget(seconds: float, *, reserve: float = 0, outcome: bool = False) -> Iterator[None]:
     if seconds <= 0 or reserve < 0:
         raise ValueError("invalid_execution_budget")
     parent = _deadline.get()
@@ -47,12 +56,54 @@ def execution_budget(seconds: float, *, reserve: float = 0) -> Iterator[None]:
     if parent is not None:
         deadline = min(deadline, parent - reserve)
     token = _deadline.set(deadline)
+    outcome_token = _outcome.set(_outcome.get() or outcome)
     try:
         checkpoint()
         yield
         checkpoint()
     finally:
         _deadline.reset(token)
+        _outcome.reset(outcome_token)
+
+
+def _sdk_call(operation: Callable[[], _T]) -> _T:
+    """Bound one SDK operation, including buffering before its next checkpoint.
+
+    Slots are capped with no unbounded queue. An issued mutation may finish
+    remotely after timeout: receipts must reconcile it, not claim cancellation.
+    """
+    checkpoint()
+    remaining = remaining_seconds()
+    if remaining is None or _io_worker.get():
+        return operation()
+    pool, slots = (_outcome_pool, _outcome_slots) if _outcome.get() else (_work_pool, _work_slots)
+    if not slots.acquire(blocking=False):
+        raise BudgetExceeded()
+    context = copy_context()
+
+    def invoke() -> _T:
+        token = _io_worker.set(True)
+        try:
+            checkpoint()
+            return operation()
+        finally:
+            _io_worker.reset(token)
+
+    try:
+        future = pool.submit(context.run, invoke)
+    except RuntimeError:
+        slots.release()
+        raise
+    future.add_done_callback(lambda completed: slots.release())
+    try:
+        result = future.result(timeout=remaining)
+    except FutureTimeoutError:
+        if future.done():
+            raise
+        future.cancel()
+        raise BudgetExceeded() from None
+    checkpoint()
+    return result
 
 
 def bounded_timeout(cap: float, *, stages: int = 1) -> float:
@@ -65,12 +116,15 @@ def bounded_timeout(cap: float, *, stages: int = 1) -> float:
 def http_request_hook(request: httpx.Request) -> None:
     if remaining_seconds() is None:
         return
-    timeout = bounded_timeout(20.0, stages=4)
+    remaining = bounded_timeout(float("inf"))
     configured = request.extensions.get("timeout", {})
-    request.extensions["timeout"] = {
-        stage: timeout if configured.get(stage) is None else min(configured[stage], timeout)
-        for stage in ("connect", "read", "write", "pool")
-    }
+    setup = min(1.0, remaining / 4)
+    timeouts = {}
+    for stage in ("connect", "write", "pool"):
+        timeouts[stage] = setup if configured.get(stage) is None else min(configured[stage], setup)
+    read = remaining - sum(timeouts.values())
+    timeouts["read"] = read if configured.get("read") is None else min(configured["read"], read)
+    request.extensions["timeout"] = timeouts
 
 
 class _BudgetStream(httpx.SyncByteStream):
@@ -125,6 +179,9 @@ class _BudgetSdkStream:
         return self
 
     def __next__(self) -> bytes:
+        return _sdk_call(self._next_checked)
+
+    def _next_checked(self) -> bytes:
         try:
             checkpoint()
             chunk = next(self._stream)
@@ -141,6 +198,9 @@ class BudgetRequestsTransport(RequestsTransport):
     def send(self, request: HttpRequest, **kwargs: Any) -> HttpResponse:
         if remaining_seconds() is None:
             return super().send(request, **kwargs)
+        return _sdk_call(lambda: self._send_checked(request, **kwargs))
+
+    def _send_checked(self, request: HttpRequest, **kwargs: Any) -> HttpResponse:
         timeout = bounded_timeout(5.0, stages=2)
         for option in ("connection_timeout", "read_timeout"):
             configured = kwargs.get(option)
