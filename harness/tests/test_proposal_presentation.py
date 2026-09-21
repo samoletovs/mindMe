@@ -101,5 +101,5 @@ def test_section_packing_preserves_exact_boundary_and_does_not_split_markup() ->
 
 @pytest.mark.parametrize("sections", [[], [""], ["x" * 3901]])
 def test_invalid_html_sections_fail_explicitly(sections: list[str]) -> None:
-    with pytest.raises(ValueError, match="Telegram"):
+    with pytest.raises(ValueError, match="[Tt]elegram"):
         html_reply(sections)

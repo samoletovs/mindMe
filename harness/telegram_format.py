@@ -19,17 +19,9 @@ class TelegramHTMLReply:
 
 def html_reply(sections: list[str]) -> TelegramHTMLReply:
     """Pack complete escaped sections without cutting tags, entities or content."""
-    parts: list[str] = []
-    for section in sections:
-        if not section or units(section) > 3900:
-            raise ValueError("Invalid Telegram HTML section size")
-        if parts and units(parts[-1] + "\n\n" + section) <= 3900:
-            parts[-1] += "\n\n" + section
-        else:
-            parts.append(section)
-    if not parts:
+    if not sections or any(not section for section in sections):
         raise ValueError("Telegram HTML reply must not be empty")
-    return TelegramHTMLReply(tuple(parts))
+    return TelegramHTMLReply(tuple(pack_html_blocks(sections)))
 
 
 def escape(value: str) -> str:
@@ -38,6 +30,44 @@ def escape(value: str) -> str:
 
 def units(value: str) -> int:
     return sum(2 if ord(char) > 0xFFFF else 1 for char in value)
+
+
+def escaped_chunks(value: str, limit: int = 3000) -> list[str]:
+    """Split untrusted text without cutting an escaped entity or a Unicode character."""
+    if limit < 6:
+        raise ValueError("escaped_chunk_limit_too_small")
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for char in value:
+        encoded = escape(char)
+        width = units(encoded)
+        if size + width > limit:
+            chunks.append("".join(current))
+            current, size = [], 0
+        current.append(encoded)
+        size += width
+    if current:
+        chunks.append("".join(current))
+    return chunks
+
+
+def pack_html_blocks(blocks: list[str], limit: int = 3900) -> list[str]:
+    """Pack complete HTML blocks; callers must close all tags within each block."""
+    messages: list[str] = []
+    current = ""
+    for block in blocks:
+        if units(block) > limit:
+            raise ValueError("telegram_html_block_too_long")
+        combined = current + "\n\n" + block if current else block
+        if units(combined) > limit:
+            messages.append(current)
+            current = block
+        else:
+            current = combined
+    if current:
+        messages.append(current)
+    return messages
 
 
 def word_count(value: str) -> int:
