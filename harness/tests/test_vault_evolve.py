@@ -176,7 +176,12 @@ def test_daily_invocations_generate_publish_and_deliver_only_once(system):
     _encode(store.read())
 
 
-def test_writer_policy_rejection_is_terminal_without_delivery_or_resubmission(system):
+@pytest.mark.parametrize("error_code", [
+    "not_authorized", "review_vault_not_allowed", "private_content",
+    "source_path_not_allowed", "source_not_allowed", "source_role_not_allowed",
+    "derived_source", "ignored_path", "linked_path_not_allowed",
+])
+def test_writer_policy_rejection_is_terminal_without_delivery_or_resubmission(system, error_code):
     loop, store, sends, _, generations, _ = system
     requests = []
 
@@ -185,7 +190,7 @@ def test_writer_policy_rejection_is_terminal_without_delivery_or_resubmission(sy
         payload = json.loads(request.content)
         return httpx.Response(403, json={
             "action_id": payload["action_id"], "status": "failed",
-            "error": "source_not_allowed",
+            "error": error_code,
         })
 
     with httpx.Client(transport=httpx.MockTransport(reject)) as client:
@@ -202,7 +207,7 @@ def test_writer_policy_rejection_is_terminal_without_delivery_or_resubmission(sy
     record = store.read()["deliveries"][TODAY.isoformat()]
     assert record["phase"] == "invalidated"
     assert record["status"] == "failed"
-    assert record["receipt"]["error"] == "source_not_allowed"
+    assert record["receipt"]["error"] == error_code
     assert not sends
     assert len(requests) == len(generations) == 1
     assert store.read()["last_delivered"] is None

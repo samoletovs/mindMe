@@ -17,7 +17,7 @@ _ACTION_ID = re.compile(r"^[a-f0-9]{24,64}$")
 _REVIEW_POLICY_ERRORS = frozenset({
     "not_authorized", "review_vault_not_allowed", "private_content",
     "source_path_not_allowed", "source_not_allowed", "source_role_not_allowed",
-    "derived_source",
+    "derived_source", "ignored_path", "linked_path_not_allowed",
 })
 log = logging.getLogger(__name__)
 
