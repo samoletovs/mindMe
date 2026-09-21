@@ -456,7 +456,8 @@ def test_review_commands_use_the_same_owner_only_flow(monkeypatch, command, retr
     review.run.assert_called_once_with(date.today(), ["knowledge"], retry_delivery=retry)
 
 
-def test_source_command_is_owner_only_and_never_starts_a_review(monkeypatch):
+def test_source_command_is_owner_only_and_never_starts_a_review(monkeypatch, caplog):
+    caplog.set_level("INFO", logger="mindMe.harness")
     monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "synthetic")
     monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "true")
@@ -473,6 +474,8 @@ def test_source_command_is_owner_only_and_never_starts_a_review(monkeypatch):
     assert fa.telegram_webhook(request(command)).status_code == 200
     review.source_status.assert_called_once_with(date.today(), ["knowledge"])
     send.assert_called_once_with(7, "Synthetic source check")
+    assert "weekly source check sent chars=22" in caplog.text
+    assert "Synthetic source check" not in caplog.text
     review.run.assert_not_called()
 
 

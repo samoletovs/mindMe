@@ -2074,6 +2074,7 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
                 with execution_budget(150):
                     report = _weekly_review().source_status(date.today(), _briefing_prefs())
                 _telegram_send(chat_id, report)
+                log.info("weekly source check sent chars=%d", len(report))
             except (BudgetExceeded, StateError, SourceError, ActionError, AzureError, httpx.HTTPError, TelegramDeliveryError) as exc:
                 log.error("weekly source check failed error=%s", type(exc).__name__)
                 _telegram_send(chat_id, "The weekly source check could not finish. Check source access and try /review sources again. No comparison or decision was changed.")
