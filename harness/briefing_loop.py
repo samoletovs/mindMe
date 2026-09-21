@@ -27,6 +27,7 @@ from briefing_state import (
     record_transition, trim_deliveries,
 )
 from execution_budget import checkpoint
+from telegram_format import TelegramHTMLReply
 from weekly_plan import render_weekly_proposal
 
 log = logging.getLogger(__name__)
@@ -319,7 +320,7 @@ class BriefingLoop:
             return None
         return self.store.read()["messages"].get(str(message_id))
 
-    def reply(self, proposal_id: str, text: str, today: date) -> str:
+    def reply(self, proposal_id: str, text: str, today: date) -> str | TelegramHTMLReply:
         if not _ID.fullmatch(proposal_id):
             return "That proposal identifier is invalid."
         decision = parse_reply(text, today)

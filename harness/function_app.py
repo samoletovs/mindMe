@@ -82,6 +82,7 @@ from execution_budget import (
     BudgetExceeded, BudgetRequestsTransport, bounded_timeout, checkpoint, execution_budget,
     http_request_hook, http_response_hook, remaining_seconds, sdk_timeouts,
 )
+from telegram_format import TelegramHTMLReply
 from vault_evolve import EvolveError, review_schema
 from weekly_plan import weekly_plan_schema
 from weekly_review import WeeklyReview, latest_weekly
@@ -521,7 +522,15 @@ def _weekly_review() -> WeeklyReview:
     )
 
 
-def _proposal_reply(message: dict, text: str) -> str | None:
+def _telegram_reply_send(chat_id: int, reply: str | TelegramHTMLReply) -> None:
+    if isinstance(reply, TelegramHTMLReply):
+        for part in reply.parts:
+            _telegram_proposal_send(chat_id, part, parse_mode="HTML")
+    else:
+        _telegram_send(chat_id, reply)
+
+
+def _proposal_reply(message: dict, text: str) -> str | TelegramHTMLReply | None:
     if not _action_briefing_enabled():
         return None
     replied_to = message.get("reply_to_message")
@@ -536,7 +545,7 @@ def _proposal_reply(message: dict, text: str) -> str | None:
     return loop.reply(target, text, date.today())
 
 
-def _proposal_callback(callback: dict) -> str:
+def _proposal_callback(callback: dict) -> str | TelegramHTMLReply:
     parts = callback["data"].split("|")
     if len(parts) != 3 or parts[1] not in {"approve", "decline", "explain"}:
         return "Unknown proposal action."
@@ -1988,7 +1997,7 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         if _action_briefing_enabled() and isinstance(callback.get("data"), str) and callback["data"].startswith("brief1|"):
             try:
                 reply = _proposal_callback(callback)
-                _telegram_send(chat_id, reply)
+                _telegram_reply_send(chat_id, reply)
             except (StateError, SourceError, LoopError, ActionError, PlanError, AzureError, httpx.HTTPError, TelegramDeliveryError) as exc:
                 log.error("proposal callback failed error=%s", type(exc).__name__)
                 return func.HttpResponse("proposal unavailable", status_code=503)
@@ -2043,12 +2052,12 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         if transcript:
             try:
                 reply = _evolve_reply(message, transcript) or _proposal_reply(message, transcript)
-            except (EvolveError, StateError, SourceError, LoopError, ActionError, PlanError, AzureError, httpx.HTTPError) as exc:
+                if reply is not None:
+                    _telegram_reply_send(chat_id, reply)
+                    return func.HttpResponse("ok", status_code=200)
+            except (EvolveError, StateError, SourceError, LoopError, ActionError, PlanError, AzureError, httpx.HTTPError, TelegramDeliveryError) as exc:
                 log.error("voice proposal reply failed error=%s", type(exc).__name__)
                 return func.HttpResponse("proposal unavailable", status_code=503)
-            if reply is not None:
-                _telegram_send(chat_id, reply)
-                return func.HttpResponse("ok", status_code=200)
             # Inject the transcript as message text so memex treats it as a
             # plain-text capture. Keep the `voice` / `audio` field so memex
             # can archive the original.  Hard Rule 1: never log the text.
@@ -2128,7 +2137,7 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse("ok", status_code=200)
         reply = _evolve_reply(message, user_text) or _proposal_reply(message, user_text)
         if reply is not None:
-            _telegram_send(chat_id, reply)
+            _telegram_reply_send(chat_id, reply)
             return func.HttpResponse("ok", status_code=200)
         if _action_briefing_enabled() and (
             user_text in {"/proposals", "/proposals all"} or user_text == "/memory" or user_text.startswith("/memory ")

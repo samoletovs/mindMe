@@ -4,9 +4,24 @@ from __future__ import annotations
 
 import html
 import re
+from dataclasses import dataclass
 from urllib.parse import unquote, urlsplit
 
 MAX_LINK = 400
+
+
+@dataclass(frozen=True)
+class TelegramHTMLReply:
+    """Explicitly formatted replies; ordinary strings remain plain text."""
+
+    parts: tuple[str, ...]
+
+
+def html_reply(sections: list[str]) -> TelegramHTMLReply:
+    """Pack complete escaped sections without cutting tags, entities or content."""
+    if not sections or any(not section for section in sections):
+        raise ValueError("Telegram HTML reply must not be empty")
+    return TelegramHTMLReply(tuple(pack_html_blocks(sections)))
 
 
 def escape(value: str) -> str:

@@ -9,6 +9,7 @@ import pytest
 import httpx
 
 import function_app as fa
+from briefing_plan import render_proposal
 
 
 def request(payload):
@@ -62,6 +63,80 @@ def test_voice_reply_does_not_become_an_unrelated_note(monkeypatch, owner):
     assert response.status_code == 200
     assert loop.reply.call_args.args[1] == "snooze 2026-10-01"
     forwarded.assert_not_called()
+
+
+def explanation_request(route: str, chat_id: int = 7) -> dict:
+    if route == "callback":
+        return {"callback_query": {
+            "message": {"chat": {"id": chat_id}, "message_id": 91},
+            "data": "brief1|explain|" + "a" * 24,
+        }}
+    content = {"voice": {"file_id": "voice"}} if route == "voice" else {"text": "why?"}
+    return {"message": {
+        "chat": {"id": chat_id}, "reply_to_message": {"message_id": 91}, **content,
+    }}
+
+
+@pytest.mark.parametrize("route", ["text", "voice", "callback"])
+def test_explanations_use_html_transport_and_never_add_approval_buttons(monkeypatch, owner, route):
+    loop, plain = owner
+    reply = render_proposal({
+        "kind": "research", "text": "&" * 700, "why": "<" * 500,
+        "source_url": "https://github.com/example/vault/blob/main/notes/test.md",
+    })
+    loop.reply.return_value = reply
+    monkeypatch.setattr(fa, "_download_telegram_file", lambda _: b"synthetic-audio")
+    monkeypatch.setattr(fa, "_transcribe_voice", lambda *_: "why?")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "synthetic")
+    client = Mock()
+    client.post.return_value.json.return_value = {"ok": True, "result": {"message_id": 92}}
+    monkeypatch.setattr(fa, "_http_client", lambda: client)
+    forwarded, companion = Mock(), Mock()
+    monkeypatch.setattr(fa, "_forward_to_memex", forwarded)
+    monkeypatch.setattr(fa, "_ask_companion", companion)
+
+    response = fa.telegram_webhook(request(explanation_request(route)))
+
+    assert response.status_code == 200
+    payloads = [call.kwargs["json"] for call in client.post.call_args_list]
+    assert [payload["text"] for payload in payloads] == list(reply.parts)
+    for payload in payloads:
+        assert payload["parse_mode"] == "HTML"
+        assert payload["link_preview_options"] == {"is_disabled": True}
+        assert "reply_markup" not in payload
+    plain.assert_not_called()
+    forwarded.assert_not_called()
+    companion.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["text", "voice", "callback"])
+def test_explanation_send_failure_is_retryable_without_plain_fallback(monkeypatch, owner, route):
+    loop, plain = owner
+    loop.reply.return_value = fa.TelegramHTMLReply(("<b>Why now</b>",))
+    monkeypatch.setattr(fa, "_download_telegram_file", lambda _: b"synthetic-audio")
+    monkeypatch.setattr(fa, "_transcribe_voice", lambda *_: "why?")
+    send = Mock(side_effect=fa.TelegramDeliveryError("Unconfirmed"))
+    monkeypatch.setattr(fa, "_telegram_proposal_send", send)
+
+    response = fa.telegram_webhook(request(explanation_request(route)))
+
+    assert response.status_code == 503
+    send.assert_called_once()
+    plain.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["text", "voice", "callback"])
+def test_other_chat_cannot_request_a_formatted_explanation(monkeypatch, owner, route):
+    loop, plain = owner
+    send = Mock()
+    monkeypatch.setattr(fa, "_telegram_proposal_send", send)
+
+    response = fa.telegram_webhook(request(explanation_request(route, chat_id=8)))
+
+    assert response.status_code == 200
+    loop.reply.assert_not_called()
+    send.assert_not_called()
+    plain.assert_not_called()
 
 
 def test_unbound_yes_asks_for_a_target_without_calling_the_agent(monkeypatch, owner):
