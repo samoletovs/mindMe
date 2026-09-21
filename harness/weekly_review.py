@@ -52,7 +52,7 @@ class WeeklyReview:
     def source_status(self, today: date, sections: list[str]) -> str:
         previous = latest_weekly(self.store.read())
         context = self.loop.context(
-            today, sections, previous=previous.get("baseline", {}), prune_sources=False,
+            today, sections, previous=previous.get("baseline", {}), reconcile_sources=False,
         )
         context["warnings"] = [
             "No earlier weekly baseline; existing notes are not new progress."

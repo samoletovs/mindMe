@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-import html
 import re
 from datetime import date
 from typing import Any
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import quote, urlsplit
 
 from briefing_plan import PlanError, plan_schema, safe_text, task_due, validate_plan
+from telegram_format import (
+    escape as _escape, excerpt as _excerpt, github_link as _github_link,
+    units as _units,
+)
 
 MAX_WEEKLY_PROPOSALS = 3
 TELEGRAM_LIMIT = 3900
-MAX_LINK = 400
 _ACTIVITY_LABELS = {
     "completed": "Result verified",
     "submitted": "Work submitted - awaiting verification",
@@ -104,53 +106,6 @@ def validate_weekly_plan(
         render_weekly_proposal(action, len(normalized) + 1, len(proposals))
         normalized.append(action)
     return {"focus": base["focus"], "changes": base["changes"], "proposals": normalized}
-
-
-def _escape(value: str) -> str:
-    return html.escape(value, quote=False)
-
-
-def _units(value: str) -> int:
-    return sum(2 if ord(char) > 0xFFFF else 1 for char in value)
-
-
-def _excerpt(value: object, limit: int) -> tuple[str, bool]:
-    text = value.strip() if isinstance(value, str) else ""
-    escaped = _escape(text)
-    if _units(escaped) <= limit:
-        return escaped, False
-    chars: list[str] = []
-    length = 0
-    for char in text:
-        part = _escape(char)
-        if length + _units(part) > limit - 1:
-            break
-        chars.append(part)
-        length += _units(part)
-    return "".join(chars).rstrip() + "…", True
-
-
-def _github_link(value: object, label: str = "Source") -> str:
-    if not isinstance(value, str) or _units(value) > MAX_LINK:
-        return ""
-    try:
-        parsed = urlsplit(value)
-        decoded = unquote(value)
-        parts = parsed.path.split("/")
-        if (
-            parsed.scheme != "https" or parsed.netloc != "github.com"
-            or parsed.query or parsed.fragment or len(parts) < 5
-            or not re.fullmatch(r"[A-Za-z0-9_.-]+", parts[1])
-            or not re.fullmatch(r"[A-Za-z0-9_.-]+", parts[2])
-            or parts[3] not in {"blob", "tree", "issues", "pull", "commit"}
-            or any(part in {"", ".", ".."} for part in parts[1:])
-            or any(char.isspace() or ord(char) < 32 or char in '<>"\\' for char in decoded)
-        ):
-            return ""
-    except ValueError:
-        return ""
-    link = f'<a href="{html.escape(value, quote=True)}">{_escape(label)}</a>'
-    return link if _units(link) <= MAX_LINK else ""
 
 
 def _row(label: str, text: object, url: object, limit: int) -> tuple[str, bool]:

@@ -39,7 +39,7 @@ on 2026-09-13**; a fresh code checkout alone does not enable it:
 - Proposal-specific text/voice replies, corrections, declines and dated snoozes.
 - Private decision receipts, retry-safe task handoff and read-only research-result
   reconciliation; no claim that a submitted PR is already a completed task.
-- `/briefing now`, `/proposals`, `/memory`, and `/memory forget <id>` when enabled.
+- `/briefing now`, `/briefing details`, `/proposals`, `/memory`, and `/memory forget <id>` when enabled.
   Reply directly to the proposal message. Bare unrelated conversation remains
   single-turn, and existing capture/review commands are unchanged.
 
@@ -48,8 +48,34 @@ privacy controls and verified release evidence. No new schedule or service was a
 
 The model's 24-source packet reserves evidence for changes and goals before filling with
 tasks. Omitted records are disclosed, and model-generated focus, changes, and proposals
-must cite a source actually included in that packet. Due-task rendering remains
-deterministic and is not truncated to the model's source budget.
+must cite a source actually included in that packet. Due-task selection remains
+deterministic and is not restricted to the model's source budget.
+
+### A one-minute morning read
+
+The action-enabled morning overview uses Telegram headings, named source links
+and no link previews. It is capped at 190 visible words and 3,200 UTF-16 units
+including HTML, with one focus and up to two other date-relevant tasks. A hard
+deadline within seven days takes priority over an old waiting review. The focus
+task is not repeated in the other-dates list; review dates are labelled separately
+from deadlines. Useful source updates and optional weather follow only when they fit.
+
+`/briefing details` reads the **current** source view without generating a plan,
+changing preferences, advancing delivery state or executing work. It exposes the
+full due-task inventory returned by the source, complete next-action wording,
+source limitations and current personal-snapshot signals. Omitted task counts are
+explicit in the overview; an abbreviated summary is not a claim that other work
+does not exist. Changes not shown do not advance presented-source fingerprints.
+
+Out-of-date or undated personal snapshots are labelled and excluded from both
+recommendations and routine counts. This does not prevent recommendations based
+on current connected notes. No private snapshot is refreshed automatically.
+
+At most one separately bound action card follows. **Start research**, **Draft task**
+and **Select next step** say what approval does; selecting a step does not perform
+or complete it. The exact proposed action, rationale and scope are on the card.
+Research/task results remain submitted until verified. Nothing starts during
+briefing generation, and repeated approvals cannot start duplicate work.
 
 ### Weekly decisions, not a second status report
 
