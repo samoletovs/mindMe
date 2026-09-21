@@ -10,7 +10,7 @@ from uuid import uuid4
 from briefing_loop import BriefingLoop, LoopError
 from briefing_plan import fingerprint, model_input, proposal_allowed
 from briefing_state import is_expired, record_transition, trim_deliveries
-from weekly_plan import render_weekly, render_weekly_proposal, validate_weekly_plan
+from weekly_plan import render_weekly, render_weekly_proposal, render_weekly_sources, validate_weekly_plan
 
 
 def latest_weekly(state: dict[str, Any]) -> dict[str, Any]:
@@ -48,6 +48,18 @@ class WeeklyReview:
         self.store = loop.store
         self.generate = generate
         self.send = send
+
+    def source_status(self, today: date, sections: list[str]) -> str:
+        previous = latest_weekly(self.store.read())
+        context = self.loop.context(
+            today, sections, previous=previous.get("baseline", {}), prune_sources=False,
+        )
+        context["warnings"] = [
+            "No earlier weekly baseline; existing notes are not new progress."
+            if warning.startswith("Initial source baseline;") else warning
+            for warning in model_input(context, [])["warnings"]
+        ]
+        return render_weekly_sources(context, previous)
 
     def run(self, today: date, sections: list[str], *, retry_delivery: bool = False) -> bool:
         self.loop.reconcile(today)

@@ -462,7 +462,7 @@ def _action_briefing_extras(sections: list[str]) -> dict:
 
 def _weekly_extras(sections: list[str]) -> dict:
     if not set(sections) & {"vault", "journal", "areas"}:
-        return {"warnings": []}
+        return {"warnings": [], "freshness": {"status": "not_requested"}}
     try:
         freshness = _mirror_freshness(date.today())
     except AzureError as exc:
@@ -2056,6 +2056,16 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("ok", status_code=200)
 
     try:
+        if _action_briefing_enabled() and user_text == "/review sources":
+            try:
+                with execution_budget(150):
+                    report = _weekly_review().source_status(date.today(), _briefing_prefs())
+                _telegram_send(chat_id, report)
+            except (BudgetExceeded, StateError, SourceError, ActionError, AzureError, httpx.HTTPError, TelegramDeliveryError) as exc:
+                log.error("weekly source check failed error=%s", type(exc).__name__)
+                _telegram_send(chat_id, "The weekly source check could not finish. Check source access and try /review sources again. No comparison or decision was changed.")
+                return func.HttpResponse("weekly source check unavailable", status_code=503)
+            return func.HttpResponse("ok", status_code=200)
         if _action_briefing_enabled() and user_text in {"/review", "/review retry"}:
             try:
                 with execution_budget(150):
@@ -2178,6 +2188,7 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
                 + (
                     "\nAction briefing: /briefing now, /proposals, /memory, /memory forget <id>. "
                     "/review prepares your weekly priorities and individual approval cards. "
+                    "/review sources checks coverage, freshness, comparison history and private-link access without starting work. "
                     "Reply directly to a proposal to approve, decline, correct or snooze it."
                     if _action_briefing_enabled() else ""
                 )

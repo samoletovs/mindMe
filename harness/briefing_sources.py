@@ -533,6 +533,7 @@ def load_sources(
         "fingerprints": {}, "source_revisions": {}, "complete": True,
         "warnings": [], "source_status": "available", "initial_baseline": not bool(previous),
         "sections": list(sections), "processed_revisions": {}, "scan_cursor": scan_cursor,
+        "coverage": {"candidate_files": 0, "read_files": 0, "included_notes": 0},
     }
     if not enabled:
         return result
@@ -578,6 +579,7 @@ def load_sources(
             or (_kind(path) in {"note", "research", "wiki"} and "knowledge" in enabled)
         )
     }
+    result["coverage"]["candidate_files"] = len(candidates)
     result["source_revisions"] = {
         path: entry["sha"] for path, entry in inventory.items()
         if path in candidates or ("loops" in enabled and _kind(path, tasks=True) == "task")
@@ -688,6 +690,7 @@ def load_sources(
             result["warnings"].append("Some source excerpts are shortened; source links retain the full permitted context.")
         total += len(excerpt)
     result["warnings"] = list(dict.fromkeys(result["warnings"]))
+    result["coverage"].update(read_files=fetches, included_notes=len(result["sources"]))
     return result
 
 

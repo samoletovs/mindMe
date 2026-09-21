@@ -60,6 +60,7 @@ class BriefingLoop:
 
     def context(
         self, today: date, sections: list[str], *, previous: dict[str, str] | None = None,
+        prune_sources: bool = True,
     ) -> dict[str, Any]:
         state = self.store.read()
         baseline = (state.get("last_delivered") or {}).get("baseline", {})
@@ -84,7 +85,7 @@ class BriefingLoop:
         context["extras"] = self.extras(sections)
         context["warnings"].extend(context["extras"].get("warnings", []))
         inventory = context.get("inventory_paths")
-        if inventory is not None:
+        if inventory is not None and prune_sources:
             def prune(current: dict[str, Any]) -> None:
                 paths = set(inventory)
                 prune_state(current, inventory_paths=paths, today=today)
