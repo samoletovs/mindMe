@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 from datetime import date, datetime, timezone
 
+import httpx
 import pytest
 
+from briefing_actions import ActionGateway
 from briefing_state import _encode
 from evolve_loop import DailyEvolve
 from test_briefing_loop import MemoryStore
@@ -171,6 +174,38 @@ def test_daily_invocations_generate_publish_and_deliver_only_once(system):
     assert len(sends) == 2
     assert store.read()["last_delivered"]["date"] == TODAY.isoformat()
     _encode(store.read())
+
+
+def test_writer_policy_rejection_is_terminal_without_delivery_or_resubmission(system):
+    loop, store, sends, _, generations, _ = system
+    requests = []
+
+    def reject(request):
+        requests.append(request)
+        payload = json.loads(request.content)
+        return httpx.Response(403, json={
+            "action_id": payload["action_id"], "status": "failed",
+            "error": "source_not_allowed",
+        })
+
+    with httpx.Client(transport=httpx.MockTransport(reject)) as client:
+        gateway = ActionGateway(
+            client=client, token="synthetic", repo="example/mindVault",
+            memex_url="https://synthetic.example/personal_action", chat_id=7,
+        )
+        loop.publish = gateway.save_review
+        with pytest.raises(EvolveError, match="review_publication_rejected"):
+            loop.run(TODAY)
+        with pytest.raises(EvolveError, match="review_source_changed"):
+            loop.run(TODAY)
+
+    record = store.read()["deliveries"][TODAY.isoformat()]
+    assert record["phase"] == "invalidated"
+    assert record["status"] == "failed"
+    assert record["receipt"]["error"] == "source_not_allowed"
+    assert not sends
+    assert len(requests) == len(generations) == 1
+    assert store.read()["last_delivered"] is None
 
 
 def test_feedback_is_bound_persistent_and_used_next_day_without_executing_work(system):

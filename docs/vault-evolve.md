@@ -45,6 +45,12 @@ checking as proof of factual correctness or knowledge acquisition.
   literal quotations, raw-byte SHA-256 hashes and proposal-only receipt.
   Source revisions are rechecked before publication. memex independently checks
   source bytes, quotations and source eligibility before accepting the pair.
+- Review selection and revalidation apply the writer's stricter privacy,
+  metadata and derived-source rules. Ordinary action-briefing eligibility is
+  unchanged. A retained prepared review with an ineligible source is invalidated,
+  not repeatedly resubmitted or rewritten under its existing action ID.
+  A matching, allowlisted writer policy rejection is retained as a failed receipt,
+  with only its fixed code logged; it is not reported as a service outage.
 - New observations, evidence gaps, conceptual bridges and application candidates
   are interpretations of a bounded selection, not a diagnosis of the owner's
   knowledge. Repeated summaries are not independent corroboration.

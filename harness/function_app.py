@@ -327,7 +327,9 @@ def _evolve_loop() -> DailyEvolve:
         ),
         generate=_generate_evolve_review, publish=gateway.save_review,
         send=lambda text, keyboard: _telegram_proposal_send(chat_id, text, keyboard),
-        revision=lambda path: read_source_revision(client, token=token, repo=repo, path=path),
+        revision=lambda path: read_source_revision(
+            client, token=token, repo=repo, path=path, include_evidence=True,
+        ),
     )
 
 
