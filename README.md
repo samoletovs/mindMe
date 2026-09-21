@@ -43,6 +43,14 @@ on 2026-09-13**; a fresh code checkout alone does not enable it:
   Reply directly to the proposal message. Bare unrelated conversation remains
   single-turn, and existing capture/review commands are unchanged.
 
+Proposal cards and their "Why this?" explanations use calm Telegram formatting:
+bold section headings, short paragraphs, and named source links without link
+previews. Internal IDs stay out of the message body; a single suggestion has no
+"1 of 1" counter. Text, voice, and button requests for an explanation share the
+same formatting. Long explanations continue in complete sections rather than
+dropping the action or rationale. Explanations are read-only: approval, edits,
+corrections, and snoozes still target the original proposal message.
+
 See [rollout and acceptance](docs/deploy.md#action-briefing-rollout) for configuration,
 privacy controls and verified release evidence. No new schedule or service was added.
 

@@ -11,6 +11,7 @@ from briefing_loop import BriefingLoop, LoopError
 from briefing_plan import PlanError, validate_plan
 from briefing_state import BriefingStore, empty_state
 from execution_budget import BudgetExceeded, execution_budget
+from telegram_format import TelegramHTMLReply
 
 TODAY = date(2026, 9, 13)
 REVISION = "a" * 40
@@ -95,6 +96,22 @@ def test_two_briefings_preserve_a_correction_without_creating_work(system):
     assert len([keyboard for _, keyboard in sent if keyboard]) == 1
     assert executed == []
     assert store.state["last_delivered"]["date"] == "2026-09-14"
+
+
+def test_explanation_is_formatted_and_does_not_change_proposal_or_start_work(system):
+    loop, store, sent, executed, _, raw, _ = system
+    loop.deliver(TODAY, ["knowledge", "loops"])
+    before = store.read()
+    count = len(sent)
+
+    reply = loop.reply(loop.target(2), "why?", TODAY)
+
+    assert isinstance(reply, TelegramHTMLReply)
+    assert raw["proposal"]["why"] in "".join(reply.parts)
+    assert "<b>Why now</b>" in "".join(reply.parts)
+    assert store.read() == before
+    assert len(sent) == count
+    assert executed == []
 
 
 def test_invalid_model_text_is_regenerated_before_any_delivery(system, caplog):

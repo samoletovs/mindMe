@@ -9,7 +9,9 @@ from copy import deepcopy
 from datetime import date, timedelta
 from typing import Any
 
-from telegram_format import escape, excerpt, github_link, inline_text, units, word_count
+from telegram_format import (
+    TelegramHTMLReply, escape, excerpt, github_link, html_reply, inline_text, units, word_count,
+)
 
 MAX_TEXT = 700
 MAX_PROPOSALS = 1
@@ -18,6 +20,28 @@ MAX_MODEL_CHANGES = 2
 MAX_MODEL_GOALS = 5
 MAX_FOCUS_TEXT = 500
 MAX_REASON_TEXT = 500
+PROPOSAL_ACTIONS = {
+    "research": (
+        "Research", "Start research",
+        "One public question, at most 5 sources, one short report; no further jobs. "
+        "Uses existing agent capacity.",
+    ),
+    "create_task": (
+        "Draft task", "Draft task",
+        "Prepare one draft task for review. Approval does not instantly publish "
+        "the task or complete any work.",
+    ),
+    "review_task": (
+        "Next step", "Select next step",
+        "Select this next action only. The existing task stays open; approval "
+        "does not complete it.",
+    ),
+    "update_task": (
+        "Edit task", "Approve edit",
+        "Prepare one edit for review. Only the next-action field changes when "
+        "that edit is applied; the task is not completed.",
+    ),
+}
 RETRYABLE_PLAN_ERRORS = frozenset({
     "invalid_text", "invalid_model_plan", "invalid_plan", "unbacked_focus",
     "invalid_changes", "invalid_change", "unbacked_change", "invalid_proposal",
@@ -510,19 +534,26 @@ def render_briefing_details(context: dict[str, Any], today: date) -> str:
     return "\n".join(lines)
 
 
-def render_proposal(proposal: dict[str, Any]) -> str:
-    operation = {
-        "research": "Public research: one question, at most 5 primary sources, one short report; no further jobs.",
-        "create_task": "Create one draft task through the existing reviewable vault workflow.",
-        "review_task": "Select this next action; the existing task stays open until you report completion.",
-        "update_task": "Propose the displayed task edit through the existing reviewable vault workflow.",
-    }[proposal["kind"]]
-    return (
-        f"Suggested action\n\n{proposal['text']}\n\n"
-        f"Why now: {proposal['why']}\n\n{operation}\n"
-        + ("Research consumes existing agent capacity.\n" if proposal["kind"] == "research" else "")
-        + "No work starts before approval.\n\n"
-        f"Source: {proposal.get('source_url') or proposal['source_path']}\n\n"
-        "Approve, decline, ask why, or reply with a correction. "
-        "To defer, reply 'snooze YYYY-MM-DD'. Task completion: reply 'done'."
+def render_proposal(proposal: dict[str, Any]) -> TelegramHTMLReply:
+    kind = proposal.get("kind")
+    if not isinstance(kind, str) or kind not in PROPOSAL_ACTIONS:
+        raise PlanError("unsupported_action")
+    title, _, scope = PROPOSAL_ACTIONS[kind]
+    action = escape(safe_text(proposal.get("text")))
+    why = escape(safe_text(proposal.get("why"), MAX_REASON_TEXT))
+    link = github_link(proposal.get("source_url"), "Open source") or "Source link unavailable."
+    guidance = (
+        "Use the original proposal's buttons, or reply to that message with "
+        "<code>approve</code>, <code>decline</code>, <code>change: your correction</code>, "
+        "<code>correction: context to remember</code>, or <code>snooze YYYY-MM-DD</code>."
     )
+    if kind in {"review_task", "update_task"}:
+        guidance += " When finished, reply <code>done</code> to the original proposal."
+    return html_reply([
+        f"<b>{title} - Why this?</b>",
+        f"<b>Proposed action</b>\n{action}",
+        f"<b>Why now</b>\n{why}",
+        f"<b>Scope</b>\n{scope}\nNo work starts before approval.",
+        link,
+        guidance,
+    ])

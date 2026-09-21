@@ -7,7 +7,7 @@ from datetime import date
 from typing import Any
 from urllib.parse import quote, urlsplit
 
-from briefing_plan import PlanError, plan_schema, safe_text, task_due, validate_plan
+from briefing_plan import PROPOSAL_ACTIONS, PlanError, plan_schema, safe_text, task_due, validate_plan
 from telegram_format import (
     escape as _escape, excerpt as _excerpt, github_link as _github_link,
     units as _units,
@@ -26,28 +26,6 @@ _ACTIVITY_LABELS = {
     "declined": "Dismissed",
 }
 _OPEN_ACTION_PRIORITY = {"failed": 0, "uncertain": 1, "executing": 2, "submitted": 3}
-_ACTIONS = {
-    "research": (
-        "Research", "Start research",
-        "One public question, at most 5 sources, one short report; no further jobs. "
-        "Uses existing agent capacity.",
-    ),
-    "create_task": (
-        "Draft task", "Draft task",
-        "Prepare one draft task for review. Approval does not instantly publish "
-        "the task or complete any work.",
-    ),
-    "review_task": (
-        "Next step", "Select next step",
-        "Select this next action only. The existing task stays open; approval "
-        "does not complete it.",
-    ),
-    "update_task": (
-        "Edit task", "Approve edit",
-        "Prepare one edit for review. Only the next-action field changes when "
-        "that edit is applied; the task is not completed.",
-    ),
-}
 
 
 def weekly_plan_schema(packet: dict[str, Any]) -> dict[str, Any]:
@@ -442,12 +420,12 @@ def render_weekly_proposal(
     if not 1 <= number <= total <= MAX_WEEKLY_PROPOSALS:
         raise PlanError("invalid_weekly_card_number")
     kind = proposal.get("kind")
-    if not isinstance(kind, str) or kind not in _ACTIONS:
+    if not isinstance(kind, str) or kind not in PROPOSAL_ACTIONS:
         raise PlanError("unsupported_action")
     identifier = proposal.get("id")
     if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,40}", identifier):
         raise PlanError("invalid_weekly_callback")
-    title, approve, scope = _ACTIONS[kind]
+    title, approve, scope = PROPOSAL_ACTIONS[kind]
     proposed_text = safe_text(proposal.get("text"))
     action = _escape(proposed_text)
     if kind == "update_task":
@@ -466,7 +444,8 @@ def render_weekly_proposal(
         action = "Set next action to:\n" + _escape(value)
     why = safe_text(proposal.get("why"), 500)
     link = _github_link(proposal.get("source_url")) or "Source link unavailable."
-    before = f"<b>{title} · {number} of {total}</b>\n\n<b>Proposed action</b>\n{action}\n\n<b>Why</b>\n"
+    heading = f"{title} · {number} of {total}" if total > 1 else title
+    before = f"<b>{heading}</b>\n\n<b>Proposed action</b>\n{action}\n\n<b>Why now</b>\n"
     after = (
         f"\n\n<b>Scope</b>\n{scope}\n\n{link}\n\n"
         "Reply <code>change: your correction</code> or <code>snooze YYYY-MM-DD</code> "
