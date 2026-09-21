@@ -87,6 +87,15 @@ does not complete a task, and opening a research issue or task PR is not a verif
 result. Reply to that card to approve, dismiss, revise (`change: ...`) or defer
 (`snooze YYYY-MM-DD`). There is no blanket approval.
 
+Use `/review sources` for a read-only source check: candidate/read/selected counts,
+all evidence limits, task availability, last delivered weekly baseline, and private
+GitHub link help. This check uses no model and does not advance the comparison,
+reconcile actions, change decisions, or sync the private snapshot. A bounded read
+is reported as incomplete coverage, not missing notes. The private snapshot is
+synced manually from the verified laptop folder; see [the sync guide](scripts/local/README.md).
+Source links require the GitHub account with access to the private vault, including
+inside Telegram's browser; a signed-out browser can return 404 for a valid link.
+
 The weekly comparison has its own baseline, independent of morning briefings.
 Follow-through reports dated observations in a maximum seven-day window, never
 lifetime status counts presented as this week's accomplishments. Old receipts

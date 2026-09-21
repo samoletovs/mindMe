@@ -124,6 +124,30 @@ def test_same_snapshot_does_not_regenerate_or_redeliver(system):
     assert len(generated) == 1
 
 
+def test_source_check_does_not_advance_baseline_prune_or_reconcile_decisions(system):
+    review, loop, store, sources, _, sent, generated, executions, previous_reads = system
+    review.run(TODAY, ["knowledge"])
+    before = store.read()
+    sources.pop()
+    sent.clear()
+    generated.clear()
+    loop.execute = Mock(side_effect=AssertionError("diagnostics must not reconcile"))
+    store.update = Mock(side_effect=AssertionError("diagnostics must not write state"))
+    text = review.source_status(TODAY, ["knowledge"])
+    assert "Last successfully delivered weekly baseline: 2026-09-21" in text
+    assert previous_reads[-1] == latest_weekly(before)["baseline"]
+    assert store.read() == before
+    assert not sent and not generated and not executions
+
+
+def test_source_check_does_not_create_a_first_baseline(system):
+    review, _, store, _, _, sent, generated, executions, _ = system
+    before = store.read()
+    assert "No delivered weekly baseline yet" in review.source_status(TODAY, ["knowledge"])
+    assert store.read() == before
+    assert not sent and not generated and not executions
+
+
 def test_unrenderable_action_rejects_the_batch_before_sending_the_summary(system):
     review, _, store, _, raw, sent, _, executions, _ = system
     raw["proposals"][2]["text"] = "&" * 700
@@ -432,11 +456,53 @@ def test_review_commands_use_the_same_owner_only_flow(monkeypatch, command, retr
     review.run.assert_called_once_with(date.today(), ["knowledge"], retry_delivery=retry)
 
 
+def test_source_command_is_owner_only_and_never_starts_a_review(monkeypatch, caplog):
+    caplog.set_level("INFO", logger="mindMe.harness")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "synthetic")
+    monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "true")
+    review = Mock()
+    review.source_status.return_value = "Synthetic source check"
+    send = Mock()
+    monkeypatch.setattr(fa, "_weekly_review", lambda: review)
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["knowledge"])
+    monkeypatch.setattr(fa, "_telegram_send", send)
+    command = {"message": {"chat": {"id": 8}, "text": "/review sources"}}
+    assert fa.telegram_webhook(request(command)).status_code == 200
+    review.source_status.assert_not_called()
+    command["message"]["chat"]["id"] = 7
+    assert fa.telegram_webhook(request(command)).status_code == 200
+    review.source_status.assert_called_once_with(date.today(), ["knowledge"])
+    send.assert_called_once_with(7, "Synthetic source check")
+    assert "weekly source check sent chars=22" in caplog.text
+    assert "Synthetic source check" not in caplog.text
+    review.run.assert_not_called()
+
+
+@pytest.mark.parametrize("configuration_failure", [False, True])
+def test_failed_source_check_reports_failure_without_claiming_an_empty_vault(monkeypatch, caplog, configuration_failure):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "synthetic")
+    monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "true")
+    review = Mock()
+    review.source_status.side_effect = fa.SourceError("PRIVATE ERROR DETAIL")
+    send = Mock()
+    factory = Mock(side_effect=fa.ActionError("PRIVATE ERROR DETAIL")) if configuration_failure else lambda: review
+    monkeypatch.setattr(fa, "_weekly_review", factory)
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["knowledge"])
+    monkeypatch.setattr(fa, "_telegram_send", send)
+    response = fa.telegram_webhook(request({"message": {"chat": {"id": 7}, "text": "/review sources"}}))
+    assert response.status_code == 503
+    assert "could not finish" in send.call_args.args[1]
+    assert "PRIVATE ERROR DETAIL" not in caplog.text
+    review.run.assert_not_called()
+
+
 def test_weekly_extras_read_only_sync_metadata_not_stale_private_facts(monkeypatch):
     monkeypatch.setattr(fa, "_mirror_freshness", lambda today: {"status": "stale", "age_days": 52})
     monkeypatch.setattr(fa, "_vault_state", Mock(side_effect=AssertionError("no private body reads")))
     assert fa._weekly_extras(["vault", "journal"]) == {"warnings": [], "freshness": {"status": "stale", "age_days": 52}}
-    assert fa._weekly_extras(["knowledge"]) == {"warnings": []}
+    assert fa._weekly_extras(["knowledge"]) == {"warnings": [], "freshness": {"status": "not_requested"}}
 
 
 def test_weekly_model_is_bounded_and_cannot_execute(monkeypatch):

@@ -119,14 +119,11 @@ def _row(label: str, text: object, url: object, limit: int) -> tuple[str, bool]:
     return label + excerpt + suffix, omitted or shortened
 
 
-def _source_notice(context: dict[str, Any]) -> str:
+def _snapshot_notice(context: dict[str, Any]) -> str:
     freshness = (context.get("extras") or {}).get("freshness") or {}
     status = freshness.get("status", "unknown")
-    available = context.get("source_status") == "available"
-    complete = available and context.get("complete") is True
-    warnings = context.get("warnings") or []
-    limited = status != "current" or not complete or bool(warnings)
-    lines = ["<b>Limited information</b>" if limited else "<b>Sources</b>"]
+    if status == "not_requested":
+        return "The private snapshot is not selected; no details from it are used here."
     mirror = {
         "current": "Your personal snapshot is current",
         "stale": "Your personal snapshot is out of date",
@@ -135,13 +132,25 @@ def _source_notice(context: dict[str, Any]) -> str:
     age = freshness.get("age_days")
     if status == "stale" and isinstance(age, int) and not isinstance(age, bool) and 0 <= age < 10000:
         mirror = f"Your personal snapshot is {age} days old"
-    lines.append(
+    return (
         mirror + ". It is separate from your connected notes; "
         "no details from the snapshot are used here."
     )
+
+
+def _source_notice(context: dict[str, Any]) -> str:
+    freshness = (context.get("extras") or {}).get("freshness") or {}
+    available = context.get("source_status") == "available"
+    complete = available and context.get("complete") is True
+    warnings = context.get("warnings") or []
+    limited = freshness.get("status") not in {"current", "not_requested"} or not complete or bool(warnings)
+    lines = ["<b>Limited information</b>" if limited else "<b>Sources</b>"]
+    lines.append(_escape(_snapshot_notice(context)))
     lines.append(
         "Current connected notes were read for this review."
         if complete else
+        "Connected notes are reachable, but this check is incomplete; unread notes may contain changes."
+        if available else
         "Some connected notes are missing or could not be read; this is not a full account."
     )
     omitted = False
@@ -161,9 +170,72 @@ def _source_notice(context: dict[str, Any]) -> str:
             omitted = True
     if len(warnings) > 2 or omitted:
         lines.append(
-            "More information gaps could not fit here. This review is incomplete; "
-            "check the connected notes before deciding."
+            "More source limits: /review sources. This review is incomplete; check before deciding."
         )
+    else:
+        lines.append("Source checks and private-link help: /review sources.")
+    return "\n".join(lines)
+
+
+def render_weekly_sources(context: dict[str, Any], previous: dict[str, Any]) -> str:
+    """Plain-text diagnostics: no source bodies, paths, decisions or hidden snapshot facts."""
+    lines = ["Weekly review source check", "", _snapshot_notice(context)]
+    freshness = (context.get("extras") or {}).get("freshness") or {}
+    if freshness.get("status") not in {"current", "not_requested"}:
+        lines.append(
+            "Snapshot sync is manual. Refresh only the verified Personal OS folder from the laptop "
+            "using the private sync tool; deploying the bot does not sync it. "
+            "Do not upload extra private files just to clear this warning."
+        )
+    lines.extend(["", "Connected notes"])
+    if context.get("source_status") == "available":
+        coverage = context.get("coverage")
+        if coverage:
+            lines.append(
+                f"Read {coverage['read_files']} of {coverage['candidate_files']} candidate files; "
+                f"{coverage['included_notes']} usable notes selected after filtering."
+            )
+        lines.append(
+            "The source read completed."
+            if context.get("complete") is True else
+            "The source read is incomplete. A reading limit is not a broken connection; "
+            "unread candidates have not been checked for permission, relevance or changes."
+        )
+    else:
+        lines.append("Connected notes could not be read. Check the configured GitHub access.")
+    loops = context.get("open_loops")
+    if loops:
+        lines.extend(["", "Tasks"])
+        if loops.get("status") != "available":
+            lines.append("Task state is unavailable, not an empty task list.")
+        else:
+            lines.append(f"{len(context.get('tasks', []))} task records available to this check.")
+            if loops.get("complete") is False:
+                lines.append("The task inventory is incomplete.")
+    lines.extend(["", "Comparison history"])
+    if previous:
+        lines.append(
+            f"Last successfully delivered weekly baseline: {previous['date']}. "
+            "Later reviews compare against it; daily briefings do not replace it."
+        )
+    else:
+        lines.append("No delivered weekly baseline yet. The first successful review starts the comparison.")
+    lines.append(
+        "Recorded outcomes cover verified agent actions, not all your work. "
+        "Missing outcomes do not establish inactivity."
+    )
+    warnings = context.get("warnings") or []
+    if warnings:
+        lines.extend(["", "All limits from this check"])
+        lines.extend("- " + warning for warning in dict.fromkeys(warnings))
+    lines.extend([
+        "", "Opening source links",
+        "These are private GitHub notes. Sign in with the personal GitHub account that can access "
+        "your vault, including in Telegram's browser. A signed-out or different account may see 404. "
+        "No sharing permissions need to change.",
+        "", "This check used current sources and no AI generation. It did not refresh the private "
+        "snapshot, save a comparison, change a decision, or start an action.",
+    ])
     return "\n".join(lines)
 
 

@@ -44,6 +44,29 @@ Generated old task is not a goal.
 """
 
 
+def test_coverage_counts_bounded_reads_separately_from_usable_notes(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    files = {f"notes/source-{index:02}.md": "# Evidence\nA permitted observation." for index in range(20)}
+    files["notes/source-00.md"] = "---\nsensitive: true\n---\nDo not use this note."
+    vault = Vault(files)
+    result = vault.load(["knowledge"])
+    assert result["source_status"] == "available"
+    assert result["complete"] is False
+    assert result["coverage"] == {
+        "candidate_files": 20, "read_files": MAX_CONTENT_FETCHES,
+        "included_notes": MAX_CONTENT_FETCHES - 1,
+    }
+    assert result["coverage"]["read_files"] == sum("/contents/" in request.url.path for request in vault.requests)
+
+
+def test_coverage_is_empty_when_no_note_sections_are_selected(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    vault = Vault({"notes/evidence.md": "# Evidence\nA permitted observation."})
+    result = vault.load(["weather"])
+    assert result["coverage"] == {"candidate_files": 0, "read_files": 0, "included_notes": 0}
+    assert not vault.requests
+
+
 def test_review_evidence_uses_original_byte_hash_and_does_not_invent_joined_quotes(monkeypatch):
     monkeypatch.setenv("DIG_REPO", REPO)
     raw = "# Evidence\r\nA real source sentence.\r\nBefore<details>hidden metadata</details>after\r\n"

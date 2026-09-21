@@ -13,6 +13,7 @@ from weekly_plan import (
     TELEGRAM_LIMIT,
     render_weekly,
     render_weekly_proposal,
+    render_weekly_sources,
     validate_weekly_plan,
     weekly_plan_schema,
 )
@@ -258,6 +259,54 @@ def test_current_source_focus_survives_independently_stale_mirror(context: dict)
     assert "Changed since last review: Try spaced practice" in text
 
 
+def test_bounded_connected_notes_are_not_reported_as_missing(context: dict) -> None:
+    context["complete"] = False
+    context["coverage"] = {"candidate_files": 150, "read_files": 16, "included_notes": 11}
+    context["warnings"] = [
+        "Initial source baseline; these records are not changes since yesterday.",
+        "Some source excerpts are shortened; source links retain the full permitted context.",
+        "Source context is bounded; some eligible records remain unprocessed and may have changed.",
+    ]
+    text = render(validate(raw_plan(context), context), context, has_baseline=False)
+    assert "Connected notes are reachable" in text
+    assert "missing or could not be read" not in text
+    assert "/review sources" in text
+    assert "More information gaps could not fit here" not in text
+    assert telegram_units(text) <= TELEGRAM_LIMIT
+    parsed(text)
+
+
+def test_unselected_snapshot_does_not_falsely_report_unknown_freshness(context: dict) -> None:
+    context["extras"]["freshness"] = {"status": "not_requested"}
+    text = render(validate(raw_plan(context), context), context)
+    assert "The private snapshot is not selected" in text
+    assert "unknown" not in text and "Limited information" not in text
+
+
+def test_source_check_preserves_all_warnings_without_private_content(context: dict) -> None:
+    context["coverage"] = {"candidate_files": 150, "read_files": 16, "included_notes": 11}
+    context["complete"] = False
+    context["warnings"] = ["First constraint.", "Second constraint.", "Third constraint.", "w" * 180]
+    context["extras"] = {"freshness": {"status": "stale", "age_days": 53}, "signals": ["PRIVATE SNAPSHOT FACT"]}
+    context["inventory_paths"] = ["PRIVATE PATH"]
+    text = render_weekly_sources(context, {"date": TODAY.isoformat()})
+    assert "Read 16 of 150 candidate files; 11 usable notes" in text
+    assert all(warning in text for warning in context["warnings"])
+    assert "Snapshot sync is manual" in text
+    assert "Last successfully delivered weekly baseline: 2026-09-21" in text
+    assert "Missing outcomes do not establish inactivity" in text
+    assert "404" in text and "personal GitHub account" in text
+    assert "PRIVATE" not in text
+    assert all(item["text"] not in text and item["path"] not in text for item in context["sources"])
+
+
+def test_source_check_discloses_missing_task_access_and_first_comparison(context: dict) -> None:
+    context["open_loops"] = {"status": "unavailable"}
+    text = render_weekly_sources(context, {})
+    assert "Task state is unavailable, not an empty task list." in text
+    assert "first successful review starts the comparison" in text
+
+
 @pytest.mark.parametrize("freshness", ["missing", "unknown"])
 def test_missing_or_unknown_mirror_is_never_claimed_current(context: dict, freshness: str) -> None:
     context["extras"]["freshness"] = {"status": freshness}
@@ -494,7 +543,7 @@ def test_due_tasks_cannot_displace_limitations_or_overflow_largest_summary(conte
     )
 
     assert telegram_units(text) <= TELEGRAM_LIMIT
-    assert "More information gaps could not fit here" in text
+    assert "More source limits: /review sources" in text
     assert "Your personal snapshot is 9999 days old" in text
     assert "Some date-relevant tasks do not fit here" in text or "More due items" in text
     parsed(text)
@@ -530,7 +579,7 @@ def test_unresolved_work_remains_named_with_maximum_summary_and_due_details(cont
 
     assert telegram_units(text) <= TELEGRAM_LIMIT
     assert "Your personal snapshot is 9999 days old" in text
-    assert "More information gaps could not fit here" in text
+    assert "More source limits: /review sources" in text
     assert "<b>Still waiting</b>" in text and "Verify the research report." in text
     assert "Other unresolved approved work" in text
     assert "task list" in text or "More due items" in text
@@ -708,7 +757,7 @@ def test_escaped_summary_expansion_and_large_inputs_remain_bounded(context: dict
 
     assert telegram_units(text) <= TELEGRAM_LIMIT
     parsed(text)
-    assert "More information gaps could not fit here" in text
+    assert "More source limits: /review sources" in text
     assert "This review is incomplete" in text
     assert "More recorded actions: /proposals all." in text
     assert "Other waiting decisions: /proposals all." in text
@@ -781,7 +830,7 @@ def test_emoji_rich_worst_case_summary_uses_utf16_budgets_for_every_section(cont
     assert telegram_units(text) <= TELEGRAM_LIMIT
     assert telegram_units(text) > len(text)
     assert "Your personal snapshot is 9999 days old" in text
-    assert "More information gaps could not fit here" in text
+    assert "More source limits: /review sources" in text
     assert "Verify the report." in text
     assert "Other unresolved approved work" in text
     parsed(text)
