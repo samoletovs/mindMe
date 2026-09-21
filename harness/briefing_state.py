@@ -62,7 +62,7 @@ _SECRET = re.compile(
 )
 _TOMBSTONE_KEYS = {
     "id", "status", "invalidation_reason", "invalidated_on", "previous_status",
-    "action_id", "result",
+    "action_id", "result", "activity",
 }
 T = TypeVar("T")
 
@@ -94,6 +94,37 @@ def _day(value: object) -> date:
 def is_expired(expires_on: str, today: date) -> bool:
     """An expiry date is exclusive: the record expires at its start, not its end."""
     return _day(expires_on) <= today
+
+
+def record_transition(record: dict[str, Any], status: str, today: date) -> None:
+    """Date observations, never reconstruct historical completion dates."""
+    if status not in _PROPOSAL_STATUSES:
+        raise StateError("invalid_activity_status")
+    if record["status"] == status:
+        return
+    cutoff = (today - timedelta(days=35)).isoformat()
+    activity = [item for item in record.get("activity", []) if item["date"] >= cutoff]
+    activity.append({"date": today.isoformat(), "status": status})
+    record["activity"] = activity[-32:]
+    record["status"] = status
+
+
+def trim_deliveries(state: dict[str, Any]) -> None:
+    """Keep weekly baselines independent of the daily delivery checkpoint."""
+    for kind, keep in (("daily", 8), ("weekly", 2)):
+        if kind == "weekly":
+            for key, item in list(state["deliveries"].items()):
+                if item.get("kind") == "weekly" and item["status"] == "abandoned":
+                    del state["deliveries"][key]
+        completed = sorted(
+            (
+                (item["date"], item.get("completed_order", 0), key)
+                for key, item in state["deliveries"].items()
+                if item.get("kind", "daily") == kind and item["status"] in {"sent", "abandoned"}
+            ),
+        )
+        for _, _, key in completed[:-keep]:
+            del state["deliveries"][key]
 
 
 def _message_ids(value: object) -> bool:
@@ -129,12 +160,25 @@ def _tombstone(record: dict[str, Any], today: date) -> dict[str, Any]:
         result["action_id"] = record["action_id"]
     if isinstance(record.get("result"), dict):
         result["result"] = receipt
+    if record.get("activity"):
+        result["activity"] = copy.deepcopy(record["activity"])
     return result
 
 
 def _validate_proposal(identifier: str, record: object) -> None:
     if not isinstance(record, dict) or record.get("id") != identifier:
         raise StateError("invalid_proposal")
+    if "activity" in record:
+        activity = record["activity"]
+        if not isinstance(activity, list) or len(activity) > 32:
+            raise StateError("invalid_proposal_activity")
+        for item in activity:
+            if (
+                not isinstance(item, dict) or set(item) != {"date", "status"}
+                or not isinstance(item["status"], str) or item["status"] not in _PROPOSAL_STATUSES
+            ):
+                raise StateError("invalid_proposal_activity")
+            _day(item["date"])
     if record.get("invalidation_reason") == "source_removed":
         required = {"id", "status", "invalidation_reason", "invalidated_on", "previous_status"}
         if not required <= record.keys() or not record.keys() <= _TOMBSTONE_KEYS:
@@ -442,6 +486,10 @@ def prune_state(state: dict[str, Any], *, inventory_paths: set[str], today: date
     expire implicitly. Source removal invalidates approval, not action history:
     completed/unresolved outcomes survive in non-replayable, source-less receipts.
     """
+    cutoff = (today - timedelta(days=35)).isoformat()
+    for record in state["proposals"].values():
+        if "activity" in record:
+            record["activity"] = [item for item in record["activity"] if item["date"] >= cutoff]
     removed = {
         key for key, record in state["proposals"].items()
         if record.get("invalidation_reason") == "source_removed"
@@ -466,7 +514,11 @@ def prune_state(state: dict[str, Any], *, inventory_paths: set[str], today: date
     for delivery in state["deliveries"].values():
         fingerprints = delivery.get("fingerprints", {})
         missing = set(fingerprints) - inventory_paths
-        if missing or delivery.get("proposal_id") in removed:
+        missing_baseline = set(delivery.get("baseline", {})) - inventory_paths
+        if (
+            missing or missing_baseline or delivery.get("proposal_id") in removed
+            or bool(set(delivery.get("proposal_ids", [])) & removed)
+        ):
             delivery.pop("text", None)
             if delivery["status"] == "sending":
                 delivery["status"] = "abandoned"

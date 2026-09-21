@@ -28,7 +28,7 @@ COMMANDS = [
     {"command": "dig", "description": "Deep-research a question"},
     {"command": "status", "description": "Vault snapshot"},
     {"command": "briefing", "description": "Choose morning briefing sections"},
-    {"command": "review", "description": "Weekly review"},
+    {"command": "review", "description": "Review weekly progress and priorities"},
     {"command": "help", "description": "What mindMe can do"},
 ]
 

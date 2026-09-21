@@ -66,6 +66,20 @@ SDK telemetry regression alongside any tracing changes.
 - New approval callbacks use `brief1|...`; route only that namespace to the briefing
   loop, after the owner allowlist. Other callbacks still belong to memex. Source
   revisions and atomic claims must be checked before side effects.
+- `weekly_review.py` orchestrates the action-enabled Sunday timer and `/review`;
+  `weekly_plan.py` validates and renders its bounded HTML summary/action cards.
+  Weekly baselines are independent of daily checkpoints. At most two completed
+  weekly delivery records and eight prior daily records are retained alongside unresolved
+  deliveries. Proposal activity holds at most 32 date/status observations, pruned
+  after 35 days during source reconciliation; it is inspectable via `/proposals all`.
+  Never backfill legacy completion dates or equate a verification date with the
+  date work happened. Source removal removes proposal text, preserving only the
+  non-replayable operation receipt and date/status observations.
+- Weekly models receive current safe canonical sources, not private-mirror facts.
+  Only mirror freshness metadata is checked. A stale mirror is not a reason to
+  suppress independently current canonical actions or claim the owner was inactive.
+  `/review retry` explicitly permits a possibly duplicated unconfirmed message;
+  ordinary timers/requests must not silently retry unknown delivery outcomes.
 - "change the morning briefing or Telegram behavior" → edit `harness/function_app.py`, then redeploy the Function App.
 - Daily `vault-evolve` is a separate default-off cloud adapter (`MINDME_DAILY_EVOLVE_ENABLED`),
   gated by the saved `knowledge` section on the existing morning timer. It reads only
