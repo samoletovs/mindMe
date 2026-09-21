@@ -35,6 +35,8 @@ and section preferences retain their behavior until enabled.
 - `harness/weekly_review.py` and `harness/weekly_plan.py`: independent weekly
   comparison, bounded HTML presentation and up to three source-bound action cards.
   They reuse the existing proposal store, executor and `brief1|` approval callbacks.
+- `harness/telegram_format.py`: shared HTML escaping, UTF-16 budgets, safe named
+  links and visible-word counting for daily and weekly presentation.
 - `harness/briefing_actions.py`: authenticated memex action client and bounded
   research dispatch, with content-free status errors and stable operation IDs.
 - `harness/function_app.py`: thin integration into existing timers, Telegram
