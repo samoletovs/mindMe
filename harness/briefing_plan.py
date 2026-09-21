@@ -14,6 +14,20 @@ MAX_PROPOSALS = 1
 MAX_MODEL_SOURCES = 24
 MAX_MODEL_CHANGES = 2
 MAX_MODEL_GOALS = 5
+MAX_FOCUS_TEXT = 500
+MAX_REASON_TEXT = 500
+RETRYABLE_PLAN_ERRORS = frozenset({
+    "invalid_text", "invalid_model_plan", "invalid_plan", "unbacked_focus",
+    "invalid_changes", "invalid_change", "unbacked_change", "invalid_proposal",
+    "unsupported_action", "unbacked_proposal", "not_a_task",
+    "task_creation_requires_idea", "research_requires_knowledge_source",
+    "task_requires_single_line",
+})
+_PLAN_ERROR_CODES = RETRYABLE_PLAN_ERRORS | {
+    "unsafe_text", "research_requires_non_sensitive_question",
+    "briefing_model_not_configured", "briefing_context_limit",
+    "briefing_model_refused",
+}
 _SECRET = re.compile(
     r"(?i)(?:\b(?:password|api[_ -]?key|token|secret)\s*[:=]\s*\S+|"
     r"\bBearer\s+\S+|https?://\S+[?&](?:code|key|token)=\S+|"
@@ -28,6 +42,11 @@ _PRIVATE_RESEARCH = re.compile(
 
 class PlanError(ValueError):
     """An invalid plan; messages must never contain source content."""
+
+    @property
+    def code(self) -> str:
+        value = self.args[0] if len(self.args) == 1 else None
+        return value if isinstance(value, str) and value in _PLAN_ERROR_CODES else "unclassified_plan_error"
 
 
 def safe_text(value: object, limit: int = MAX_TEXT) -> str:
@@ -152,7 +171,10 @@ PLAN_SCHEMA: dict[str, Any] = {
                 {"type": "null"},
                 {
                     "type": "object", "additionalProperties": False,
-                    "properties": {"path": {"type": "string"}, "text": {"type": "string"}},
+                    "properties": {
+                        "path": {"type": "string"},
+                        "text": {"type": "string", "description": f"Nonempty focus, at most {MAX_FOCUS_TEXT} characters."},
+                    },
                     "required": ["path", "text"],
                 },
             ],
@@ -163,7 +185,7 @@ PLAN_SCHEMA: dict[str, Any] = {
                 "type": "object", "additionalProperties": False,
                 "properties": {
                     "path": {"type": "string"},
-                    "why": {"type": "string"},
+                    "why": {"type": "string", "description": f"Nonempty reason, at most {MAX_REASON_TEXT} characters."},
                 },
                 "required": ["path", "why"],
             },
@@ -176,8 +198,8 @@ PLAN_SCHEMA: dict[str, Any] = {
                     "properties": {
                         "kind": {"type": "string", "enum": ["review_task", "create_task", "research"]},
                         "source_path": {"type": "string"},
-                        "text": {"type": "string"},
-                        "why": {"type": "string"},
+                        "text": {"type": "string", "description": f"Nonempty proposal, at most {MAX_TEXT} characters; create_task must be one line."},
+                        "why": {"type": "string", "description": f"Nonempty reason, at most {MAX_REASON_TEXT} characters."},
                     },
                     "required": ["kind", "source_path", "text", "why"],
                 },
@@ -245,7 +267,7 @@ def validate_plan(
     ):
         raise PlanError("unbacked_focus")
     else:
-        focus = safe_text(focus["text"], 500) + "\nSource: " + (
+        focus = safe_text(focus["text"], MAX_FOCUS_TEXT) + "\nSource: " + (
             sources[focus["path"]].get("url") or focus["path"]
         )
     changes = raw["changes"]
@@ -261,7 +283,7 @@ def validate_plan(
             raise PlanError("unbacked_change")
         normalized.append({
             "source": {**sources[change["path"]], "change_kind": change_kinds[change["path"]]},
-            "why": safe_text(change["why"], 500),
+            "why": safe_text(change["why"], MAX_REASON_TEXT),
         })
     proposal = raw["proposal"]
     if proposal is not None:
@@ -284,7 +306,7 @@ def validate_plan(
         text = public_research_question(proposal["text"]) if kind == "research" else safe_text(proposal["text"])
         if kind == "create_task" and any(ord(char) < 32 for char in text):
             raise PlanError("task_requires_single_line")
-        why = safe_text(proposal["why"], 500)
+        why = safe_text(proposal["why"], MAX_REASON_TEXT)
         action = {"kind": kind, "text": text}
         if kind == "review_task":
             action["path"] = source["path"]

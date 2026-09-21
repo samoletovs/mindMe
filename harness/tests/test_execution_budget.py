@@ -210,6 +210,7 @@ def test_model_budget_disables_sdk_retries_and_shrinks_with_elapsed_time(clock, 
     http = Mock()
     monkeypatch.setattr(fa, "_http_client", lambda: http)
     client.responses.create.return_value.output_text = json.dumps({"findings": []})
+    client.responses.create.return_value.output = []
     monkeypatch.setenv("MINDME_BRIEFING_MODEL", "synthetic")
     monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
     with pytest.raises(budget.BudgetExceeded), budget.execution_budget(40):

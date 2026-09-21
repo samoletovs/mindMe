@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import re
 from collections.abc import Callable
 from datetime import date
@@ -10,6 +11,7 @@ from typing import Any
 
 from briefing_plan import (
     PlanError,
+    RETRYABLE_PLAN_ERRORS,
     fingerprint,
     model_input,
     proposal_allowed,
@@ -20,7 +22,9 @@ from briefing_plan import (
     validate_plan,
 )
 from briefing_state import BriefingStore, StateError, is_expired, parse_reply, prune_state
+from execution_budget import checkpoint
 
+log = logging.getLogger(__name__)
 _ID = re.compile(r"^[a-f0-9]{24}$")
 _ACTIVE = {"pending", "accepted", "snoozed", "executing", "submitted", "uncertain"}
 
@@ -161,9 +165,18 @@ class BriefingLoop:
             packet = model_input(context, memories)
             evidence_paths = {item["path"] for item in packet["sources"]}
             context["warnings"] = packet["warnings"]
-            plan = validate_plan(
-                self.generate(packet), context, today, evidence_paths=evidence_paths,
-            )
+            for attempt in range(2):
+                checkpoint()
+                try:
+                    plan = validate_plan(
+                        self.generate(packet), context, today, evidence_paths=evidence_paths,
+                    )
+                    break
+                except PlanError as error:
+                    log.warning("briefing plan rejected attempt=%d code=%s", attempt + 1, error.code)
+                    if attempt or error.code not in RETRYABLE_PLAN_ERRORS:
+                        raise
+                    packet = {**packet, "validation_feedback": error.code}
             urgent = [item for item in context["tasks"] if task_due(item, today)]
             if urgent and any(section in sections for section in ("focus", "loops")):
                 first = urgent[0]

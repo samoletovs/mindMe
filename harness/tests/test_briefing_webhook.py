@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import azure.functions as func
@@ -115,6 +116,7 @@ def test_model_has_no_tools_and_has_explicit_cost_and_privacy_limits(monkeypatch
     client.responses.create.return_value.output_text = json.dumps({
         "focus": None, "changes": [], "proposal": None,
     })
+    client.responses.create.return_value.output = []
     monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-model")
     monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
     fa._generate_action_plan({"date": "2026-09-13", "sources": []})
@@ -131,6 +133,25 @@ def test_model_has_no_tools_and_has_explicit_cost_and_privacy_limits(monkeypatch
     assert schema["changes"]["maxItems"] == 0
     assert schema["focus"] == {"type": "null"}
     assert schema["proposal"] == {"type": "null"}
+    assert "at most 500 characters" in arguments["input"][0]["content"]
+    assert "700 characters" in arguments["input"][0]["content"]
+
+
+def test_model_refusal_is_distinct_from_retryable_invalid_json(monkeypatch):
+    client = Mock()
+    client.with_options.return_value = client
+    client.responses.create.return_value = SimpleNamespace(
+        output_text="",
+        output=[SimpleNamespace(
+            type="message", content=[SimpleNamespace(type="refusal", refusal="private detail")],
+        )],
+    )
+    monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-model")
+    monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
+    monkeypatch.setattr(fa, "_http_client", Mock())
+
+    with pytest.raises(fa.PlanError, match="briefing_model_refused"):
+        fa._generate_action_plan({"sources": []})
 
 
 def test_model_schema_allows_only_visible_changes_and_kind_appropriate_sources():
