@@ -97,6 +97,47 @@ def test_review_does_not_offer_focus_only_project_evidence_the_writer_cannot_aut
     assert any(source["kind"] == "project" for source in legacy["sources"])
 
 
+@pytest.mark.parametrize("raw", [
+    "---\nvisibility: internal\n---\n# Pilot\nPermitted ordinary briefing evidence.",
+    "---\nvisibility: non-sensitive\n---\n# Pilot\nPermitted ordinary briefing evidence.",
+    "---\nroute: personal-non-sensitive\n---\n# Pilot\nPermitted ordinary briefing evidence.",
+    "---\nclassification: internal\n---\n# Pilot\nPermitted ordinary briefing evidence.",
+    "# Pilot\nThis generic article discusses medical systems.",
+    "# Pilot\nThe source mentions a passport as an example.",
+    "---\nscope: work\n---\n# Pilot\nOrdinary text cannot override the scope.",
+    "---\ngenerated: true\n---\n# Pilot\nThis is a derived observation.",
+    "---\nrole: journal\n---\n# Pilot\nThis is not eligible knowledge evidence.",
+])
+def test_review_excludes_sources_the_publication_writer_would_refuse(monkeypatch, raw):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    path = "notes/pilot.md"
+    vault = Vault({path: raw, "notes/allowed.md": "# Allowed\nAn ordinary permitted observation."})
+    result = load_sources(
+        vault.client, token=TOKEN, repo=REPO, sections=["knowledge"], include_evidence=True,
+    )
+    assert [source["path"] for source in result["sources"]] == ["notes/allowed.md"]
+    assert path not in result["source_revisions"]
+    assert path not in result["fingerprints"]
+    assert any("publication policy" in warning for warning in result["warnings"])
+
+
+def test_review_filter_does_not_change_ordinary_briefing_eligibility(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    path = "notes/pilot.md"
+    vault = Vault({path: "---\nclassification: internal\n---\n# Pilot\nA generic observation."})
+    result = vault.load(["knowledge"])
+    assert [source["path"] for source in result["sources"]] == [path]
+
+
+def test_review_revalidation_applies_the_same_publication_policy(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    path = "notes/pilot.md"
+    vault = Vault({path: "---\nclassification: internal\n---\n# Pilot\nA generic observation."})
+    assert read_source_revision(vault.client, token=TOKEN, repo=REPO, path=path)
+    with pytest.raises(SourceError, match="source_no_longer_permitted"):
+        read_source_revision(vault.client, token=TOKEN, repo=REPO, path=path, include_evidence=True)
+
+
 def blob(text: str) -> str:
     data = text.encode()
     return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()

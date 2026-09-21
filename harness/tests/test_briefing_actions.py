@@ -153,3 +153,28 @@ def test_review_gateway_enforces_the_writers_utf8_request_limit_before_sending()
         raise AssertionError("oversized review must not reach the writer")
     with pytest.raises(ActionError, match="review_payload_capacity"):
         gateway(unexpected).save_review("a" * 32, {"text": "\u2603" * 20_000}, "c" * 40)
+
+
+def test_writer_policy_rejection_is_a_failed_receipt_not_a_service_outage(caplog):
+    service = gateway(lambda req: httpx.Response(403, json={
+        "action_id": "a" * 32, "status": "failed", "error": "source_not_allowed",
+        "detail": "private source text must not escape",
+    }))
+    assert service.save_review("a" * 32, {}, "c" * 40) == {
+        "action_id": "a" * 32, "status": "failed", "error": "source_not_allowed",
+    }
+    assert "code=source_not_allowed" in caplog.text
+    assert "private source text" not in caplog.text
+
+
+@pytest.mark.parametrize("change", [
+    {"action_id": "b" * 32}, {"status": "submitted"}, {"error": "private_source_text"},
+    {"error": ["source_not_allowed"]}, {"error": None},
+])
+def test_policy_response_requires_matching_id_failed_status_and_fixed_code(change, caplog):
+    service = gateway(lambda req: httpx.Response(403, json={
+        "action_id": "a" * 32, "status": "failed", "error": "source_not_allowed", **change,
+    }))
+    with pytest.raises(ActionError, match="invalid_review_receipt"):
+        service.save_review("a" * 32, {}, "c" * 40)
+    assert "private_source_text" not in caplog.text

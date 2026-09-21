@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -13,6 +14,12 @@ from briefing_plan import public_research_question, safe_text
 
 GITHUB_API = "https://api.github.com"
 _ACTION_ID = re.compile(r"^[a-f0-9]{24,64}$")
+_REVIEW_POLICY_ERRORS = frozenset({
+    "not_authorized", "review_vault_not_allowed", "private_content",
+    "source_path_not_allowed", "source_not_allowed", "source_role_not_allowed",
+    "derived_source", "ignored_path", "linked_path_not_allowed",
+})
+log = logging.getLogger(__name__)
 
 
 class ActionError(RuntimeError):
@@ -99,7 +106,7 @@ class ActionGateway:
             raise ActionError("review_payload_capacity")
         try:
             response = self.client.post(self.memex_url, json=payload, follow_redirects=False, timeout=30.0)
-            if response.status_code not in {200, 201, 202, 409, 503}:
+            if response.status_code not in {200, 201, 202, 403, 409, 503}:
                 raise ActionError("review_service_unavailable")
             result = response.json()
         except (httpx.HTTPError, ValueError):
@@ -109,6 +116,12 @@ class ActionGateway:
             or result.get("status") not in {"submitted", "merged", "closed", "conflict", "failed", "in_progress"}
         ):
             raise ActionError("invalid_review_receipt")
+        if response.status_code == 403:
+            code = result.get("error")
+            if result["status"] != "failed" or not isinstance(code, str) or code not in _REVIEW_POLICY_ERRORS:
+                raise ActionError("invalid_review_receipt")
+            log.warning("review publication rejected status=403 code=%s", code)
+            return {"action_id": identifier, "status": "failed", "error": code}
         if result.get("status") in {"submitted", "merged"} and not self._repo_url(result.get("pr_url"), "pull"):
             raise ActionError("invalid_review_result_link")
         return result
