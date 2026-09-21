@@ -27,7 +27,10 @@ and section preferences retain their behavior until enabled.
 - `harness/briefing_state.py`: private state with optimistic concurrency. Proposal
   claims precede side effects; no acknowledgement before durable persistence.
 - `harness/briefing_loop.py`: delivery, message/reply binding, decisions, source
-  invalidation, inspection/deletion, weekly reflection and action reconciliation.
+  invalidation, inspection/deletion and action reconciliation.
+- `harness/weekly_review.py` and `harness/weekly_plan.py`: independent weekly
+  comparison, bounded HTML presentation and up to three source-bound action cards.
+  They reuse the existing proposal store, executor and `brief1|` approval callbacks.
 - `harness/briefing_actions.py`: authenticated memex action client and bounded
   research dispatch, with content-free status errors and stable operation IDs.
 - `harness/function_app.py`: thin integration into existing timers, Telegram
@@ -61,6 +64,41 @@ revision/day change they are abandoned and regenerated, not silently certified.
 `/memory` exposes stored feedback, `/memory forget <id>` deletes it, and source
 deletion removes derived feedback and invalidates pending actions. Declines and
 snoozes suppress unchanged proposals; real task deadlines remain visible.
+
+### Action-first weekly review
+
+The action-enabled Sunday timer replaces both legacy count messages. `/review`
+uses the same path. It compares with the last fully delivered **weekly** baseline,
+not the latest morning briefing. First runs establish a baseline; an older file
+first encountered now is not presented as work created this week.
+
+Decision/result transitions now carry their observation dates, bounded to 32
+entries per proposal and pruned after 35 days on source reconciliation. The
+summary uses the last seven calendar days, or the days after a more recent review.
+It shows the latest observation per action in that window. A first reconciliation
+of a merged result is dated when verified, not backdated to approval or presented
+as proof of when the real-world work happened. Legacy receipts have no invented
+dates. Removed-source receipts retain date/status pairs but no derived text.
+
+The model receives current safe canonical sources and concise scoped corrections;
+private-mirror counts and journal facts are excluded. Mirror freshness metadata is
+displayed independently. Current canonical sources can still support recommendations
+when the private mirror is stale. Neither missing evidence nor a stale sync proves
+inactivity. The existing 24-source bound and source-specific validators still apply.
+
+An unchanged pending decision can occupy a weekly card after its revision and
+expiry are checked. Remaining slots allow new proposals, with a hard total of
+three and one separately bound approval per action. No execution is performed
+during synthesis or delivery. A selected next action remains an open task.
+
+Weekly sends claim and confirm each message separately. Unknown send outcomes
+block automatic replay; `/review retry` explicitly accepts a possible message
+duplicate without replaying action execution. Only a fully delivered review
+advances its weekly baseline. Same-day successes have a CAS-assigned completion
+order, so the latest delivered snapshot wins. Retention protects two successful
+weekly records independently of abandoned attempts and eight prior daily records;
+unresolved sends are not evicted. A concurrent completion cannot be downgraded
+to an abandoned attempt.
 
 ## Permissions and external effects
 

@@ -19,7 +19,10 @@ from briefing_plan import (
     task_due,
     validate_plan,
 )
-from briefing_state import BriefingStore, StateError, is_expired, parse_reply, prune_state
+from briefing_state import (
+    BriefingStore, StateError, is_expired, parse_reply, prune_state,
+    record_transition, trim_deliveries,
+)
 
 _ID = re.compile(r"^[a-f0-9]{24}$")
 _ACTIVE = {"pending", "accepted", "snoozed", "executing", "submitted", "uncertain"}
@@ -51,10 +54,13 @@ class BriefingLoop:
         self.execute = execute
         self.extras = extras
 
-    def context(self, today: date, sections: list[str]) -> dict[str, Any]:
+    def context(
+        self, today: date, sections: list[str], *, previous: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         state = self.store.read()
         baseline = (state.get("last_delivered") or {}).get("baseline", {})
-        previous = {**baseline, **state["fingerprints"]}
+        if previous is None:
+            previous = {**baseline, **state["fingerprints"]}
         context = self.sources(previous, sections)
         for source in context.get("changes", []):
             source["change_kind"] = "modified" if source["path"] in previous else "newly_available"
@@ -90,7 +96,8 @@ class BriefingLoop:
             self.store.update(prune)
         return context
 
-    def reconcile(self) -> None:
+    def reconcile(self, today: date | None = None) -> None:
+        today = today or date.today()
         pending = [
             copy.deepcopy(record) for record in self.store.read()["proposals"].values()
             if record.get("status") in {"submitted", "uncertain", "executing"}
@@ -107,19 +114,25 @@ class BriefingLoop:
                 if current and current.get("status") in {"submitted", "uncertain", "executing"}:
                     current["result"] = result
                     if status == "merged":
-                        current["status"] = "snoozed" if current.get("requested_snooze") else "completed"
+                        record_transition(current, "snoozed" if current.get("requested_snooze") else "completed", today)
                     elif status == "conflict":
-                        current["status"] = "invalidated"
+                        record_transition(current, "invalidated", today)
                     elif status == "submitted":
-                        current["status"] = "submitted"
+                        record_transition(current, "submitted", today)
+                    elif status == "failed":
+                        record_transition(current, "failed", today)
+                    elif status == "unknown":
+                        record_transition(current, "uncertain", today)
 
             self.store.update(save)
 
     def deliver(self, today: date, sections: list[str]) -> None:
-        self.reconcile()
+        self.reconcile(today)
         context = self.context(today, sections)
         state = self.store.read()
         for identifier, delivery in state["deliveries"].items():
+            if delivery.get("kind") == "weekly":
+                continue
             if delivery["status"] != "sending":
                 continue
             if delivery["date"] == today.isoformat() and delivery.get("revision") == context.get("revision"):
@@ -183,12 +196,7 @@ class BriefingLoop:
                 if previous["status"] == "sent":
                     return False
                 raise LoopError("previous_delivery_uncertain")
-            completed = [
-                key for key, value in current["deliveries"].items()
-                if value["status"] in {"sent", "abandoned"}
-            ]
-            for key in completed[:-10]:
-                del current["deliveries"][key]
+            trim_deliveries(current)
             current["deliveries"][delivery_id] = {
                 "status": "sending", "date": today.isoformat(), "message_ids": [],
                 "text": text, "summary_sent": False, "revision": context.get("revision"),
@@ -325,7 +333,7 @@ class BriefingLoop:
                 if predecessors:
                     current["memories"][identifier]["supersedes"] = predecessors[-1]
                 if item["status"] in {"pending", "accepted", "snoozed", "corrected"}:
-                    item["status"] = "corrected"
+                    record_transition(item, "corrected", today)
 
             self.store.update(remember)
             return "Correction saved for future briefings. Any existing action receipt is preserved; no source plan was edited."
@@ -354,6 +362,11 @@ class BriefingLoop:
             revised["id"] = fingerprint([proposal_id, revised["action"]])[:24]
             revised["status"] = "pending"
             revised["message_ids"] = []
+            revised.pop("activity", None)
+            revised.pop("approved_on", None)
+            revised.pop("action_id", None)
+            revised.pop("result", None)
+            revised.pop("requested_snooze", None)
 
             def save_revision(current: dict[str, Any]) -> bool:
                 if revised["id"] in current["proposals"]:
@@ -362,7 +375,7 @@ class BriefingLoop:
                     "pending", "accepted", "snoozed", "declined", "corrected", "failed",
                 }:
                     raise LoopError("proposal_action_already_claimed")
-                current["proposals"][proposal_id]["status"] = "superseded"
+                record_transition(current["proposals"][proposal_id], "superseded", today)
                 current["proposals"][revised["id"]] = revised
                 return True
 
@@ -389,9 +402,10 @@ class BriefingLoop:
                 if item["status"] not in {"pending", "accepted", "snoozed", "failed"}:
                     raise LoopError("decision_conflict")
                 if intent == "decline":
-                    item["status"] = "declined"
+                    record_transition(item, "declined", today)
                 elif intent == "snooze":
-                    item.update(status="snoozed", review_on=decision["review_on"])
+                    record_transition(item, "snoozed", today)
+                    item["review_on"] = decision["review_on"]
             self.store.update(record)
             if intent == "snooze":
                 return (
@@ -408,7 +422,7 @@ class BriefingLoop:
             if item["status"] not in {"pending", "accepted", "snoozed", "failed"}:
                 return None
             if intent == "approve" and item["kind"] == "review_task":
-                item["status"] = "accepted"
+                record_transition(item, "accepted", today)
                 return None
             if intent == "done":
                 item["action"] = {
@@ -421,7 +435,7 @@ class BriefingLoop:
                 }
                 item["review_on"] = decision["review_on"]
                 item["requested_snooze"] = True
-            item["status"] = "executing"
+            record_transition(item, "executing", today)
             item["approved_on"] = today.isoformat()
             item["action_id"] = fingerprint([proposal_id, item["action"]])[:32]
             return copy.deepcopy(item)
@@ -437,11 +451,12 @@ class BriefingLoop:
         def save_result(current: dict[str, Any]) -> None:
             item = current["proposals"][proposal_id]
             item["result"] = result
-            item["status"] = {
+            next_status = {
                 "merged": "snoozed" if item.get("requested_snooze") else "completed",
                 "submitted": "submitted", "conflict": "invalidated",
                 "failed": "failed", "in_progress": "executing", "unknown": "uncertain",
             }[status]
+            record_transition(item, next_status, today)
 
         self.store.update(save_result)
         return self._receipt_text(self.store.read()["proposals"][proposal_id])
@@ -485,20 +500,11 @@ class BriefingLoop:
         records = self.store.read()["proposals"].values()
         lines = [
             f"{item['id']} [{item['status']}]: {item.get('text', 'source removed')}\n{self._receipt_text(item)}"
+            + (
+                "\nRecorded observations:\n"
+                + "\n".join(f"- {event['date']}: {event['status'].replace('_', ' ')}" for event in item["activity"])
+                if item.get("activity") else ""
+            )
             for item in records if include_history or item.get("status") in _ACTIVE
         ]
         return "\n\n".join(lines) or "No pending proposals."
-
-    def weekly(self) -> str:
-        self.reconcile()
-        state = self.store.read()
-        counts: dict[str, int] = {}
-        for item in state["proposals"].values():
-            status = item["status"]
-            counts[status] = counts.get(status, 0) + 1
-        return (
-            "Weekly follow-through\nCurrent recorded proposal states (not completions this week):\n"
-            + "\n".join(f"- {status}: {count}" for status, count in sorted(counts.items()))
-            + "\n\nUse /proposals to inspect unfinished decisions and /memory to correct what was learned. "
-            "Which recommendation helped, and which should stop? Goals remain unchanged until you approve an edit."
-        )

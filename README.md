@@ -16,7 +16,7 @@ A single-user Telegram companion for a [Personal OS (mindVault)](https://github.
 | **Quick capture** | `/note`, `/idea`, `/task`, `/diary`, capture prefixes, or a URL | Forwarded to **memex**, which owns storage and review; ordinary text is conversation, not capture |
 | **Voice capture** | Voice/audio message | Forwarded to memex; local transcription requires `AZURE_OPENAI_WHISPER_DEPLOYMENT` |
 | **Vault status / daily summary** | `/status`, `/summary` | Counts, focus, journal summary, and mirror-freshness warnings |
-| **Weekly review** | `/review`; Sunday **18:00 UTC** nudge | A checklist and current counts, not an interactive review or task completion |
+| **Weekly review** | `/review`; Sunday **18:00 UTC** | With action briefing enabled: one decision brief, dated follow-through and up to three individually approved actions. Otherwise the original checklist/nudge |
 | **Briefing customization** | `/briefing [sections]` | Telegram slash command → `system/mindme/briefing-prefs.json` in `personal-os/` |
 | **Vault questions** | Ordinary conversation | Foundry can list recent research/notes/ideas/wiki files and read one allowed markdown file |
 | **Deep research** | `/dig <question>` | Creates a research issue in mindVault; downstream Copilot workflows produce the report |
@@ -50,6 +50,34 @@ The model's 24-source packet reserves evidence for changes and goals before fill
 tasks. Omitted records are disclosed, and model-generated focus, changes, and proposals
 must cite a source actually included in that packet. Due-task rendering remains
 deterministic and is not truncated to the model's source budget.
+
+### Weekly decisions, not a second status report
+
+With the action briefing enabled, `/review` and the existing Sunday timer use the
+same review flow. One formatted message explains the evidence limitations, observed
+changes and recommended priority, followed by **at most three** separate action
+cards. A card names its exact scope and links its source; selecting a next step
+does not complete a task, and opening a research issue or task PR is not a verified
+result. Reply to that card to approve, dismiss, revise (`change: ...`) or defer
+(`snooze YYYY-MM-DD`). There is no blanket approval.
+
+The weekly comparison has its own baseline, independent of morning briefings.
+Follow-through reports dated observations in a maximum seven-day window, never
+lifetime status counts presented as this week's accomplishments. Old receipts
+without dates are not backfilled. A result first reconciled today is described as
+**verified today**, not necessarily completed today. `/proposals all` includes
+the recorded transition dates and result links.
+
+Private-mirror freshness is checked separately from current connected sources.
+The weekly model never receives private-mirror counts or journal facts; stale
+mirror data cannot manufacture urgency or claims of inactivity. No private sync
+or additional source upload is performed by the review.
+
+Repeated requests for an unchanged snapshot do not regenerate or resend it.
+Confirmed messages are checkpointed individually. If a send's outcome is
+uncertain, `/review retry` explicitly permits repeating that message; it does not
+repeat approved work. Source versions and owner-only approval bindings still
+apply. This release adds no service, schedule or model deployment.
 
 ---
 
