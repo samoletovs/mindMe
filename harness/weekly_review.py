@@ -49,7 +49,7 @@ class WeeklyReview:
         self.generate = generate
         self.send = send
 
-    def source_status(self, today: date, sections: list[str]) -> str:
+    def source_status(self, today: date, sections: list[str]) -> list[str]:
         previous = latest_weekly(self.store.read())
         context = self.loop.context(
             today, sections, previous=previous.get("baseline", {}), reconcile_sources=False,

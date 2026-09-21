@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from briefing_plan import PlanError, model_input
+from telegram_format import pack_html_blocks
 from weekly_plan import (
     TELEGRAM_LIMIT,
     render_weekly,
@@ -87,7 +88,7 @@ class TelegramHTML(HTMLParser):
         self.links: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        assert tag in {"b", "a", "code"}
+        assert tag in {"b", "a", "code", "i"}
         self.stack.append(tag)
         if tag == "a":
             self.links.append(dict(attrs)["href"] or "")
@@ -289,22 +290,53 @@ def test_source_check_preserves_all_warnings_without_private_content(context: di
     context["warnings"] = ["First constraint.", "Second constraint.", "Third constraint.", "w" * 180]
     context["extras"] = {"freshness": {"status": "stale", "age_days": 53}, "signals": ["PRIVATE SNAPSHOT FACT"]}
     context["inventory_paths"] = ["PRIVATE PATH"]
-    text = render_weekly_sources(context, {"date": TODAY.isoformat()})
-    assert "Read 16 of 150 candidate files; 11 usable notes" in text
+    messages = render_weekly_sources(context, {"date": TODAY.isoformat()})
+    assert len(messages) == 1
+    text = messages[0]
+    assert "Read <b>16 / 150</b> candidates · <b>11 usable notes</b>" in text
     assert all(warning in text for warning in context["warnings"])
-    assert "Snapshot sync is manual" in text
-    assert "Last successfully delivered weekly baseline: 2026-09-21" in text
-    assert "Missing outcomes do not establish inactivity" in text
+    assert "<b>Refresh:</b> manually sync only the verified Personal OS folder" in text
+    assert "Last delivered weekly baseline: <b>2026-09-21</b>" in text
+    assert "Missing outcomes do not mean inactivity" in text
     assert "404" in text and "personal GitHub account" in text
     assert "PRIVATE" not in text
     assert all(item["text"] not in text and item["path"] not in text for item in context["sources"])
+    assert "🔎 <b>Weekly source check</b>" in text
+    assert "⚠️ <b>Private snapshot · 53 days old</b>" in text
+    assert "📚 <b>Connected notes</b>" in text
+    assert "<i>Read-only check" in text
+    assert telegram_units(text) <= TELEGRAM_LIMIT
+    parsed(text)
 
 
 def test_source_check_discloses_missing_task_access_and_first_comparison(context: dict) -> None:
     context["open_loops"] = {"status": "unavailable"}
-    text = render_weekly_sources(context, {})
-    assert "Task state is unavailable, not an empty task list." in text
+    text = "\n".join(render_weekly_sources(context, {}))
+    assert "<b>Unavailable</b> — not an empty task list." in text
     assert "first successful review starts the comparison" in text
+
+
+def test_formatted_source_check_preserves_long_warnings_and_balanced_html(context: dict) -> None:
+    context["warnings"] = [
+        '<a href="https://untrusted.example">Not a real link</a> & ' + "💠&" * 3000 + " LAST WORD",
+        "FINAL WARNING",
+    ]
+    messages = render_weekly_sources(context, {"date": "<script>not markup</script>"})
+    assert len(messages) > 1
+    assert all(telegram_units(message) <= TELEGRAM_LIMIT for message in messages)
+    parsed_messages = [parsed(message) for message in messages]
+    assert all(not result.links for result in parsed_messages)
+    visible = "".join("".join(result.text) for result in parsed_messages)
+    assert visible.count("💠") == 3000
+    assert visible.count("&") == 3001
+    assert "LAST WORD" in visible and "FINAL WARNING" in visible
+    assert "<script>not markup</script>" in visible
+    assert all(message.startswith("🔎 <b>Weekly source check") for message in messages)
+
+
+def test_html_block_packing_rejects_oversized_markup_instead_of_cutting_it() -> None:
+    with pytest.raises(ValueError, match="telegram_html_block_too_long"):
+        pack_html_blocks(["<b>" + "x" * 4000 + "</b>"])
 
 
 @pytest.mark.parametrize("freshness", ["missing", "unknown"])
