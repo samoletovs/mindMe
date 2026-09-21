@@ -10,6 +10,7 @@ from azure.core.exceptions import ResourceNotFoundError
 from briefing_loop import BriefingLoop, LoopError
 from briefing_plan import PlanError, validate_plan
 from briefing_state import BriefingStore, empty_state
+from execution_budget import BudgetExceeded, execution_budget
 
 TODAY = date(2026, 9, 13)
 REVISION = "a" * 40
@@ -94,6 +95,153 @@ def test_two_briefings_preserve_a_correction_without_creating_work(system):
     assert len([keyboard for _, keyboard in sent if keyboard]) == 1
     assert executed == []
     assert store.state["last_delivered"]["date"] == "2026-09-14"
+
+
+def test_invalid_model_text_is_regenerated_before_any_delivery(system, caplog):
+    loop, store, sent, executed, _, raw, _ = system
+    packets = []
+
+    def generate(packet):
+        packets.append(copy.deepcopy(packet))
+        assert not sent
+        assert not store.state["deliveries"]
+        assert not store.state["proposals"]
+        result = copy.deepcopy(raw)
+        if len(packets) == 1:
+            result["focus"]["text"] = "x" * 501
+        return result
+
+    loop.generate = generate
+    loop.deliver(TODAY, ["knowledge"])
+
+    assert len(packets) == 2
+    assert packets[1] == {**packets[0], "validation_feedback": "invalid_text"}
+    assert len(sent) == 2
+    assert store.state["last_delivered"]["date"] == TODAY.isoformat()
+    assert len(store.state["proposals"]) == 1
+    assert not executed
+    assert "code=invalid_text" in caplog.text
+    assert "x" * 501 not in caplog.text
+
+
+def test_incomplete_model_json_gets_one_pre_delivery_retry(system):
+    loop, store, sent, _, _, raw, _ = system
+    calls = []
+
+    def generate(packet):
+        calls.append(packet)
+        if len(calls) == 1:
+            raise PlanError("invalid_model_plan")
+        return copy.deepcopy(raw)
+
+    loop.generate = generate
+    loop.deliver(TODAY, ["knowledge"])
+
+    assert len(calls) == 2
+    assert len(sent) == 2
+    assert store.state["last_delivered"]["date"] == TODAY.isoformat()
+
+
+def test_two_invalid_plans_fail_without_delivery_or_source_checkpoint(system):
+    loop, store, sent, executed, inputs, raw, _ = system
+    raw["focus"]["text"] = "x" * 501
+
+    with pytest.raises(PlanError, match="invalid_text"):
+        loop.deliver(TODAY, ["knowledge"])
+
+    assert len(inputs) == 2
+    assert not sent
+    assert not executed
+    assert not store.state["deliveries"]
+    assert not store.state["proposals"]
+    assert store.state["last_delivered"] is None
+    assert not store.state["fingerprints"]
+
+
+def test_unsafe_plan_is_not_retried_or_logged(system, caplog):
+    loop, store, sent, _, inputs, raw, _ = system
+    raw["focus"]["text"] = "token=synthetic-private-value"
+
+    with pytest.raises(PlanError, match="unsafe_text"):
+        loop.deliver(TODAY, ["knowledge"])
+
+    assert len(inputs) == 1
+    assert not sent
+    assert not store.state["deliveries"]
+    assert raw["focus"]["text"] not in caplog.text
+
+
+def test_unknown_plan_error_content_is_never_logged_or_retried(system, caplog):
+    loop, _, sent, _, _, _, _ = system
+    calls = []
+
+    def generate(packet):
+        calls.append(packet)
+        raise PlanError("private_source_content")
+
+    loop.generate = generate
+    with pytest.raises(PlanError):
+        loop.deliver(TODAY, ["knowledge"])
+
+    assert len(calls) == 1
+    assert not sent
+    assert "private_source_content" not in caplog.text
+    assert "code=unclassified_plan_error" in caplog.text
+
+
+def test_validation_retry_cannot_start_after_the_invocation_deadline(system, monkeypatch):
+    loop, store, sent, _, _, _, _ = system
+    clock = [0.0]
+    calls = []
+    monkeypatch.setattr("execution_budget.time.monotonic", lambda: clock[0])
+
+    def generate(packet):
+        calls.append(packet)
+        clock[0] = 76.0
+        raise PlanError("invalid_model_plan")
+
+    loop.generate = generate
+    with pytest.raises(BudgetExceeded), execution_budget(75):
+        loop.deliver(TODAY, ["knowledge"])
+
+    assert len(calls) == 1
+    assert not sent
+    assert not store.state["deliveries"]
+
+
+@pytest.mark.parametrize("code", ["briefing_model_refused", "briefing_model_not_configured"])
+def test_terminal_model_errors_do_not_trigger_regeneration(system, code):
+    loop, store, sent, _, _, _, _ = system
+    calls = []
+
+    def generate(packet):
+        calls.append(packet)
+        raise PlanError(code)
+
+    loop.generate = generate
+    with pytest.raises(PlanError, match=code):
+        loop.deliver(TODAY, ["knowledge"])
+
+    assert len(calls) == 1
+    assert not sent
+    assert not store.state["deliveries"]
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "limit"),
+    [("focus", "text", 500), ("changes", "why", 500), ("proposal", "text", 700), ("proposal", "why", 500)],
+)
+def test_plan_text_limits_are_enforced_without_truncation(system, section, field, limit):
+    _, _, _, _, _, raw, source = system
+    context = {"sources": [source], "changes": [source]}
+    target = raw[section][0] if section == "changes" else raw[section]
+    target[field] = "x" * limit
+    validate_plan(raw, context, TODAY)
+
+    target[field] += "x"
+    with pytest.raises(PlanError, match="invalid_text"):
+        validate_plan(raw, context, TODAY)
+    assert len(target[field]) == limit + 1
 
 
 def test_approving_a_proposal_twice_starts_one_operation(system):

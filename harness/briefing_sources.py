@@ -65,6 +65,17 @@ _DRAFT = re.compile(
 )
 _INDEX_HEADINGS = {"index", "contents", "table of contents", "related notes", "source index"}
 _FALSE = {"false", "no", "none", "null", "0", ""}
+# Review publication independently enforces this policy in memex personal_metadata.
+_REVIEW_SENSITIVE_CONTENT = re.compile(
+    r"(?:\.me(?:[/\\]|\b)|\b(?:iban|passport|medical|diagnosis|bank account|"
+    r"legal case|social security|client confidential)\b|"
+    r"\b(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_]{12,}|"
+    r"\b[A-Z]{2}\d{2}[A-Z0-9 ]{11,30}\b)", re.I,
+)
+_REVIEW_DERIVED = re.compile(
+    r"(?:^|[-_./ ])(?:reviews?|reports?|generated|vault-evolve|briefing|recap)(?:$|[-_./ ])",
+    re.I,
+)
 _SAFE_ROUTES = {"mindvault", "personal-non-sensitive", "non-sensitive"}
 _MISSING = object()
 _PRIVACY_KEYS = {
@@ -245,6 +256,46 @@ def _excluded_metadata(pairs: list[tuple[str, str]]) -> bool:
         if key in {"type", "category", "domain"} and _SENSITIVE_PATH.search(value):
             return True
     return False
+
+
+def _review_source_allowed(path: str, raw: str, kind: str) -> bool:
+    if len(raw.encode("utf-8")) > 64_000 or len(path.split("/")) > 6:
+        return False
+    if any(char in path for char in '<>"[]') or any(
+        part.casefold().removesuffix(".md") in {"aibsvault", "kongsberg", "carlsberg", "scania"}
+        for part in path.split("/")
+    ):
+        return False
+    if _REVIEW_SENSITIVE_CONTENT.search(raw) or _REVIEW_DERIVED.search(path):
+        return False
+    _, pairs = _metadata(raw)
+    for key, value in pairs:
+        value = value.casefold()
+        if key in {"private", "sensitive", "ignored", "work"} and value not in {"", "false", "no", "0"}:
+            return False
+        if key in {"route", "routing", "routed_to", "scope", "visibility"} and value not in {
+            "", "personal", "mindme", "mindvault",
+        }:
+            return False
+        if key in {"sensitivity", "classification"} and value not in {
+            "", "public", "personal", "non-sensitive", "none",
+        }:
+            return False
+        if key in {"type", "kind", "role"} and value in {"home", "task", "journal"}:
+            return False
+        if key in {"generated", "derived"} and value not in {"", "false", "no", "0", "none"}:
+            return False
+        if key in {"type", "kind", "role", "origin"} and _REVIEW_DERIVED.search(value):
+            if not (
+                kind == "research" and key in {"type", "kind", "role"}
+                and value in {"report", "dig-report", "research-report"}
+            ):
+                return False
+    if kind == "project":
+        statuses = [value.casefold() for key, value in pairs if key == "status"]
+        if not statuses or any(value != "active" for value in statuses):
+            return False
+    return True
 
 
 def _strip_generated(text: str) -> str:
@@ -592,12 +643,10 @@ def load_sources(
             result["scan_cursor"] = path
         kind = _kind(path)
         assert kind is not None
-        if include_evidence and kind == "project":
-            statuses = [value.casefold() for key, value in _metadata(raw)[1] if key == "status"]
-            if not statuses or any(value != "active" for value in statuses):
-                result["source_revisions"].pop(path, None)
-                result["warnings"].append("Review project evidence requires an explicitly active canonical README.")
-                continue
+        if include_evidence and kind != "goal" and not _review_source_allowed(path, raw, kind):
+            result["source_revisions"].pop(path, None)
+            result["warnings"].append("Some sources were excluded by the review publication policy.")
+            continue
         material = _material(path, raw, kind, focused_projects)
         if material is None:
             result["source_revisions"].pop(path, None)
@@ -643,7 +692,7 @@ def load_sources(
 
 
 def read_source_revision(
-    client: httpx.Client, *, token: str, repo: str, path: str,
+    client: httpx.Client, *, token: str, repo: str, path: str, include_evidence: bool = False,
 ) -> str | None:
     """Compare immediately before acting. Only a real content 404 means removal."""
     headers = _headers(token, repo)
@@ -658,5 +707,10 @@ def read_source_revision(
     revision, raw = _content(data, path)
     _, pairs = _metadata(raw)
     if _excluded_metadata(pairs) or (_kind(path) != "goal" and _SENSITIVE_CONTENT.search(raw)):
+        raise SourceError("source_no_longer_permitted")
+    if include_evidence and (
+        _kind(path) not in {"note", "wiki", "research", "idea", "project"}
+        or not _review_source_allowed(path, raw, _kind(path) or "")
+    ):
         raise SourceError("source_no_longer_permitted")
     return revision

@@ -332,7 +332,9 @@ def _evolve_loop() -> DailyEvolve:
         ),
         generate=_generate_evolve_review, publish=gateway.save_review,
         send=lambda text, keyboard: _telegram_proposal_send(chat_id, text, keyboard),
-        revision=lambda path: read_source_revision(client, token=token, repo=repo, path=path),
+        revision=lambda path: read_source_revision(
+            client, token=token, repo=repo, path=path, include_evidence=True,
+        ),
     )
 
 
@@ -390,6 +392,10 @@ def _generate_action_plan(context: dict) -> dict:
                     "with at most five primary sources. Do not propose research about private financial, "
                     "medical, legal, household-identifying or employer-confidential information. "
                     "No tool use or execution. Declined/corrected/snoozed items must not be repeated. "
+                    "Keep focus.text and every why at most 500 characters; proposal.text at most "
+                    "700 characters, and a create_task proposal on one line. Prefer short sentences. "
+                    "If validation_feedback is supplied, regenerate a complete plan correcting that "
+                    "formatting or evidence-binding error without relaxing the safety rules. "
                     "Source notices are limitations, not facts about the user's progress. Return the JSON schema."
                 ),
             },
@@ -401,6 +407,12 @@ def _generate_action_plan(context: dict) -> dict:
         }},
     )
     checkpoint()
+    if any(
+        content.type == "refusal"
+        for item in response.output if item.type == "message"
+        for content in item.content
+    ):
+        raise PlanError("briefing_model_refused")
     try:
         plan = json.loads(response.output_text)
     except (ValueError, TypeError):
@@ -2290,7 +2302,10 @@ def _deliver_morning_briefing() -> None:
         try:
             _briefing_loop().deliver(date.today(), _briefing_prefs())
         except (StateError, SourceError, LoopError, ActionError, PlanError, AzureError, OpenAIError, httpx.HTTPError, TelegramDeliveryError) as exc:
-            log.error("action briefing failed error=%s", type(exc).__name__)
+            log.error(
+                "action briefing failed error=%s code=%s",
+                type(exc).__name__, exc.code if isinstance(exc, PlanError) else "unavailable",
+            )
             try:
                 _telegram_send(
                     int(os.environ["TELEGRAM_ALLOWED_CHAT_ID"]),

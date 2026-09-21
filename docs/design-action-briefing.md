@@ -23,7 +23,11 @@ and section preferences retain their behavior until enabled.
   starving older material. This scan state is separate from presented-source state.
 - `harness/briefing_plan.py`: typed/validated model output, deterministic urgent
   task handling, source citations and bounded presentation. Existing model
-  deployment only, one bounded synthesis call. No tool calls from the synthesizer.
+  deployment only, one synthesis call with at most one regeneration for invalid
+  formatting or evidence binding, within the same invocation deadline. The
+  regenerated plan must pass the same validation before any delivery or proposal
+  receipt. Unsafe text, sensitive research, unavailable dependencies and delivery
+  failures are not retried by this mechanism. No tool calls from the synthesizer.
 - `harness/briefing_state.py`: private state with optimistic concurrency. Proposal
   claims precede side effects; no acknowledgement before durable persistence.
 - `harness/briefing_loop.py`: delivery, message/reply binding, decisions, source
