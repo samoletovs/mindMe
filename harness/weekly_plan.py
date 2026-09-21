@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from briefing_plan import PlanError, plan_schema, safe_text, task_due, validate_plan
+from telegram_format import escaped_chunks, pack_html_blocks
 from telegram_format import (
     escape as _escape, excerpt as _excerpt, github_link as _github_link,
     units as _units,
@@ -177,66 +178,93 @@ def _source_notice(context: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_weekly_sources(context: dict[str, Any], previous: dict[str, Any]) -> str:
-    """Plain-text diagnostics: no source bodies, paths, decisions or hidden snapshot facts."""
-    lines = ["Weekly review source check", "", _snapshot_notice(context)]
+def render_weekly_sources(context: dict[str, Any], previous: dict[str, Any]) -> list[str]:
+    """Escaped, complete HTML messages with no source bodies or hidden snapshot facts."""
+    blocks = ["🔎 <b>Weekly source check</b>"]
     freshness = (context.get("extras") or {}).get("freshness") or {}
-    if freshness.get("status") not in {"current", "not_requested"}:
-        lines.append(
-            "Snapshot sync is manual. Refresh only the verified Personal OS folder from the laptop "
-            "using the private sync tool; deploying the bot does not sync it. "
-            "Do not upload extra private files just to clear this warning."
-        )
-    lines.extend(["", "Connected notes"])
+    status = freshness.get("status", "unknown")
+    label = {
+        "current": "Current", "not_requested": "Not selected",
+        "stale": "Out of date", "missing": "Unavailable",
+    }.get(status, "Age unknown")
+    age = freshness.get("age_days")
+    if status == "stale" and type(age) is int and 0 <= age < 10000:
+        label = f"{age} days old"
+    icon = "📁" if status in {"current", "not_requested"} else "⚠️"
+    snapshot = [
+        f"{icon} <b>Private snapshot · {label}</b>",
+        "• <b>Not used</b> in this review. Connected notes are separate.",
+    ]
+    if status not in {"current", "not_requested"}:
+        snapshot.extend([
+            "• <b>Refresh:</b> manually sync only the verified Personal OS folder from your laptop.",
+            "• Deploying the bot does not sync it. Do not add private files just to clear this warning.",
+        ])
+    blocks.append("\n".join(snapshot))
+    notes = ["📚 <b>Connected notes</b>"]
     if context.get("source_status") == "available":
         coverage = context.get("coverage")
         if coverage:
-            lines.append(
-                f"Read {coverage['read_files']} of {coverage['candidate_files']} candidate files; "
-                f"{coverage['included_notes']} usable notes selected after filtering."
+            notes.append(
+                f"Read <b>{coverage['read_files']} / {coverage['candidate_files']}</b> candidates "
+                f"· <b>{coverage['included_notes']} usable notes</b>"
             )
-        lines.append(
+        notes.append(
             "The source read completed."
             if context.get("complete") is True else
-            "The source read is incomplete. A reading limit is not a broken connection; "
-            "unread candidates have not been checked for permission, relevance or changes."
+            "<b>Partial coverage</b> is not proof of a broken connection.\n"
+            "Unread files may contain changes; permission and relevance are not yet checked."
         )
     else:
-        lines.append("Connected notes could not be read. Check the configured GitHub access.")
+        notes.append("<b>Unavailable.</b> Check the configured GitHub access.")
+    blocks.append("\n".join(notes))
     loops = context.get("open_loops")
     if loops:
-        lines.extend(["", "Tasks"])
+        tasks = ["📝 <b>Tasks</b>"]
         if loops.get("status") != "available":
-            lines.append("Task state is unavailable, not an empty task list.")
+            tasks.append("<b>Unavailable</b> — not an empty task list.")
         else:
-            lines.append(f"{len(context.get('tasks', []))} task records available to this check.")
+            tasks.append(f"<b>{len(context.get('tasks', []))}</b> task records available to this check.")
             if loops.get("complete") is False:
-                lines.append("The task inventory is incomplete.")
-    lines.extend(["", "Comparison history"])
+                tasks.append("The task inventory is incomplete.")
+        blocks.append("\n".join(tasks))
+    comparison = ["📅 <b>Comparison history</b>"]
     if previous:
-        lines.append(
-            f"Last successfully delivered weekly baseline: {previous['date']}. "
+        comparison.append(
+            f"Last delivered weekly baseline: <b>{_escape(previous['date'])}</b>\n"
             "Later reviews compare against it; daily briefings do not replace it."
         )
     else:
-        lines.append("No delivered weekly baseline yet. The first successful review starts the comparison.")
-    lines.append(
-        "Recorded outcomes cover verified agent actions, not all your work. "
-        "Missing outcomes do not establish inactivity."
+        comparison.append("No delivered weekly baseline yet. The first successful review starts the comparison.")
+    comparison.append(
+        "Recorded outcomes cover verified agent actions, <b>not all your work</b>. "
+        "Missing outcomes do not mean inactivity."
     )
+    blocks.append("\n".join(comparison))
     warnings = context.get("warnings") or []
     if warnings:
-        lines.extend(["", "All limits from this check"])
-        lines.extend("- " + warning for warning in dict.fromkeys(warnings))
-    lines.extend([
-        "", "Opening source links",
-        "These are private GitHub notes. Sign in with the personal GitHub account that can access "
-        "your vault, including in Telegram's browser. A signed-out or different account may see 404. "
+        limits = ["⚠️ <b>Limits</b>"]
+        for warning in dict.fromkeys(warnings):
+            for part, chunk in enumerate(escaped_chunks(warning)):
+                row = ("• " if part == 0 else "↳ ") + chunk
+                if _units("\n".join([*limits, row])) > 3500:
+                    blocks.append("\n".join(limits))
+                    limits = ["⚠️ <b>Limits · continued</b>"]
+                limits.append(row)
+        blocks.append("\n".join(limits))
+    blocks.extend([
+        "🔗 <b>Opening source links</b>\n"
+        "• Sign in with the <b>personal GitHub account</b> that can access your vault, "
+        "including in Telegram's browser.\n"
+        "• Signed-out or different accounts may see <b>404</b> for private notes. "
         "No sharing permissions need to change.",
-        "", "This check used current sources and no AI generation. It did not refresh the private "
-        "snapshot, save a comparison, change a decision, or start an action.",
+        "<i>Read-only check · no AI generation.\n"
+        "No private sync, comparison saved, decisions changed, or actions started.</i>",
     ])
-    return "\n".join(lines)
+    return [
+        ("🔎 <b>Weekly source check · continued</b>\n\n" if index else "") + message
+        for index, message in enumerate(pack_html_blocks(blocks, limit=3800))
+    ]
 
 
 def _focus(plan: dict[str, Any]) -> str:

@@ -95,6 +95,9 @@ is reported as incomplete coverage, not missing notes. The private snapshot is
 synced manually from the verified laptop folder; see [the sync guide](scripts/local/README.md).
 Source links require the GitHub account with access to the private vault, including
 inside Telegram's browser; a signed-out browser can return 404 for a valid link.
+The source check uses bold section headings, status icons, highlighted counts and
+short bullets. Longer reports continue in complete HTML messages; no warning is
+cut off, and source-provided text is escaped rather than interpreted as markup.
 
 The weekly comparison has its own baseline, independent of morning briefings.
 Follow-through reports dated observations in a maximum seven-day window, never

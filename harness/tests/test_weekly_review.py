@@ -133,8 +133,8 @@ def test_source_check_does_not_advance_baseline_prune_or_reconcile_decisions(sys
     generated.clear()
     loop.execute = Mock(side_effect=AssertionError("diagnostics must not reconcile"))
     store.update = Mock(side_effect=AssertionError("diagnostics must not write state"))
-    text = review.source_status(TODAY, ["knowledge"])
-    assert "Last successfully delivered weekly baseline: 2026-09-21" in text
+    text = "\n".join(review.source_status(TODAY, ["knowledge"]))
+    assert "Last delivered weekly baseline: <b>2026-09-21</b>" in text
     assert previous_reads[-1] == latest_weekly(before)["baseline"]
     assert store.read() == before
     assert not sent and not generated and not executions
@@ -143,7 +143,7 @@ def test_source_check_does_not_advance_baseline_prune_or_reconcile_decisions(sys
 def test_source_check_does_not_create_a_first_baseline(system):
     review, _, store, _, _, sent, generated, executions, _ = system
     before = store.read()
-    assert "No delivered weekly baseline yet" in review.source_status(TODAY, ["knowledge"])
+    assert "No delivered weekly baseline yet" in "\n".join(review.source_status(TODAY, ["knowledge"]))
     assert store.read() == before
     assert not sent and not generated and not executions
 
@@ -462,20 +462,43 @@ def test_source_command_is_owner_only_and_never_starts_a_review(monkeypatch, cap
     monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "synthetic")
     monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "true")
     review = Mock()
-    review.source_status.return_value = "Synthetic source check"
+    review.source_status.return_value = ["<b>First part</b>", "<b>Second part</b>"]
     send = Mock()
     monkeypatch.setattr(fa, "_weekly_review", lambda: review)
     monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["knowledge"])
-    monkeypatch.setattr(fa, "_telegram_send", send)
+    monkeypatch.setattr(fa, "_telegram_proposal_send", send)
+    monkeypatch.setattr(fa, "_telegram_send", Mock(side_effect=AssertionError("must send HTML")))
     command = {"message": {"chat": {"id": 8}, "text": "/review sources"}}
     assert fa.telegram_webhook(request(command)).status_code == 200
     review.source_status.assert_not_called()
     command["message"]["chat"]["id"] = 7
     assert fa.telegram_webhook(request(command)).status_code == 200
     review.source_status.assert_called_once_with(date.today(), ["knowledge"])
-    send.assert_called_once_with(7, "Synthetic source check")
-    assert "weekly source check sent chars=22" in caplog.text
-    assert "Synthetic source check" not in caplog.text
+    assert [call.args for call in send.call_args_list] == [(7, part) for part in review.source_status.return_value]
+    assert all(call.kwargs == {"parse_mode": "HTML"} for call in send.call_args_list)
+    assert "parts=2 format=HTML" in caplog.text
+    assert "First part" not in caplog.text and "Second part" not in caplog.text
+    review.run.assert_not_called()
+
+
+def test_source_check_partial_html_delivery_reports_failure(monkeypatch, caplog):
+    caplog.set_level("INFO", logger="mindMe.harness")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "synthetic")
+    monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "true")
+    review = Mock()
+    review.source_status.return_value = ["<b>First part</b>", "<b>Second part</b>"]
+    send = Mock(side_effect=[1, fa.TelegramDeliveryError("synthetic")])
+    notice = Mock()
+    monkeypatch.setattr(fa, "_weekly_review", lambda: review)
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["knowledge"])
+    monkeypatch.setattr(fa, "_telegram_proposal_send", send)
+    monkeypatch.setattr(fa, "_telegram_send", notice)
+    response = fa.telegram_webhook(request({"message": {"chat": {"id": 7}, "text": "/review sources"}}))
+    assert response.status_code == 503
+    assert send.call_count == 2
+    assert "could not finish" in notice.call_args.args[1]
+    assert "weekly source check sent" not in caplog.text
     review.run.assert_not_called()
 
 
