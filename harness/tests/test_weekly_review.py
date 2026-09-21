@@ -9,6 +9,7 @@ import pytest
 
 import function_app as fa
 from briefing_loop import BriefingLoop, LoopError
+from briefing_plan import PlanError
 from briefing_state import _encode, empty_state, prune_state, record_transition, trim_deliveries
 from test_briefing_webhook import request
 from weekly_review import WeeklyReview, latest_weekly, weekly_activity
@@ -121,6 +122,16 @@ def test_same_snapshot_does_not_regenerate_or_redeliver(system):
     assert not review.run(TODAY, ["knowledge"])
     assert len(sent) == 4
     assert len(generated) == 1
+
+
+def test_unrenderable_action_rejects_the_batch_before_sending_the_summary(system):
+    review, _, store, _, raw, sent, _, executions, _ = system
+    raw["proposals"][2]["text"] = "&" * 700
+    with pytest.raises(PlanError):
+        review.run(TODAY, ["knowledge"])
+    assert not sent
+    assert not executions
+    assert not store.state["deliveries"]
 
 
 def test_changed_source_rejects_old_approval(system):
@@ -431,6 +442,7 @@ def test_weekly_extras_read_only_sync_metadata_not_stale_private_facts(monkeypat
 def test_weekly_model_is_bounded_and_cannot_execute(monkeypatch):
     client = Mock()
     client.with_options.return_value = client
+    client.responses.create.return_value.output = []
     client.responses.create.return_value.output_text = '{"focus":null,"changes":[],"proposals":[]}'
     monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-model")
     monkeypatch.setattr(fa, "_foundry", lambda: (None, client))

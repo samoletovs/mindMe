@@ -138,6 +138,8 @@ class WeeklyReview:
             if proposal["id"] not in state["proposals"] and proposal_allowed(proposal, state, today):
                 proposals.append(proposal)
         plan["proposals"] = proposals
+        for number, proposal in enumerate(proposals, 1):
+            render_weekly_proposal(proposal, number, len(proposals))
         start = today - timedelta(days=6)
         if previous:
             start = min(today, max(start, date.fromisoformat(previous["date"]) + timedelta(days=1)))
