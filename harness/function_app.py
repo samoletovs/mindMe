@@ -367,6 +367,12 @@ def _generate_action_plan(context: dict) -> dict:
         "Do not repeat pending decisions: the host presents those separately. "
         if weekly else
         "Prepare a calm, actionable personal morning briefing from supplied data. "
+        "Write for a one-minute morning read: focus at most 40 words, each why at most 25 words, "
+        "and proposal.text at most 45 words. Use plain sentences, not Markdown or pasted URLs. "
+        "Omit generic commentary, routine counts and notes with no practical consequence. "
+        "For a change, say what decision or next step it informs; newly encountered is not newly created. "
+        "Prefer one useful action the system supports, not a vague instruction to investigate everything. "
+        "For review_task, make clear that the user does the task; the bot only records the next step. "
         "Draft at most one proposal or null when nothing deserves action. "
     )
     _, client = _foundry()
@@ -433,9 +439,12 @@ def _action_briefing_extras(sections: list[str]) -> dict:
             )
     if set(sections) & {"vault", "journal", "areas"}:
         freshness = _mirror_freshness(date.today())
+        result["freshness"] = freshness
         warning = _freshness_warning(freshness)
         if warning:
             result["warnings"].append(warning)
+        if freshness.get("status") != "current":
+            return result
     if "vault" in sections:
         state = _vault_state()
         result["signals"].append(
@@ -497,6 +506,7 @@ def _briefing_loop(*, weekly: bool = False) -> BriefingLoop:
         loops=_fetch_open_loops,
         generate=_generate_action_plan,
         send=lambda text, keyboard: _telegram_proposal_send(chat_id, text, keyboard),
+        send_html=lambda text, keyboard: _telegram_proposal_send(chat_id, text, keyboard, parse_mode="HTML"),
         revision=lambda path: read_source_revision(client, token=token, repo=repo, path=path),
         execute=gateway,
         extras=_weekly_extras if weekly else _action_briefing_extras,
@@ -1515,7 +1525,8 @@ def _briefing_settings_text(sections: list[str]) -> str:
     return (
         "🌅 Morning briefing sections\n"
         + "\n".join(lines)
-        + "\n\nUse /briefing <sections> to choose (e.g. /briefing focus goals weather), "
+        + "\n\nUse /briefing details for the full current source view (when action briefings are enabled). "
+        "Use /briefing <sections> to choose (e.g. /briefing focus goals weather), "
         "/briefing -<section> +<section> to exclude/include one at a time "
         "(e.g. /briefing -weather), /briefing all for everything, or "
         "/briefing reset to restore the default."
@@ -1538,6 +1549,8 @@ def _handle_briefing_command(argument: str) -> str:
     arg = (argument or "").strip()
     if not arg:
         return _briefing_settings_text(_briefing_prefs())
+    if arg.lower() == "details":
+        return "Detailed source view requires action briefings to be enabled. Your preferences are unchanged."
 
     requested = [part for part in re.split(r"[\s,]+", arg.lower()) if part]
     if requested in (["all"], ["reset"]):
@@ -2107,11 +2120,13 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse("ok", status_code=200)
         if _action_briefing_enabled() and (
             user_text in {"/proposals", "/proposals all"} or user_text == "/memory" or user_text.startswith("/memory ")
-            or user_text == "/briefing now"
+            or user_text in {"/briefing now", "/briefing details"}
         ):
             loop = _briefing_loop()
             if user_text == "/briefing now":
                 loop.deliver(date.today(), _briefing_prefs())
+            elif user_text == "/briefing details":
+                _telegram_send(chat_id, loop.details(date.today(), _briefing_prefs()))
             else:
                 reply = loop.proposals_command(user_text.endswith(" all")) if user_text.startswith("/proposals") else loop.memory_command(user_text[7:])
                 _telegram_send(chat_id, reply)

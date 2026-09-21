@@ -12,13 +12,14 @@ from typing import Any
 from briefing_plan import (
     PlanError,
     RETRYABLE_PLAN_ERRORS,
+    due_tasks,
     fingerprint,
     model_input,
     proposal_allowed,
     render_briefing,
+    render_briefing_details,
     render_proposal,
     safe_text,
-    task_due,
     validate_plan,
 )
 from briefing_state import (
@@ -26,6 +27,7 @@ from briefing_state import (
     record_transition, trim_deliveries,
 )
 from execution_budget import checkpoint
+from weekly_plan import render_weekly_proposal
 
 log = logging.getLogger(__name__)
 _ID = re.compile(r"^[a-f0-9]{24}$")
@@ -48,18 +50,21 @@ class BriefingLoop:
         revision: Callable[[str], str | None],
         execute: Callable[[dict[str, Any], bool], dict[str, Any]],
         extras: Callable[[list[str]], dict[str, Any]],
+        send_html: Callable[[str, list[list[dict[str, str]]] | None], int] | None = None,
     ) -> None:
         self.store = store
         self.sources = sources
         self.loops = loops
         self.generate = generate
         self.send = send
+        self.send_html = send_html or (lambda text, keyboard: self.send(text, keyboard))
         self.revision = revision
         self.execute = execute
         self.extras = extras
 
     def context(
         self, today: date, sections: list[str], *, previous: dict[str, str] | None = None,
+        reconcile_sources: bool = True,
     ) -> dict[str, Any]:
         state = self.store.read()
         baseline = (state.get("last_delivered") or {}).get("baseline", {})
@@ -84,7 +89,7 @@ class BriefingLoop:
         context["extras"] = self.extras(sections)
         context["warnings"].extend(context["extras"].get("warnings", []))
         inventory = context.get("inventory_paths")
-        if inventory is not None:
+        if inventory is not None and reconcile_sources:
             def prune(current: dict[str, Any]) -> None:
                 paths = set(inventory)
                 prune_state(current, inventory_paths=paths, today=today)
@@ -99,6 +104,11 @@ class BriefingLoop:
 
             self.store.update(prune)
         return context
+
+    def details(self, today: date, sections: list[str]) -> str:
+        context = self.context(today, sections, reconcile_sources=False)
+        context["warnings"] = model_input(context, [])["warnings"]
+        return render_briefing_details(context, today)
 
     def reconcile(self, today: date | None = None) -> None:
         today = today or date.today()
@@ -190,14 +200,18 @@ class BriefingLoop:
                     if attempt or error.code not in RETRYABLE_PLAN_ERRORS:
                         raise
                     packet = {**packet, "validation_feedback": error.code}
-            urgent = [item for item in context["tasks"] if task_due(item, today)]
+            urgent = due_tasks(context, today)
             if urgent and any(section in sections for section in ("focus", "loops")):
                 first = urgent[0]
                 plan["focus"] = f"{first['title']}\nNext action: {first.get('next_action') or 'Review the source task.'}"
+                plan["focus_path"] = first.get("path")
+                plan["focus_task"] = first
         proposal = plan["proposal"]
         if proposal and not proposal_allowed(proposal, state, today):
             proposal = None
             plan["proposal"] = None
+        if proposal:
+            render_weekly_proposal(proposal, 1, 1)
         text, presented = render_briefing(plan, context, today)
         if proposal:
             presented.append(proposal["source_path"])
@@ -213,6 +227,7 @@ class BriefingLoop:
             current["deliveries"][delivery_id] = {
                 "status": "sending", "date": today.isoformat(), "message_ids": [],
                 "text": text, "summary_sent": False, "revision": context.get("revision"),
+                "format": "HTML",
                 "proposal_id": proposal["id"] if proposal else None,
                 "fingerprints": {
                     path: context["fingerprints"][path]
@@ -263,7 +278,8 @@ class BriefingLoop:
         if delivery["status"] == "sent":
             return
         if not delivery.get("summary_sent"):
-            message_id = self.send(delivery["text"], None)
+            sender = self.send_html if delivery.get("format") == "HTML" else self.send
+            message_id = sender(delivery["text"], None)
 
             def record_summary(current: dict[str, Any]) -> None:
                 current["deliveries"][delivery_id]["message_ids"].append(message_id)
@@ -272,12 +288,8 @@ class BriefingLoop:
             self.store.update(record_summary)
         proposal = state["proposals"].get(delivery.get("proposal_id"))
         if proposal and not proposal.get("message_ids"):
-            keyboard = [[
-                {"text": "Approve", "callback_data": f"brief1|approve|{proposal['id']}"},
-                {"text": "Decline", "callback_data": f"brief1|decline|{proposal['id']}"},
-                {"text": "Why?", "callback_data": f"brief1|explain|{proposal['id']}"},
-            ]]
-            proposal_message = self.send(render_proposal(proposal), keyboard)
+            text, keyboard = render_weekly_proposal(proposal, 1, 1)
+            proposal_message = self.send_html(text, keyboard)
 
             def bind(current: dict[str, Any]) -> None:
                 record = current["proposals"][proposal["id"]]
@@ -380,6 +392,7 @@ class BriefingLoop:
             revised.pop("action_id", None)
             revised.pop("result", None)
             revised.pop("requested_snooze", None)
+            text, keyboard = render_weekly_proposal(revised, 1, 1)
 
             def save_revision(current: dict[str, Any]) -> bool:
                 if revised["id"] in current["proposals"]:
@@ -394,10 +407,7 @@ class BriefingLoop:
 
             if not self.store.update(save_revision):
                 return "That revision is already recorded. Use its existing proposal message; no new action was started."
-            message_id = self.send(render_proposal(revised), [[
-                {"text": "Approve revision", "callback_data": f"brief1|approve|{revised['id']}"},
-                {"text": "Decline", "callback_data": f"brief1|decline|{revised['id']}"},
-            ]])
+            message_id = self.send_html(text, keyboard)
 
             def bind_revision(current: dict[str, Any]) -> None:
                 current["proposals"][revised["id"]]["message_ids"].append(message_id)

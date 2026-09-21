@@ -350,12 +350,13 @@ def test_corrections_remain_idempotent_after_action_submission(system):
     assert len(active) == 1 and active[0]["text"] == "Prefer guided exercises"
 
 
-def test_enabled_personal_signals_reach_input_and_output(system):
+def test_current_personal_signals_are_available_in_details_not_routine_summary(system):
     loop, _, sent, _, inputs, _, _ = system
     loop.extras = lambda sections: {"signals": ["Inbox: 3 items.", "Yesterday: 2 unfinished checkboxes."]}
     loop.deliver(TODAY, ["knowledge", "vault", "journal"])
     assert inputs[0]["personal_signals"] == ["Inbox: 3 items.", "Yesterday: 2 unfinished checkboxes."]
-    assert "Inbox: 3 items." in sent[0][0]
+    assert "Inbox: 3 items." not in sent[0][0]
+    assert "Inbox: 3 items." in loop.details(TODAY, ["vault", "journal"])
 
 
 def test_failed_decision_persistence_cannot_start_work(system):
@@ -414,8 +415,10 @@ def test_near_deadline_survives_short_briefing_and_model_preference(system):
     loop.loops = lambda: {"status": "available", "tasks": {"items": tasks}}
     raw["proposal"] = None
     loop.deliver(TODAY, ["loops", "knowledge"])
-    assert sent[0][0].startswith("Morning focus - 2026-09-13\n\nNear deadline")
-    assert "deadline 2026-09-14" in sent[0][0]
+    assert "<b>Morning focus" in sent[0][0]
+    assert "<b>One focus</b>\nNear deadline" in sent[0][0]
+    assert "Due tomorrow (14 Sep)" in sent[0][0]
+    assert sent[0][0].count("Near deadline") == 1
 
 
 def test_nonexistent_model_source_cannot_authorize_a_proposal():
@@ -427,7 +430,7 @@ def test_nonexistent_model_source_cannot_authorize_a_proposal():
         }, context, TODAY)
 
 
-def test_all_due_tasks_remain_visible_with_reserved_change_evidence(system):
+def test_all_due_tasks_remain_accessible_in_details_with_reserved_change_evidence(system):
     loop, _, sent, _, inputs, raw, _ = system
     tasks = [
         {
@@ -443,8 +446,78 @@ def test_all_due_tasks_remain_visible_with_reserved_change_evidence(system):
 
     assert SOURCE["path"] in {item["path"] for item in inputs[-1]["sources"]}
     assert len(inputs[-1]["sources"]) == 24
-    assert "Due task 23" in sent[0][0]
-    assert "not included in the model evidence" in sent[0][0]
+    assert "21 more date-relevant tasks: /briefing details." in sent[0][0]
+    assert "partial view" in sent[0][0]
+    before = len(sent)
+    details = loop.details(TODAY, ["loops", "knowledge"])
+    for task in tasks:
+        assert task["title"] in details
+    assert len(sent) == before
+    assert "not included in the model evidence" in details
+
+
+def test_deadline_displaces_old_waiting_review_without_repeating_focus(system):
+    loop, _, sent, _, _, raw, _ = system
+    tasks = [
+        {"path": "tasks/wait.md", "title": "Waiting for support", "review_on": "2026-08-01",
+         "waiting_for": "A reply", "revision": REVISION},
+        {"path": "tasks/submit.md", "title": "Submit application", "deadline": "2026-09-14",
+         "next_action": "Upload the final draft.", "revision": REVISION},
+    ]
+    loop.loops = lambda: {"status": "available", "tasks": {"items": tasks}}
+    raw["proposal"] = None
+    loop.deliver(TODAY, ["loops", "knowledge"])
+    summary = sent[0][0]
+    assert "<b>One focus</b>\nSubmit application" in summary
+    assert summary.count("Submit application") == 1
+    assert "Waiting for support" in summary
+    assert "Review 43d overdue" in summary
+
+
+def test_details_do_not_generate_send_execute_or_mutate_private_receipts(system):
+    loop, store, sent, executed, inputs, _, _ = system
+    before = store.read()
+    text = loop.details(TODAY, ["loops", "knowledge"])
+    assert SOURCE["title"] in text
+    assert "No work is started" in text
+    assert store.read() == before
+    assert not sent and not executed and not inputs
+
+
+def test_action_card_names_the_effect_and_approval_executes_only_once(system):
+    loop, store, sent, executed, _, _, _ = system
+    loop.deliver(TODAY, ["knowledge"])
+    card, keyboard = sent[1]
+    assert "<b>Scope</b>" in card
+    assert keyboard[0][0]["text"] == "Start research"
+    assert not executed
+    identifier = loop.target(2)
+    loop.reply(identifier, "approve", TODAY)
+    loop.reply(identifier, "approve", TODAY)
+    assert len(executed) == 1
+    assert store.read()["proposals"][identifier]["status"] == "submitted"
+
+
+def test_unshown_changes_are_not_marked_presented(system):
+    loop, store, _, _, _, raw, _ = system
+    raw["focus"] = None
+    raw["proposal"] = None
+    raw["changes"][0]["why"] = "A reason too long to show in the concise overview. " * 8
+    loop.deliver(TODAY, ["knowledge"])
+    assert not store.read()["fingerprints"]
+
+
+def test_legacy_plain_delivery_resumes_through_plain_sender(system):
+    loop, store, sent, _, _, _, _ = system
+    loop.deliver(TODAY, ["knowledge"])
+    delivery = next(iter(store.state["deliveries"].values()))
+    delivery.update(status="sending", summary_sent=False, text="Legacy <text> & values")
+    delivery.pop("format")
+    delivery["proposal_id"] = None
+    delivery["fingerprints"] = {}
+    loop.send_html = lambda *_: pytest.fail("Legacy text must not be parsed as HTML")
+    loop._complete_delivery(next(iter(store.state["deliveries"])))
+    assert sent[-1][0] == "Legacy <text> & values"
 
 
 def test_model_cannot_launder_an_existing_omitted_change_into_a_delivery(system):
@@ -552,6 +625,6 @@ def test_verified_result_is_reported_once_in_a_subsequent_briefing(system):
     }
     loop.deliver(date(2026, 9, 14), ["knowledge"])
     loop.deliver(date(2026, 9, 15), ["knowledge"])
-    result_messages = [text for text, _ in sent if "Verified results from approved work" in text]
+    result_messages = [text for text, _ in sent if "<b>Follow-through</b>" in text]
     assert len(result_messages) == 1
     assert "https://github.com/example/vault/pull/3" in result_messages[0]
