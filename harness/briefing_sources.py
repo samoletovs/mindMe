@@ -512,6 +512,22 @@ def _recent_paths(
     return ranks
 
 
+def _canonical_head(client: httpx.Client, base: str, headers: dict[str, str]) -> str:
+    metadata = _json(client, base, headers)
+    branch = metadata.get("default_branch") if isinstance(metadata, dict) else None
+    if (
+        not isinstance(branch, str) or not branch or len(branch) > 200
+        or not re.fullmatch(r"[A-Za-z0-9_./-]+", branch) or ".." in branch
+        or any(not part or part.startswith(".") for part in branch.split("/"))
+    ):
+        raise SourceError("source_branch_invalid")
+    head = _json(client, base + "/git/ref/heads/" + quote(branch, safe=""), headers)
+    ref = head.get("object") if isinstance(head, dict) else None
+    if not isinstance(ref, dict) or ref.get("type") != "commit":
+        raise SourceError("source_revision_invalid")
+    return _sha(ref.get("sha"))
+
+
 def load_sources(
     client: httpx.Client, *, token: str, repo: str, sections: list[str],
     previous: dict[str, str] | None = None,
@@ -549,19 +565,7 @@ def load_sources(
         raise SourceError("source_tracking_invalid")
     headers = _headers(token, repo)
     base = "/repos/" + repo
-    metadata = _json(client, base, headers)
-    branch = metadata.get("default_branch") if isinstance(metadata, dict) else None
-    if (
-        not isinstance(branch, str) or not branch or len(branch) > 200
-        or not re.fullmatch(r"[A-Za-z0-9_./-]+", branch) or ".." in branch
-        or any(not part or part.startswith(".") for part in branch.split("/"))
-    ):
-        raise SourceError("source_branch_invalid")
-    head = _json(client, base + "/git/ref/heads/" + quote(branch, safe=""), headers)
-    ref = head.get("object") if isinstance(head, dict) else None
-    if not isinstance(ref, dict) or ref.get("type") != "commit":
-        raise SourceError("source_revision_invalid")
-    revision = _sha(ref.get("sha"))
+    revision = _canonical_head(client, base, headers)
     commit = _json(client, base + "/git/commits/" + revision, headers)
     if not isinstance(commit, dict) or commit.get("sha") != revision:
         raise SourceError("source_revision_invalid")
@@ -733,9 +737,10 @@ def read_knowledge_source(
     kind = _kind(path)
     if kind not in {"note", "wiki", "research", "idea", "project"}:
         raise SourceError("source_path_not_allowed")
+    head = _canonical_head(client, "/repos/" + repo, headers)
     data = _json(
         client, f"/repos/{repo}/contents/{quote(path, safe='/')}", headers,
-        missing_ok=True, limit=MAX_FILE_BYTES * 2 + 8000,
+        params={"ref": head}, missing_ok=True, limit=MAX_FILE_BYTES * 2 + 8000,
     )
     if data is _MISSING:
         return None
@@ -749,7 +754,7 @@ def read_knowledge_source(
     return {
         "path": path, "revision": revision, "digest": hashlib.sha256(text.encode()).hexdigest(),
         "title": title, "text": text[:10000], "kind": kind,
-        "url": f"https://github.com/{repo}/blob/{revision}/{quote(path, safe='/')}",
+        "url": f"https://github.com/{repo}/blob/{head}/{quote(path, safe='/')}",
         "bounded": len(text) > 10000,
     }
 

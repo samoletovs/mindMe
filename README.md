@@ -186,12 +186,12 @@ lacks adequate displayed context, mindMe asks for a short quote instead of guess
 
 | Command | Result |
 |---|---|
-| `/knowledge [page or id]` | Inspect concise working context, explicit feedback and corrections, source revisions, expiry, supersession and use counts (five records/page) |
+| `/knowledge [page or id]` | Inspect concise working context, explicit feedback and corrections, source revisions, expiry, supersession and use counts (three records/page) |
 | `/knowledge forget <id>` | Idempotently delete a memory and topic briefs that used it; no source edit |
 | `/knowledge receipts [page]` | Inspect request outcomes and follow-up message bindings (ten/page) |
 | `/knowledge forget bindings` | Explicitly remove follow-up bindings, preserving action/request replay guards |
 | `/knowledge proposal <id>` | Explicitly re-present a pending proposal card after uncertain delivery; never executes it |
-| `/topics [page or id]` | Inspect retained complete briefs and their source/revision receipts |
+| `/topics [page or id]` | Inspect retained complete briefs and their source/revision receipts (three records/page; at most 15 source checks) |
 | `/topics <query>` | Request one bounded, evidence-linked topic brief |
 | `/topics forget <id>` | Idempotently delete that private brief |
 | `/proposals all` | Inspect accepted/declined/uncertain/submitted/verified outcomes in the existing approval ledger |
@@ -211,6 +211,10 @@ never regenerate or resend an uncertain response automatically. Re-present a
 pending card explicitly with `/knowledge proposal <id>` when necessary; a fresh
 `/recap URL` supplies a new capture context. Memory cleanup and approved-action
 follow-through attach to the existing morning/Sunday jobs, with no new schedule.
+Each confirmed response part is privately bound before sending the next, so a
+later send failure does not orphan already delivered parts. An expired,
+never-executed proposal may be renewed by a fresh explicit request; old cards
+remain expired, and submitted/uncertain/completed actions are never renewed.
 
 The deployment must ship memex's `capture_context` contract first (see
 [the approved design](docs/design-knowledge-loop.md)). mindMe sends the exact

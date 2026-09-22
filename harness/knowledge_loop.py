@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import date, timedelta
 from typing import Any
 
 from briefing_loop import BriefingLoop
 from briefing_plan import fingerprint
-from briefing_state import BriefingStore, _SECRET, parse_reply
+from briefing_state import BriefingStore, _SECRET, parse_reply, record_transition
 from knowledge_plan import KnowledgeError, render_synthesis, shown_reference, validate_synthesis
 from knowledge_state import consolidate, decide_write, forget_memory, mark_used, recall
 from weekly_plan import render_weekly_proposal
@@ -23,10 +23,12 @@ class KnowledgeLoop:
         retrieve: Callable[[str, tuple[str, ...]], dict[str, Any]],
         generate: Callable[[dict[str, Any]], dict[str, Any]],
         send: Callable[[str], list[int]],
+        send_parts: Callable[[str], Iterable[int]] | None = None,
     ) -> None:
         self.store, self.briefing = store, briefing
         self.lookup, self.read, self.retrieve = lookup, read, retrieve
         self.generate, self.send = generate, send
+        self.send_parts = send_parts
 
     def resolve(self, message_id: int, today: date, key: str | None = None) -> dict[str, Any] | None:
         if type(message_id) is not int or message_id <= 0:
@@ -101,17 +103,19 @@ class KnowledgeLoop:
                     if action == "known" else "Explicitly useful source; prefer practical follow-through when requested."
                 )
                 self.store.update(lambda state: decide_write(state, kind=kind, text=value, sources=refs, today=today))
-                ids = self.send("Scoped feedback saved. Inspect /knowledge or delete it there. This does not create a permanent interest or approve work.")
-                self._finish(request_id, ids, refs, today)
+                self._send_bound(
+                    request_id, "Scoped feedback saved. Inspect /knowledge or delete it there. "
+                    "This does not create a permanent interest or approve work.", refs, today,
+                )
                 return True
             shown, clarify = shown_reference(text, shown_text)
             if clarify:
-                ids = self.send(
+                self._send_bound(
+                    request_id,
                     "Please quote the idea or sentence you mean in a short reply. I cannot reliably "
                     "identify that reference from the available shown message, and the canonical "
-                    "note may order its ideas differently. No action was taken."
+                    "note may order its ideas differently. No action was taken.", refs, today,
                 )
-                self._finish(request_id, ids, refs, today)
                 return True
             self._synthesize(context["sources"], text, action, request_id, today, shown_text=shown)
         except Exception:
@@ -146,6 +150,24 @@ class KnowledgeLoop:
                 }
 
         self.store.update(finish)
+
+    def _send_bound(self, identifier: str, text: str, refs: dict[str, str], today: date) -> None:
+        ids = []
+        sender = self.send_parts or self.send
+        for message_id in sender(text):
+            if type(message_id) is not int or message_id <= 0:
+                raise KnowledgeError("unconfirmed_followup_delivery")
+
+            def checkpoint_message(state: dict[str, Any]) -> None:
+                state["knowledge"]["bindings"][str(message_id)] = {
+                    "sources": refs, "created_on": today.isoformat(),
+                    "expires_on": (today + timedelta(days=14)).isoformat(),
+                }
+                state["knowledge"]["requests"][identifier].setdefault("message_ids", []).append(message_id)
+
+            self.store.update(checkpoint_message)
+            ids.append(message_id)
+        self._finish(identifier, ids, refs, today)
 
     def _synthesize(
         self, sources: list[dict[str, Any]], query: str, action: str, request_id: str, today: date,
@@ -207,8 +229,7 @@ class KnowledgeLoop:
                 }
 
         self.store.update(retain)
-        ids = self.send(text + (f"\n\nRetained topic receipt: {topic_id}" if topic_id else ""))
-        self._finish(request_id, ids, refs, today)
+        self._send_bound(request_id, text + (f"\n\nRetained topic receipt: {topic_id}" if topic_id else ""), refs, today)
         def remember(current: dict[str, Any]) -> None:
             mark_used(current, plan["used_memory_ids"], today)
             decide_write(
@@ -233,7 +254,7 @@ class KnowledgeLoop:
         source = sources[0]
         kind = "research" if action == "dig" else "create_task"
         refs = {item["path"]: item["revision"] for item in sources}
-        identifier = fingerprint(["knowledge", kind, refs, text])[:24]
+        identifier = fingerprint(["knowledge", kind, refs, text, today.isoformat()])[:24]
         record = {
             "id": identifier, "kind": kind, "text": text,
             "source_path": source["path"], "source_revision": source["revision"],
@@ -245,6 +266,13 @@ class KnowledgeLoop:
         }
 
         def prepare(state: dict[str, Any]) -> bool:
+            for previous in state["proposals"].values():
+                if (
+                    previous.get("knowledge_sources") == refs and previous["kind"] == kind
+                    and previous["status"] == "pending" and previous["expires_on"] <= today.isoformat()
+                    and not previous.get("action_id") and not previous.get("result")
+                ):
+                    record_transition(previous, "expired", today)
             if identifier in state["proposals"]:
                 return False
             # Do not paraphrase the same scope into repeated pending/declined/completed work.
@@ -361,7 +389,8 @@ class KnowledgeLoop:
             self.send("Use /knowledge [page|id], /knowledge forget <id>, /topics [page|id|query], or /topics forget <id>.")
             return
         page = max(1, int(argument or "1"))
-        items = sorted(records.items(), reverse=True)[(page - 1) * 5:page * 5]
+        # Each record can depend on five sources; three records fit the 16-read bound.
+        items = sorted(records.items(), reverse=True)[(page - 1) * 3:page * 3]
         revisions = {}
         for _, item in items:
             for path in item["sources"]:

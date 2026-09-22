@@ -609,6 +609,7 @@ def _knowledge_loop() -> KnowledgeLoop:
         ),
         generate=_generate_knowledge,
         send=lambda text: [_telegram_proposal_send(chat_id, part) for part in _telegram_chunks(text)],
+        send_parts=lambda text: (_telegram_proposal_send(chat_id, part) for part in _telegram_chunks(text)),
     )
 
 

@@ -22,7 +22,7 @@ from knowledge_plan import (
     hydrate_synthesis, knowledge_evidence_packet, knowledge_model_schema, validate_synthesis,
 )
 from knowledge_state import CAPS, consolidate, decide_write, recall
-from test_briefing_sources import REPO, TOKEN, Vault
+from test_briefing_sources import HEAD, REPO, TOKEN, Vault, blob
 from test_briefing_state import FakeBlob
 from test_briefing_webhook import request
 
@@ -283,6 +283,61 @@ def test_failed_send_records_uncertainty_and_duplicate_retry_does_not_resend(sys
     assert sender.call_count == 1
 
 
+def test_confirmed_early_chunk_remains_bound_when_later_chunk_fails(system):
+    attempts = []
+
+    def send_parts(text):
+        attempts.append("first")
+        yield 801
+        assert system.store.state["knowledge"]["bindings"]["801"]["sources"] == {PATH: SOURCE["revision"]}
+        attempts.append("second")
+        raise RuntimeError("synthetic later-part failure")
+
+    system.loop.send_parts = send_parts
+    with pytest.raises(RuntimeError, match="later-part"):
+        handle(system)
+    receipt = next(iter(system.store.state["knowledge"]["requests"].values()))
+    assert receipt["status"] == "uncertain" and receipt["message_ids"] == [801]
+    assert system.loop.resolve(801, TODAY)["sources"][0]["path"] == PATH
+    handle(system)
+    assert attempts == ["first", "second"]
+    assert not system.executed and not system.store.state["knowledge"]["memories"]
+
+
+def test_expired_unexecuted_proposal_can_be_renewed_from_a_fresh_recap(system):
+    handle(system, action="apply")
+    old_id = next(iter(system.store.state["proposals"]))
+    later = TODAY + timedelta(days=15)
+    system.loop.handle(
+        message_id=51, text="apply", event="fresh-recap", today=later,
+        action="apply", capture_key="c" * 32,
+    )
+    records = system.store.state["proposals"]
+    assert len(records) == 2 and records[old_id]["status"] == "expired"
+    new_id = next(identifier for identifier in records if identifier != old_id)
+    assert records[new_id]["created_on"] == later.isoformat()
+    assert records[new_id]["status"] == "pending"
+    assert records[new_id]["text"] == records[old_id]["text"]
+    assert "expired" in system.briefing.reply(old_id, "approve", later).lower()
+    assert not system.executed
+    system.briefing.reply(new_id, "approve", later)
+    system.briefing.reply(new_id, "approve", later)
+    assert len(system.executed) == 1
+
+
+def test_fresh_recap_cannot_renew_already_submitted_action_even_after_expiry(system):
+    handle(system, action="apply")
+    identifier = next(iter(system.store.state["proposals"]))
+    system.briefing.reply(identifier, "approve", TODAY)
+    system.loop.handle(
+        message_id=51, text="apply", event="fresh-recap", today=TODAY + timedelta(days=15),
+        action="apply", capture_key="c" * 32,
+    )
+    assert len(system.store.state["proposals"]) == 1
+    assert len(system.executed) == 1
+    assert system.store.state["proposals"][identifier]["status"] == "submitted"
+
+
 def test_explicit_familiarity_changes_later_response_and_marks_memory_used(system):
     handle(system, action="known", key="c" * 32)
     identifier = next(iter(system.store.state["knowledge"]["memories"]))
@@ -381,6 +436,33 @@ def test_topic_command_retrieves_once_retains_inspectable_revision_receipt(syste
     assert topic["text"] in system.sent[-1][0]
     system.loop.command("/topics forget " + identifier, TODAY, "forget")
     assert not system.store.state["knowledge"]["topics"]
+
+
+def test_paginated_topics_with_five_distinct_sources_remain_inspectable_within_read_bound(system):
+    identifiers = []
+    for index in range(5):
+        refs = {}
+        for number in range(5):
+            path = f"notes/topic-{index}-source-{number}.md"
+            system.current[path] = {**SOURCE, "path": path}
+            refs[path] = SOURCE["revision"]
+        identifier = f"{index + 1:024x}"
+        identifiers.append(identifier)
+        system.store.state["knowledge"]["topics"][identifier] = {
+            "sources": refs, "text": f"Topic receipt {index}",
+            "created_on": TODAY.isoformat(), "expires_on": (TODAY + timedelta(days=35)).isoformat(),
+        }
+    reader = Mock(side_effect=system.loop.read)
+    system.loop.read = reader
+    system.loop.command("/topics", TODAY, "page-one")
+    assert reader.call_count == 15
+    assert all(identifier in system.sent[-1][0] for identifier in identifiers[2:])
+    assert all(identifier not in system.sent[-1][0] for identifier in identifiers[:2])
+    reader.reset_mock()
+    system.loop.command("/topics 2", TODAY, "page-two")
+    assert reader.call_count == 10
+    assert all(identifier in system.sent[-1][0] for identifier in identifiers[:2])
+    assert all(identifier not in system.sent[-1][0] for identifier in identifiers[2:])
 
 
 def test_two_source_topic_keeps_conflict_quotes_gaps_and_optional_experiment(system):
@@ -649,6 +731,17 @@ def test_query_rank_selects_relevant_canonical_notes_before_alphabetical_noise(m
     assert [item["path"] for item in result["sources"]] == [PATH]
     assert result["coverage"]["read_files"] <= 16
     assert result["complete"] is False
+
+
+def test_direct_source_citation_uses_pinned_commit_not_file_blob_sha(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    raw = "# Spaced learning\n" + TEXT
+    vault = Vault({PATH: raw})
+    source = read_knowledge_source(vault.client, token=TOKEN, repo=REPO, path=PATH)
+    assert source["revision"] == blob(raw)
+    assert source["revision"] != HEAD
+    assert source["url"] == f"https://github.com/{REPO}/blob/{HEAD}/{PATH}"
+    assert all(request.url.params["ref"] == HEAD for request in vault.reads)
 
 
 @pytest.mark.parametrize("raw", [
