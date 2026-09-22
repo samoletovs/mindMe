@@ -27,7 +27,7 @@ RECORD_CAPS = {
     "proposals": 200, "messages": 400, "memories": 100,
     "fingerprints": 1000, "deliveries": 14,
 }
-_ROOT_KEYS = {"version", *RECORD_CAPS, "last_delivered"}
+_ROOT_KEYS = {"version", *RECORD_CAPS, "last_delivered", "knowledge"}
 _PROPOSAL_KEYS = {
     "id", "kind", "text", "source_path", "source_revision", "source_digest",
     "status", "created_on", "expires_on", "message_ids", "action",
@@ -75,6 +75,7 @@ def empty_state() -> dict[str, Any]:
     return {
         "version": 1, "proposals": {}, "messages": {}, "memories": {},
         "fingerprints": {}, "deliveries": {}, "last_delivered": None,
+        "knowledge": {"memories": {}, "bindings": {}, "requests": {}, "topics": {}},
     }
 
 
@@ -209,6 +210,11 @@ def _validate_proposal(identifier: str, record: object) -> None:
         return
     if not _PROPOSAL_KEYS <= record.keys():
         raise StateError("invalid_proposal")
+    if "knowledge_sources" in record:
+        from knowledge_state import _refs
+
+        if not _refs(record["knowledge_sources"]):
+            raise StateError("invalid_proposal_evidence")
     for key in ("kind", "text", "source_path", "source_revision", "source_digest", "status"):
         if not _nonempty(record[key]):
             raise StateError("invalid_proposal")
@@ -250,8 +256,12 @@ def _check_tombstones(before: dict[str, dict[str, Any]], after: dict[str, Any]) 
 
 
 def _validate(state: object) -> None:
-    if not isinstance(state, dict) or set(state) != _ROOT_KEYS or type(state["version"]) is not int:
+    if not isinstance(state, dict) or set(state) not in (_ROOT_KEYS, _ROOT_KEYS - {"knowledge"}) or type(state["version"]) is not int:
         raise StateError("invalid_state_schema")
+    if "knowledge" in state:
+        from knowledge_state import validate_knowledge
+
+        validate_knowledge(state["knowledge"])
     if state["version"] != 1:
         raise StateError("unsupported_state_version")
     if state["last_delivered"] is not None and not isinstance(state["last_delivered"], dict):
@@ -388,6 +398,7 @@ class BriefingStore:
         except (ValueError, UnicodeError, RecursionError):
             raise StateError("invalid_state_json") from None
         _encode(state)
+        state.setdefault("knowledge", {"memories": {}, "bindings": {}, "requests": {}, "topics": {}})
         return state, etag
 
     def read(self) -> dict[str, Any]:

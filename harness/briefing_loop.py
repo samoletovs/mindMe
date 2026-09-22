@@ -52,6 +52,7 @@ class BriefingLoop:
         execute: Callable[[dict[str, Any], bool], dict[str, Any]],
         extras: Callable[[list[str]], dict[str, Any]],
         send_html: Callable[[str, list[list[dict[str, str]]] | None], int] | None = None,
+        knowledge_revision: Callable[[str], str | None] | None = None,
     ) -> None:
         self.store = store
         self.sources = sources
@@ -60,6 +61,7 @@ class BriefingLoop:
         self.send = send
         self.send_html = send_html or (lambda text, keyboard: self.send(text, keyboard))
         self.revision = revision
+        self.knowledge_revision = knowledge_revision or revision
         self.execute = execute
         self.extras = extras
 
@@ -339,6 +341,21 @@ class BriefingLoop:
             return render_proposal(proposal)
         if intent == "correct":
             correction = safe_text(decision["text"], 280)
+            if proposal.get("knowledge_sources"):
+                from knowledge_state import decide_write
+
+                refs = proposal["knowledge_sources"]
+                if any(self.knowledge_revision(path) != revision for path, revision in refs.items()):
+                    return "The source changed. Reply to a fresh source summary before saving a correction."
+
+                def remember_knowledge(current: dict[str, Any]) -> None:
+                    decide_write(current, kind="correction", text=correction, sources=refs, today=today)
+                    item = current["proposals"][proposal_id]
+                    if item["status"] in {"pending", "accepted", "snoozed", "corrected"}:
+                        record_transition(item, "corrected", today)
+
+                self.store.update(remember_knowledge)
+                return "Source-bound correction saved for later follow-ups. Inspect /knowledge; no source or action receipt was edited."
             identifier = fingerprint([proposal_id, correction])[:24]
 
             def remember(current: dict[str, Any]) -> None:
@@ -371,6 +388,14 @@ class BriefingLoop:
             if self.revision(proposal["source_path"]) != proposal["source_revision"]:
                 self.store.update(lambda current: current["proposals"][proposal_id].update(status="invalidated"))
                 return "The source changed or was removed. The old approval cannot be used; request a fresh proposal."
+            for path, revision in proposal.get("knowledge_sources", {}).items():
+                if self.knowledge_revision(path) != revision:
+                    self.store.update(lambda current: current["proposals"][proposal_id].update(status="invalidated"))
+                    return "The knowledge evidence changed or is no longer eligible. Request a fresh proposal; no action was started."
+            if proposal.get("knowledge_sources") and proposal["kind"] == "research":
+                from knowledge_plan import public_knowledge_question
+
+                public_knowledge_question(decision["text"] if intent == "change" else proposal["action"]["text"])
         if intent == "change":
             revised = copy.deepcopy(proposal)
             revised["text"] = safe_text(decision["text"])

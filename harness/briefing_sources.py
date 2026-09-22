@@ -518,6 +518,8 @@ def load_sources(
     known_revisions: dict[str, str] | None = None,
     scan_cursor: str | None = None,
     include_evidence: bool = False,
+    query: str | None = None,
+    anchor_paths: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Read one canonical snapshot; the host checkpoints only displayed changes.
 
@@ -596,6 +598,10 @@ def load_sources(
     evidence_bytes = 0
 
     def priority(candidate: str) -> tuple[int, int, str]:
+        if query is not None:
+            terms = set(re.findall(r"[a-z0-9]{3,}", query.casefold()))
+            overlap = len(terms & set(re.findall(r"[a-z0-9]{3,}", candidate.casefold())))
+            return (0 if candidate in anchor_paths else 1, -overlap, candidate)
         if known_revisions is not None:
             changed = known_revisions.get(candidate) != candidates[candidate]["sha"]
             rank = (
@@ -717,3 +723,65 @@ def read_source_revision(
     ):
         raise SourceError("source_no_longer_permitted")
     return revision
+
+
+def read_knowledge_source(
+    client: httpx.Client, *, token: str, repo: str, path: str,
+) -> dict[str, Any] | None:
+    """Read the current canonical file, not a supplied excerpt or unpublished PR."""
+    headers = _headers(token, repo)
+    kind = _kind(path)
+    if kind not in {"note", "wiki", "research", "idea", "project"}:
+        raise SourceError("source_path_not_allowed")
+    data = _json(
+        client, f"/repos/{repo}/contents/{quote(path, safe='/')}", headers,
+        missing_ok=True, limit=MAX_FILE_BYTES * 2 + 8000,
+    )
+    if data is _MISSING:
+        return None
+    revision, raw = _content(data, path)
+    if not _review_source_allowed(path, raw, kind):
+        return None
+    material = _material(path, raw, kind, set())
+    if material is None:
+        return None
+    title, text = material
+    return {
+        "path": path, "revision": revision, "digest": hashlib.sha256(text.encode()).hexdigest(),
+        "title": title, "text": text[:10000], "kind": kind,
+        "url": f"https://github.com/{repo}/blob/{revision}/{quote(path, safe='/')}",
+        "bounded": len(text) > 10000,
+    }
+
+
+def load_topic_sources(
+    client: httpx.Client, *, token: str, repo: str, query: str,
+    anchor_paths: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Rank paths before 16 bounded reads, then rank permitted evidence; at most five sources."""
+    result = load_sources(
+        client, token=token, repo=repo, sections=["knowledge", "loops"],
+        include_evidence=True, query=query, anchor_paths=anchor_paths,
+    )
+    stop = {"the", "and", "this", "that", "with", "from", "about", "what", "into", "topic"}
+    terms = set(re.findall(r"[a-z0-9]{3,}", query.casefold())) - stop
+
+    def score(source: dict[str, Any]) -> int:
+        title = set(re.findall(r"[a-z0-9]{3,}", (source["title"] + " " + source["path"]).casefold()))
+        body = set(re.findall(r"[a-z0-9]{3,}", source["text"].casefold()))
+        return 4 * len(terms & title) + len(terms & body)
+
+    selected = sorted(
+        (item for item in result["sources"] if item["path"] in anchor_paths or score(item) > 0),
+        key=lambda item: (item["path"] not in anchor_paths, -score(item), item["path"]),
+    )[:5]
+    result["sources"] = [
+        {key: item[key] for key in ("path", "revision", "digest", "title", "text", "kind", "url")}
+        for item in selected
+    ]
+    result["warnings"] = [
+        *result["warnings"],
+        "Selection is bounded: at most 16 candidate files read, five relevant sources compared. "
+        "Missing evidence is not proof of absence or unfamiliarity. Sources may share an origin.",
+    ]
+    return result

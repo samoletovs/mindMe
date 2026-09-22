@@ -172,7 +172,7 @@ def store_for(blob: FakeBlob) -> BriefingStore:
 def test_empty_state_has_exact_independent_collections() -> None:
     first, second = empty_state(), empty_state()
     assert set(first) == {
-        "version", "proposals", "messages", "memories", "fingerprints", "deliveries", "last_delivered",
+        "version", "proposals", "messages", "memories", "fingerprints", "deliveries", "last_delivered", "knowledge",
     }
     first["proposals"]["one"] = {}
     assert second["proposals"] == {}
@@ -357,7 +357,7 @@ def test_contention_has_bounded_retries_and_no_success_fallback() -> None:
     assert blob.saved()["proposals"]["proposal-1"]["status"] == "pending"
 
 
-@pytest.mark.parametrize("key", list(empty_state()))
+@pytest.mark.parametrize("key", [key for key in empty_state() if key != "knowledge"])
 def test_missing_root_key_is_rejected_without_resetting_state(key: str) -> None:
     state = empty_state()
     del state[key]

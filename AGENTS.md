@@ -92,6 +92,57 @@ SDK telemetry regression alongside any tracing changes.
   See [the runtime contract](docs/vault-evolve.md); review artifacts are proposal-only,
   and a submitted PR is not canonical publication. Its separate private state expires
   after 14 days; do not add unbounded chat memory or silent delivery retries.
+- Contextual knowledge uses the existing action-briefing flag, model, private
+  `briefing-state-v1.json` and approval engine. `cap1|action|32hex` resolves the actual
+  owner/message through the read-only `capture_context` operation at the existing
+  `MEMEX_WEBHOOK_URL`. Never trust caller source text or substitute another note
+  after lookup/read failure. `/recap URL` remains memex-owned.
+- Only after verifying that message binding, pass the actual Telegram
+  `reply_to_message.text`/caption or callback message text/caption (at most 4,096
+  characters) as untrusted, reference-only context for pronouns/numbered ideas.
+  Recap order may differ from canonical source order. This shown text is not
+  evidence, corroboration or permission and must never be persisted. Citations
+  still require canonical evidence; missing/ambiguous references require a short
+  quote rather than a guess. Durable context remains concise source-bound memory.
+- `knowledge_context.py`, `knowledge_loop.py`, `knowledge_plan.py` and
+  `knowledge_state.py` implement source-bound follow-up, topic receipts and own-memory
+  continuity. This project remains registered as `tier: own` in governance's
+  `config/memory-targets.json`; do not install the incompatible TypeScript memory core.
+  Every continuity write uses `decide_write`; recall is deterministic, injected in a
+  nonce-fenced data packet, and actual model-reported usage updates usage metadata.
+  No raw chat archive, inferred permanent interests or extra knowledge vault.
+- Retention: working context and live bindings 14 days; explicit feedback 90 days;
+  corrections until deletion/source invalidation (superseded memories get a 35-day
+  grace); private topic brief/revision receipts 35 days. Source change, deletion,
+  privacy/ignore changes or derived-output classification invalidate derivatives.
+  Invalidated bindings become source-less replay tombstones, not refreshed authority.
+  Memory/topic/source text never enters logs, telemetry or Git.
+- `/knowledge [page|id]`, `/knowledge forget <id>`, `/topics [page|id|query]` and
+  `/topics forget <id>` inspect/delete this concise memory and complete topic briefs.
+  `/knowledge receipts [page]` inspects message/request metadata; `/knowledge forget
+  bindings` explicitly removes bindings. `/knowledge proposal <id>` explicitly
+  re-presents a pending card after uncertain delivery; duplicate webhook retries
+  do not repeat it. Non-content uncertain-request replay guards and existing
+  unresolved action receipts are preserved, never silently evicted.
+- Caps are 100 knowledge memories, 200 bindings (including revoked tombstones),
+  300 request receipts and 30 topic briefs, within the existing 1 MiB state ceiling.
+  Capacity fails closed rather than evicting unresolved receipts. Canonical topic
+  retrieval ranks paths before at most 16 content reads, then selects at most five
+  relevant safe sources. Exact quote/path validation precedes rendering. Agreement
+  and conflict need two cited paths; shared origins are not independent corroboration.
+  Generation uses host-issued source/quote IDs, following vault-evolve's evidence
+  packet pattern. `knowledge_evidence_packet` replaces source text with bounded
+  exact snippets; `knowledge_model_schema` binds each source to its allowed IDs;
+  `hydrate_synthesis` restores the original path/quote before the existing validator.
+  Never regenerate/fuzzy-match quotations. The generation schema's section caps
+  sum to eight findings, and hydration enforces the same caps.
+- Dig/Apply only prepare cards. Only `brief1` approval against the actual card and
+  all current eligible source revisions may execute through ActionGateway. Public
+  research remains one impersonal question, at most five sources, one short report,
+  no recursive jobs; never include private user context. Apply drafts a task, not
+  code edits or completed work. Existing morning/Sunday timers prune bounded
+  operational memory for the recently active owner and reconcile approved action
+  receipts; no new timer, automatic research or repeated unaccepted nudges.
 
 ## What this repo is NOT
 
