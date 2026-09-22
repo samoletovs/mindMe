@@ -11,7 +11,7 @@ import os
 import re
 import unicodedata
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -258,7 +258,30 @@ def _excluded_metadata(pairs: list[tuple[str, str]]) -> bool:
     return False
 
 
-def _review_source_allowed(path: str, raw: str, kind: str) -> bool:
+def _captured_source_provenance(path: str, raw: str, pairs: list[tuple[str, str]]) -> bool:
+    """Allow subject words such as 'report' only for host-marked external captures."""
+    if (
+        len(path.split("/")) != 3 or not path.startswith("wiki/sources/")
+        or [value.casefold() for key, value in pairs if key == "type"] != ["source"]
+        or len(re.findall(r"(?m)^Source ID: [a-f0-9]{64}[ \t]*\r?$", raw)) != 1
+    ):
+        return False
+    urls = [value for key, value in pairs if key == "source"]
+    if len(urls) != 1 or len(urls[0]) > 2048 or any(ord(char) < 32 or ord(char) == 127 for char in urls[0]):
+        return False
+    try:
+        url = urlsplit(urls[0])
+        return (
+            url.scheme in {"http", "https"} and bool(url.hostname)
+            and url.username is None and url.password is None
+        )
+    except ValueError:
+        return False
+
+
+def _review_source_allowed(
+    path: str, raw: str, kind: str, *, allow_captured_sources: bool = False,
+) -> bool:
     if len(raw.encode("utf-8")) > 64_000 or len(path.split("/")) > 6:
         return False
     if any(char in path for char in '<>"[]') or any(
@@ -266,9 +289,13 @@ def _review_source_allowed(path: str, raw: str, kind: str) -> bool:
         for part in path.split("/")
     ):
         return False
-    if _REVIEW_SENSITIVE_CONTENT.search(raw) or _REVIEW_DERIVED.search(path):
+    if _REVIEW_SENSITIVE_CONTENT.search(raw):
         return False
     _, pairs = _metadata(raw)
+    if _REVIEW_DERIVED.search(path) and not (
+        allow_captured_sources and _captured_source_provenance(path, raw, pairs)
+    ):
+        return False
     for key, value in pairs:
         value = value.casefold()
         if key in {"private", "sensitive", "ignored", "work"} and value not in {"", "false", "no", "0"}:
@@ -536,6 +563,7 @@ def load_sources(
     include_evidence: bool = False,
     query: str | None = None,
     anchor_paths: tuple[str, ...] = (),
+    allow_captured_sources: bool = False,
 ) -> dict[str, Any]:
     """Read one canonical snapshot; the host checkpoints only displayed changes.
 
@@ -655,7 +683,9 @@ def load_sources(
             result["scan_cursor"] = path
         kind = _kind(path)
         assert kind is not None
-        if include_evidence and kind != "goal" and not _review_source_allowed(path, raw, kind):
+        if include_evidence and kind != "goal" and not _review_source_allowed(
+            path, raw, kind, allow_captured_sources=allow_captured_sources,
+        ):
             result["source_revisions"].pop(path, None)
             result["warnings"].append("Some sources were excluded by the review publication policy.")
             continue
@@ -706,6 +736,7 @@ def load_sources(
 
 def read_source_revision(
     client: httpx.Client, *, token: str, repo: str, path: str, include_evidence: bool = False,
+    allow_captured_sources: bool = False,
 ) -> str | None:
     """Compare immediately before acting. Only a real content 404 means removal."""
     headers = _headers(token, repo)
@@ -723,7 +754,9 @@ def read_source_revision(
         raise SourceError("source_no_longer_permitted")
     if include_evidence and (
         _kind(path) not in {"note", "wiki", "research", "idea", "project"}
-        or not _review_source_allowed(path, raw, _kind(path) or "")
+        or not _review_source_allowed(
+            path, raw, _kind(path) or "", allow_captured_sources=allow_captured_sources,
+        )
     ):
         raise SourceError("source_no_longer_permitted")
     return revision
@@ -745,7 +778,7 @@ def read_knowledge_source(
     if data is _MISSING:
         return None
     revision, raw = _content(data, path)
-    if not _review_source_allowed(path, raw, kind):
+    if not _review_source_allowed(path, raw, kind, allow_captured_sources=True):
         return None
     material = _material(path, raw, kind, set())
     if material is None:
@@ -766,7 +799,7 @@ def load_topic_sources(
     """Rank paths before 16 bounded reads, then rank permitted evidence; at most five sources."""
     result = load_sources(
         client, token=token, repo=repo, sections=["knowledge", "loops"],
-        include_evidence=True, query=query, anchor_paths=anchor_paths,
+        include_evidence=True, query=query, anchor_paths=anchor_paths, allow_captured_sources=True,
     )
     stop = {"the", "and", "this", "that", "with", "from", "about", "what", "into", "topic"}
     terms = set(re.findall(r"[a-z0-9]{3,}", query.casefold())) - stop

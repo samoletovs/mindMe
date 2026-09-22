@@ -13,7 +13,7 @@ import pytest
 
 import function_app as fa
 from briefing_loop import BriefingLoop
-from briefing_sources import SourceError, load_topic_sources, read_knowledge_source
+from briefing_sources import SourceError, load_sources, load_topic_sources, read_knowledge_source, read_source_revision
 from briefing_state import BriefingStore, StateError, _encode, empty_state
 from knowledge_context import capture_context, parse_capture_callback
 from knowledge_loop import KnowledgeLoop
@@ -22,7 +22,7 @@ from knowledge_plan import (
     hydrate_synthesis, knowledge_evidence_packet, knowledge_model_schema, validate_synthesis,
 )
 from knowledge_state import CAPS, consolidate, decide_write, recall
-from test_briefing_sources import HEAD, REPO, TOKEN, Vault, blob
+from test_briefing_sources import HEAD, REPO, TOKEN, Vault, blob, contents
 from test_briefing_state import FakeBlob
 from test_briefing_webhook import request
 
@@ -38,6 +38,18 @@ POINTER = {
     "version": 1, "status": "ready", "source_id": "c" * 64, "source_path": PATH,
     "source_url": "https://evidence.example/article", "title": "Spaced learning",
 }
+CAPTURE_SUBJECT_PATHS = [
+    "wiki/sources/announcing-the-2025-dora-report-state-of-ai-assisted-softwar.md",
+    "wiki/sources/fable-5-1-and-gpt-6-astra-dual-model-code-review-workflow.md",
+]
+
+
+def captured_source_note(metadata: str = "", *, footer: bool = True, text: str = TEXT) -> str:
+    return (
+        "# Captured public source\n\n```yaml\n"
+        "type: source\nsource: https://evidence.example/public-article\n"
+        + metadata + "\n```\n\n" + text + ("\n\nSource ID: " + "c" * 64 if footer else "")
+    )
 
 
 class Store:
@@ -850,6 +862,83 @@ def test_direct_source_citation_uses_pinned_commit_not_file_blob_sha(monkeypatch
     assert source["revision"] != HEAD
     assert source["url"] == f"https://github.com/{REPO}/blob/{HEAD}/{PATH}"
     assert all(request.url.params["ref"] == HEAD for request in vault.reads)
+
+
+@pytest.mark.parametrize("path", CAPTURE_SUBJECT_PATHS)
+def test_legitimate_capture_subject_report_review_is_eligible_only_in_knowledge_mode(monkeypatch, path):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    raw = captured_source_note()
+    vault = Vault({path: raw})
+    source = read_knowledge_source(vault.client, token=TOKEN, repo=REPO, path=path)
+    assert source is not None and source["path"] == path and TEXT in source["text"]
+    assert source["url"] == f"https://github.com/{REPO}/blob/{HEAD}/{path}"
+    topics = load_topic_sources(vault.client, token=TOKEN, repo=REPO, query="delayed recall")
+    assert [item["path"] for item in topics["sources"]] == [path]
+    assert read_source_revision(
+        vault.client, token=TOKEN, repo=REPO, path=path,
+        include_evidence=True, allow_captured_sources=True,
+    ) == blob(raw)
+    # The DailyEvolve publication/writer contract is deliberately NOT widened.
+    daily = load_sources(vault.client, token=TOKEN, repo=REPO, sections=["knowledge"], include_evidence=True)
+    assert daily["sources"] == []
+    with pytest.raises(SourceError, match="source_no_longer_permitted"):
+        read_source_revision(vault.client, token=TOKEN, repo=REPO, path=path, include_evidence=True)
+
+
+@pytest.mark.parametrize("path", CAPTURE_SUBJECT_PATHS)
+@pytest.mark.parametrize("metadata", [
+    "generated: true", "derived: true", "ignored: true", "sensitive: true",
+    "private: true", "scope: work", "visibility: private", "kind: review", "origin: vault-evolve",
+])
+def test_capture_provenance_never_overrides_sensitive_ignored_or_derived_metadata(monkeypatch, path, metadata):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    vault = Vault({path: captured_source_note(metadata)})
+    assert read_knowledge_source(vault.client, token=TOKEN, repo=REPO, path=path) is None
+    assert load_topic_sources(vault.client, token=TOKEN, repo=REPO, query="delayed recall")["sources"] == []
+    with pytest.raises(SourceError, match="source_no_longer_permitted"):
+        read_source_revision(
+            vault.client, token=TOKEN, repo=REPO, path=path,
+            include_evidence=True, allow_captured_sources=True,
+        )
+
+
+@pytest.mark.parametrize("raw", [
+    captured_source_note(footer=False),
+    captured_source_note().replace("type: source", "type: review"),
+    captured_source_note().replace("source: https://evidence.example/public-article", "source: internal-plan"),
+    captured_source_note().replace("https://evidence.example/public-article", "https://user:password@evidence.example/"),
+    captured_source_note().replace("Source ID: " + "c" * 64, "Source ID: not-a-host-id"),
+    captured_source_note(text="A synthetic bank account number is private evidence."),
+])
+def test_review_named_note_requires_complete_safe_external_capture_provenance(monkeypatch, raw):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    path = CAPTURE_SUBJECT_PATHS[0]
+    vault = Vault({path: raw})
+    assert read_knowledge_source(vault.client, token=TOKEN, repo=REPO, path=path) is None
+    assert load_topic_sources(vault.client, token=TOKEN, repo=REPO, query="delayed recall")["sources"] == []
+
+
+def test_capture_marker_does_not_make_actual_review_artifact_paths_eligible(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    path = "wiki/insights/daily-review.md"
+    vault = Vault({path: captured_source_note()})
+    assert read_knowledge_source(vault.client, token=TOKEN, repo=REPO, path=path) is None
+    assert load_topic_sources(vault.client, token=TOKEN, repo=REPO, query="delayed recall")["sources"] == []
+
+
+def test_captured_source_mode_keeps_symlink_exclusions(monkeypatch):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    path = CAPTURE_SUBJECT_PATHS[0]
+    raw = captured_source_note()
+    vault = Vault({path: raw})
+    vault.tree[0]["mode"] = "120000"
+    assert load_topic_sources(vault.client, token=TOKEN, repo=REPO, query="delayed recall")["sources"] == []
+    vault.override = lambda req: (
+        httpx.Response(200, json={**contents(path, raw), "type": "symlink"})
+        if "/contents/" in req.url.path else None
+    )
+    with pytest.raises(SourceError, match="source_content_invalid"):
+        read_knowledge_source(vault.client, token=TOKEN, repo=REPO, path=path)
 
 
 @pytest.mark.parametrize("raw", [

@@ -180,6 +180,11 @@ works without reconstructing the order from the canonical note.
   conflict, evidence gaps/open questions and changed understanding, with one optional
   experiment. It discloses selection/excerpt bounds. Generated recaps and review
   artifacts are excluded; two notes about one origin are not independent proof.
+  An externally captured source about a report or code review is not itself a
+  generated review. Knowledge reads distinguish these using the source folder,
+  explicit source metadata, original URL and host source-ID footer; all privacy,
+  ignore and actual generated/derived exclusions still apply. This knowledge-only
+  exception does not change DailyEvolve's publication policy.
   The model schema permits at most eight findings total: two explanations, one
   agreement, one conflict, two gaps and two interpretations. Evidence is capped
   at 48 snippets per source and 16,000 quote characters across five sources,

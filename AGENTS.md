@@ -130,6 +130,13 @@ SDK telemetry regression alongside any tracing changes.
   retrieval ranks paths before at most 16 content reads, then selects at most five
   relevant safe sources. Exact quote/path validation precedes rendering. Agreement
   and conflict need two cited paths; shared origins are not independent corroboration.
+  Knowledge-only reads/retrieval/approval rechecks may admit `wiki/sources/*.md`
+  captures whose subject filenames contain "report" or "review" when metadata has
+  exactly `type: source`, one original HTTP(S) `source:` URL, and a host-shaped
+  `Source ID:` footer. This bypasses only the derived-filename heuristic, never
+  sensitive/ignored/generated/derived metadata, sensitive content or artifact-path
+  restrictions. `allow_captured_sources` defaults false: do not broaden DailyEvolve's
+  publication/writer contract, which is separately enforced by memex.
   Generation uses host-issued source/quote IDs, following vault-evolve's evidence
   packet pattern. `knowledge_evidence_packet` replaces source text with bounded
   exact snippets; `knowledge_model_schema` binds each source to its allowed IDs;

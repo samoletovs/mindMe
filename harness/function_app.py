@@ -517,6 +517,7 @@ def _briefing_loop(*, weekly: bool = False) -> BriefingLoop:
         revision=lambda path: read_source_revision(client, token=token, repo=repo, path=path),
         knowledge_revision=lambda path: read_source_revision(
             client, token=token, repo=repo, path=path, include_evidence=True,
+            allow_captured_sources=True,
         ),
         execute=gateway,
         extras=_weekly_extras if weekly else _action_briefing_extras,
