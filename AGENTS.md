@@ -137,6 +137,10 @@ SDK telemetry regression alongside any tracing changes.
   sensitive/ignored/generated/derived metadata, sensitive content or artifact-path
   restrictions. `allow_captured_sources` defaults false: do not broaden DailyEvolve's
   publication/writer contract, which is separately enforced by memex.
+  Direct knowledge reads and captured-source approval rechecks require a regular
+  file in the pinned canonical Git tree before fetching Contents, then verify the
+  returned blob SHA against that tree entry. Contents `type: file` alone is not a
+  symlink check: GitHub can return that shape after dereferencing an in-repo link.
   Generation uses host-issued source/quote IDs, following vault-evolve's evidence
   packet pattern. `knowledge_evidence_packet` replaces source text with bounded
   exact snippets; `knowledge_model_schema` binds each source to its allowed IDs;

@@ -555,6 +555,17 @@ def _canonical_head(client: httpx.Client, base: str, headers: dict[str, str]) ->
     return _sha(ref.get("sha"))
 
 
+def _canonical_inventory(
+    client: httpx.Client, base: str, headers: dict[str, str], revision: str,
+) -> dict[str, dict[str, Any]]:
+    commit = _json(client, base + "/git/commits/" + revision, headers)
+    if not isinstance(commit, dict) or commit.get("sha") != revision:
+        raise SourceError("source_revision_invalid")
+    tree_ref = commit.get("tree")
+    tree_sha = _sha(tree_ref.get("sha") if isinstance(tree_ref, dict) else None)
+    return _inventory(client, base, headers, tree_sha)
+
+
 def load_sources(
     client: httpx.Client, *, token: str, repo: str, sections: list[str],
     previous: dict[str, str] | None = None,
@@ -594,12 +605,7 @@ def load_sources(
     headers = _headers(token, repo)
     base = "/repos/" + repo
     revision = _canonical_head(client, base, headers)
-    commit = _json(client, base + "/git/commits/" + revision, headers)
-    if not isinstance(commit, dict) or commit.get("sha") != revision:
-        raise SourceError("source_revision_invalid")
-    tree_ref = commit.get("tree")
-    tree_sha = _sha(tree_ref.get("sha") if isinstance(tree_ref, dict) else None)
-    inventory = _inventory(client, base, headers, tree_sha)
+    inventory = _canonical_inventory(client, base, headers, revision)
     result["revision"] = revision
     result["inventory_paths"] = sorted(inventory)
     previous = previous or {}
@@ -738,17 +744,29 @@ def read_source_revision(
     client: httpx.Client, *, token: str, repo: str, path: str, include_evidence: bool = False,
     allow_captured_sources: bool = False,
 ) -> str | None:
-    """Compare immediately before acting. Only a real content 404 means removal."""
+    """Compare before acting; knowledge mode requires a pinned regular-file entry."""
     headers = _headers(token, repo)
     if _kind(path, tasks=True) is None:
         raise SourceError("source_path_not_allowed")
+    params = None
+    expected_revision = None
+    if allow_captured_sources:
+        base = "/repos/" + repo
+        head = _canonical_head(client, base, headers)
+        entry = _canonical_inventory(client, base, headers, head).get(path)
+        if entry is None:
+            return None
+        params = {"ref": head}
+        expected_revision = entry["sha"]
     data = _json(
         client, f"/repos/{repo}/contents/{quote(path, safe='/')}", headers,
-        missing_ok=True, limit=MAX_FILE_BYTES * 2 + 8000,
+        params=params, missing_ok=True, limit=MAX_FILE_BYTES * 2 + 8000,
     )
     if data is _MISSING:
+        if expected_revision is not None:
+            raise SourceError("source_snapshot_unavailable")
         return None
-    revision, raw = _content(data, path)
+    revision, raw = _content(data, path, expected_revision)
     _, pairs = _metadata(raw)
     if _excluded_metadata(pairs) or (_kind(path) != "goal" and _SENSITIVE_CONTENT.search(raw)):
         raise SourceError("source_no_longer_permitted")
@@ -770,14 +788,19 @@ def read_knowledge_source(
     kind = _kind(path)
     if kind not in {"note", "wiki", "research", "idea", "project"}:
         raise SourceError("source_path_not_allowed")
-    head = _canonical_head(client, "/repos/" + repo, headers)
+    base = "/repos/" + repo
+    head = _canonical_head(client, base, headers)
+    # Contents can dereference an in-repo symlink and still report type=file.
+    entry = _canonical_inventory(client, base, headers, head).get(path)
+    if entry is None:
+        return None
     data = _json(
         client, f"/repos/{repo}/contents/{quote(path, safe='/')}", headers,
         params={"ref": head}, missing_ok=True, limit=MAX_FILE_BYTES * 2 + 8000,
     )
     if data is _MISSING:
-        return None
-    revision, raw = _content(data, path)
+        raise SourceError("source_snapshot_unavailable")
+    revision, raw = _content(data, path, entry["sha"])
     if not _review_source_allowed(path, raw, kind, allow_captured_sources=True):
         return None
     material = _material(path, raw, kind, set())

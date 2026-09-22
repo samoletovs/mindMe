@@ -633,6 +633,19 @@ def test_approval_checks_every_topic_source_not_only_the_primary(system):
     assert not system.executed
 
 
+def test_knowledge_approval_never_uses_generic_contents_reader_before_regular_file_guard(system):
+    handle(system, action="apply")
+    identifier = next(iter(system.store.state["proposals"]))
+    generic = Mock(side_effect=AssertionError("Must not dereference a link through the generic reader"))
+    strict = Mock(return_value=None)
+    system.briefing.revision = generic
+    system.briefing.knowledge_revision = strict
+    assert "source changed" in system.briefing.reply(identifier, "approve", TODAY).lower()
+    strict.assert_called_once_with(PATH)
+    generic.assert_not_called()
+    assert not system.executed
+
+
 def test_memory_not_reported_as_used_does_not_reset_decay(system):
     handle(system, action="known")
     identifier = next(iter(system.store.state["knowledge"]["memories"]))
@@ -933,12 +946,65 @@ def test_captured_source_mode_keeps_symlink_exclusions(monkeypatch):
     vault = Vault({path: raw})
     vault.tree[0]["mode"] = "120000"
     assert load_topic_sources(vault.client, token=TOKEN, repo=REPO, query="delayed recall")["sources"] == []
+    vault.tree[0]["mode"] = "100644"
     vault.override = lambda req: (
         httpx.Response(200, json={**contents(path, raw), "type": "symlink"})
         if "/contents/" in req.url.path else None
     )
     with pytest.raises(SourceError, match="source_content_invalid"):
         read_knowledge_source(vault.client, token=TOKEN, repo=REPO, path=path)
+
+
+@pytest.mark.parametrize("path", CAPTURE_SUBJECT_PATHS)
+def test_dereferenced_symlink_file_response_never_authorizes_knowledge_or_approval(monkeypatch, path):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    target = captured_source_note()
+    vault = Vault({path: target})
+    vault.tree[0].update(mode="120000", sha=blob("target.md"))
+    # Vault's Contents response deliberately mimics GitHub's dereferenced shape:
+    # type=file, requested link path, encoded target content, no target field.
+    assert contents(path, target)["type"] == "file"
+    assert read_knowledge_source(vault.client, token=TOKEN, repo=REPO, path=path) is None
+    assert read_source_revision(
+        vault.client, token=TOKEN, repo=REPO, path=path,
+        include_evidence=True, allow_captured_sources=True,
+    ) is None
+    assert load_topic_sources(vault.client, token=TOKEN, repo=REPO, query="delayed recall")["sources"] == []
+    assert not vault.reads  # The unsafe target is not fetched even to examine provenance.
+
+
+@pytest.mark.parametrize("surface", ["direct", "approval"])
+def test_knowledge_regular_file_content_must_match_its_pinned_tree_blob(monkeypatch, surface):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    path = CAPTURE_SUBJECT_PATHS[0]
+    vault = Vault({path: captured_source_note()})
+    vault.tree[0]["sha"] = "f" * 40
+    with pytest.raises(SourceError, match="source_snapshot_mismatch"):
+        if surface == "direct":
+            read_knowledge_source(vault.client, token=TOKEN, repo=REPO, path=path)
+        else:
+            read_source_revision(
+                vault.client, token=TOKEN, repo=REPO, path=path,
+                include_evidence=True, allow_captured_sources=True,
+            )
+    assert all(request.url.params["ref"] == HEAD for request in vault.reads)
+
+
+@pytest.mark.parametrize("surface", ["direct", "approval"])
+def test_missing_contents_for_proven_pinned_file_is_unavailable_not_source_deletion(monkeypatch, surface):
+    monkeypatch.setenv("DIG_REPO", REPO)
+    path = CAPTURE_SUBJECT_PATHS[0]
+    vault = Vault({path: captured_source_note()}, override=lambda request: (
+        httpx.Response(404) if "/contents/" in request.url.path else None
+    ))
+    with pytest.raises(SourceError, match="source_snapshot_unavailable"):
+        if surface == "direct":
+            read_knowledge_source(vault.client, token=TOKEN, repo=REPO, path=path)
+        else:
+            read_source_revision(
+                vault.client, token=TOKEN, repo=REPO, path=path,
+                include_evidence=True, allow_captured_sources=True,
+            )
 
 
 @pytest.mark.parametrize("raw", [

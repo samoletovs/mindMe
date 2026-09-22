@@ -385,10 +385,13 @@ class BriefingLoop:
         if intent in {"approve", "done", "change"} or task_snooze:
             if is_expired(proposal["expires_on"], today):
                 return "That proposal expired. Request a fresh proposal before acting."
-            if self.revision(proposal["source_path"]) != proposal["source_revision"]:
+            revision_reader = self.knowledge_revision if proposal.get("knowledge_sources") else self.revision
+            if revision_reader(proposal["source_path"]) != proposal["source_revision"]:
                 self.store.update(lambda current: current["proposals"][proposal_id].update(status="invalidated"))
                 return "The source changed or was removed. The old approval cannot be used; request a fresh proposal."
             for path, revision in proposal.get("knowledge_sources", {}).items():
+                if path == proposal["source_path"] and revision == proposal["source_revision"]:
+                    continue
                 if self.knowledge_revision(path) != revision:
                     self.store.update(lambda current: current["proposals"][proposal_id].update(status="invalidated"))
                     return "The knowledge evidence changed or is no longer eligible. Request a fresh proposal; no action was started."
