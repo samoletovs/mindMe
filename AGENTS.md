@@ -134,6 +134,8 @@ SDK telemetry regression alongside any tracing changes.
   packet pattern. `knowledge_evidence_packet` replaces source text with bounded
   exact snippets; `knowledge_model_schema` binds each source to its allowed IDs;
   `hydrate_synthesis` restores the original path/quote before the existing validator.
+  Citation enums live once in `$defs`, reused with `$ref` in every section; keep the
+  maximum five-source/48-quote schema under the Structured Outputs 1,000-enum limit.
   Never regenerate/fuzzy-match quotations. The generation schema's section caps
   sum to eight findings, and hydration enforces the same caps.
 - Dig/Apply only prepare cards. Only `brief1` approval against the actual card and

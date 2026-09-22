@@ -1017,7 +1017,7 @@ def test_actual_generation_restores_unicode_quotes_and_paths_from_host_ids(monke
     assert all("text" not in source for source in model_packet["sources"])
     assert "verbatim quote" not in args["input"][0]["content"]
     assert "eight findings TOTAL" in args["input"][0]["content"]
-    choices = args["text"]["format"]["schema"]["properties"]["explanation"]["items"]["properties"]["evidence"]["items"]["anyOf"]
+    choices = args["text"]["format"]["schema"]["$defs"]["knowledge_citation"]["anyOf"]
     assert choices[0]["properties"]["source"]["enum"] == ["S1"]
     assert all(identifier.startswith("S1Q") for identifier in choices[0]["properties"]["quote_id"]["enum"])
 
@@ -1055,6 +1055,39 @@ def test_generation_schema_and_hydrator_enforce_eight_total_findings():
     legacy = synthesis(context)
     legacy["explanation"] *= 3
     assert len(validate_synthesis(legacy, context)["explanation"]) == 3
+
+
+def test_maximum_evidence_schema_stays_within_structured_outputs_enum_limit():
+    text = " ".join(f"Fact {number:02} remains as stated." for number in range(50))
+    assert len(text) <= 1500
+    context = {
+        "action": "topic", "query": "Compare all five sources.",
+        "sources": [{**SOURCE, "path": f"wiki/sources/fixture-{index}.md", "text": text} for index in range(5)],
+        "memories": [{"id": f"M{index}", "kind": "working", "text": "Synthetic source-bound context."} for index in range(6)],
+    }
+    packet = knowledge_evidence_packet(context)
+    assert len(packet["sources"]) == 5
+    assert all(len(source["quotes"]) == 48 for source in packet["sources"])
+    schema = knowledge_model_schema(packet)
+
+    def enum_values(value):
+        if isinstance(value, dict):
+            return len(value.get("enum", [])) + sum(enum_values(child) for child in value.values())
+        if isinstance(value, list):
+            return sum(enum_values(child) for child in value)
+        return 0
+
+    assert enum_values(schema) == 251  # 5 * (one source ID + 48 quote IDs), plus six memories.
+    assert enum_values(schema) <= 1000
+    citation = schema["$defs"]["knowledge_citation"]
+    for key in SECTION_LIMITS:
+        assert schema["properties"][key]["items"]["properties"]["evidence"]["items"] == {
+            "$ref": "#/$defs/knowledge_citation",
+        }
+    for source, choice in zip(packet["sources"], citation["anyOf"], strict=True):
+        assert choice["properties"]["source"]["enum"] == [source["id"]]
+        assert choice["properties"]["quote_id"]["enum"] == list(source["quotes"])
+        assert choice["additionalProperties"] is False
 
 
 def test_evidence_packet_is_bounded_exact_and_does_not_duplicate_full_sources():

@@ -217,8 +217,11 @@ def knowledge_model_schema(packet: dict[str, Any]) -> dict[str, Any]:
         }
         for source in packet["sources"]
     ]
+    schema["$defs"] = {"knowledge_citation": {"anyOf": evidence}}
     for key in SECTION_LIMITS:
-        schema["properties"][key]["items"]["properties"]["evidence"]["items"] = {"anyOf": copy.deepcopy(evidence)}
+        schema["properties"][key]["items"]["properties"]["evidence"]["items"] = {
+            "$ref": "#/$defs/knowledge_citation",
+        }
     return schema
 
 
