@@ -157,6 +157,11 @@ reference context. This identifies the *displayed* second idea even when the
 canonical note orders its ideas differently. It is never citation evidence,
 corroboration, approval or a stored transcript. If a numbered/pronominal reference
 lacks adequate displayed context, mindMe asks for a short quote instead of guessing.
+Bullet-shaped memex recaps are supported when the replied-to part includes the
+“What it says — key ideas” heading and the requested item in that section.
+An unlabelled continuation or bullets from caveats cannot establish the original
+ordinal; those requests get a quote clarification. Explicit visible numbering
+works without reconstructing the order from the canonical note.
 
 - **Explain** answers from current canonical evidence and cites exact source
   quotations. It does not browse. Read failures are unavailable evidence, never

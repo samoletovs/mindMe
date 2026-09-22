@@ -171,6 +171,41 @@ def test_numbered_followup_targets_actual_displayed_idea_not_canonical_note_numb
     assert not system.executed
 
 
+@pytest.mark.parametrize("bullet", ["•", "-", "*"])
+def test_actual_memex_key_ideas_bullets_disambiguate_displayed_order(system, bullet):
+    system.current[PATH]["text"] = (
+        "Canonical note:\n1. Spaced practice improves delayed recall.\n"
+        "2. Immediate performance does not establish durable learning."
+    )
+    shown = (
+        "Article recap\n\nWhat it says — key ideas\n"
+        f"{bullet} Immediate performance is a limited measure.\n"
+        f"{bullet} Spaced practice improves delayed recall.\n\n"
+        "Caveats\n• These are claims, not independent verification."
+    )
+    handle(system, "Explain the second idea", shown_text=shown)
+    assert len(system.packets) == 1
+    packet = system.packets[0]
+    assert packet["shown_message_reference"]["text"] == shown
+    assert packet["shown_message_reference"]["is_evidence"] is False
+    assert packet["sources"][0]["text"].startswith("Canonical note:\n1. Spaced practice")
+    assert "Please quote" not in system.sent[0][0]
+    assert not system.executed
+
+
+@pytest.mark.parametrize("shown", [
+    "What it says — key ideas\n• Only the first main idea is in this message.",
+    "• The second original idea continues here.\n• The third original idea follows.",
+    "What it says — key ideas\n• Only one main idea.\n\nCaveats\n• First caveat.\n• Second caveat.",
+    "Caveats\n• First caveat.\n• Second caveat.",
+])
+def test_split_or_other_section_bullets_do_not_guess_original_ordinal(system, shown):
+    handle(system, "Explain the second idea", shown_text=shown)
+    assert "Please quote" in system.sent[0][0]
+    assert not system.packets and not system.executed
+    assert not system.store.state["knowledge"]["memories"]
+
+
 @pytest.mark.parametrize("query,shown", [
     ("Explain the second idea", None),
     ("Explain takeaway 2", ""),

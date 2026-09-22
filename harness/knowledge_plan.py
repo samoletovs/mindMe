@@ -47,9 +47,26 @@ def shown_reference(query: str, shown_text: object) -> tuple[str | None, bool]:
             rf"(?im)^\s*(?:(?:idea|point|takeaway|claim|item|step|example|argument)\s+)?"
             rf"{number}\s*[.):—-]\s*\S", shown,
         )
-        bullets = re.findall(r"(?m)^\s*[-*•]\s+\S", shown)
-        if marker is None and len(bullets) < number:
-            return shown, True
+        if marker is None:
+            # An unlabelled continuation cannot establish the original list's offset.
+            section = re.search(
+                r"(?im)^\s*(?:what it says\s*[—–:-]\s*)?"
+                r"(?:key ideas|main ideas|main takeaways|takeaways|ideas)\s*:?\s*$",
+                shown,
+            )
+            bullets = 0
+            if section:
+                for line in shown[section.end():].splitlines():
+                    if not line.strip():
+                        continue
+                    if re.match(r"^\s*[-*•]\s+\S", line):
+                        bullets += 1
+                    elif line[:1].isspace() and bullets:
+                        continue
+                    else:
+                        break
+            if bullets < number:
+                return shown, True
     return shown, False
 
 
