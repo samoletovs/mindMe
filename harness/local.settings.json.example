@@ -21,6 +21,7 @@
     "MEMEX_ACTION_URL": "",
     "MINDME_ACTION_BRIEFING_ENABLED": "false",
     "MINDME_BRIEFING_MODEL": "",
+    "MINDME_KNOWLEDGE_MODEL": "",
     "BRIEFING_ENCRYPTION_KEY": "",
 
     "// --- dig (deep research Mode B)": "PAT with issues:write on mindVault; in prod use a Key Vault reference",

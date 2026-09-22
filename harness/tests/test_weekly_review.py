@@ -430,6 +430,8 @@ def test_transition_history_is_bounded_and_aged_out_without_faking_old_dates(sys
 
 
 def test_weekly_timer_replaces_both_legacy_messages(monkeypatch):
+    knowledge = Mock()
+    monkeypatch.setattr(fa, "_knowledge_loop", lambda: knowledge)
     monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
     monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "true")
     review = Mock()
@@ -440,6 +442,7 @@ def test_weekly_timer_replaces_both_legacy_messages(monkeypatch):
     monkeypatch.setattr(fa, "_telegram_send", legacy)
     fa.weekly_review_timer(None)
     review.run.assert_called_once_with(date.today(), ["goals", "loops"])
+    knowledge.maintenance.assert_called_once_with(date.today())
 
 
 @pytest.mark.parametrize("command,retry", [("/review", False), ("/review retry", True)])

@@ -142,6 +142,138 @@ uncertain, `/review retry` explicitly permits repeating that message; it does no
 repeat approved work. Source versions and owner-only approval bindings still
 apply. This release adds no service, schedule or model deployment.
 
+### Connected knowledge: explain, investigate, apply
+
+With `MINDME_ACTION_BRIEFING_ENABLED=true`, new memex capture summaries offer
+source-bound controls. `/recap URL` asks memex for a fresh summary and controls for
+an older capture without treating it as another new capture. Reply to any confirmed
+summary part or mindMe follow-up: “explain the second idea”, “dig into evidence
+against it”, “apply this”, or “compare this topic”. A reply containing a URL stays
+in the bound conversation; an unrelated URL keeps its existing capture behavior.
+Unthreaded conversation remains stateless, not implicitly attached to the last link.
+After verifying the replied-to/callback message binding, mindMe may pass that
+message's displayed text/caption (at most 4,096 characters) as transient, untrusted
+reference context. This identifies the *displayed* second idea even when the
+canonical note orders its ideas differently. It is never citation evidence,
+corroboration, approval or a stored transcript. If a numbered/pronominal reference
+lacks adequate displayed context, mindMe asks for a short quote instead of guessing.
+Bullet-shaped memex recaps are supported when the replied-to part includes the
+“What it says — key ideas” heading and the requested item in that section.
+An unlabelled continuation or bullets from caveats cannot establish the original
+ordinal; those requests get a quote clarification. Explicit visible numbering
+works without reconstructing the order from the canonical note.
+
+- **Explain** answers from current canonical evidence and cites exact source
+  quotations. It does not browse. Read failures are unavailable evidence, never
+  permission to answer from a different note.
+  The host supplies bounded canonical snippets with source/quote IDs; the model
+  selects enum-constrained IDs, and the host restores the original path and exact
+  quote before validation. It never fuzzy-matches or trusts regenerated quotations.
+  Snippets replace full source text in the model packet rather than duplicating it.
+- **Dig** prepares one impersonal public research question; **Apply** prepares one
+  modest task/experiment. Neither starts work. Approve the resulting specific card
+  to use the existing action gateway. Changed, deleted or ineligible sources revoke
+  old approval. Research remains at most five sources, one short report and no
+  follow-on jobs; submitted work is not described as completed.
+- **Topic** or `/topics <query>` compares up to five relevant permitted canonical
+  sources after at most 16 candidate-file reads. The brief separates agreement,
+  conflict, evidence gaps/open questions and changed understanding, with one optional
+  experiment. It discloses selection/excerpt bounds. Generated recaps and review
+  artifacts are excluded; two notes about one origin are not independent proof.
+  An externally captured source about a report or code review is not itself a
+  generated review. Knowledge reads distinguish these using the source folder,
+  explicit source metadata, original URL and host source-ID footer; all privacy,
+  ignore and actual generated/derived exclusions still apply. This knowledge-only
+  exception does not change DailyEvolve's publication policy.
+  The model schema permits at most eight findings total: two explanations, one
+  agreement, one conflict, two gaps and two interpretations. Evidence is capped
+  at 48 snippets per source and 16,000 quote characters across five sources,
+  inside the existing 36,000-character request and 2,800-output-token ceilings.
+- **Already familiar / Useful**, and a reply `correction: <one sentence>`, retain
+  explicit scoped feedback. Merely capturing or explaining a source does not prove
+  familiarity. Later responses use relevant feedback/corrections and record actual
+  recall usage; the system does not infer permanent interests.
+
+| Command | Result |
+|---|---|
+| `/knowledge [page or id]` | Inspect concise working context, explicit feedback and corrections, source revisions, expiry, supersession and use counts (three records/page) |
+| `/knowledge forget <id>` | Idempotently delete a memory and topic briefs that used it; no source edit |
+| `/knowledge receipts [page]` | Inspect request outcomes and follow-up message bindings (ten/page) |
+| `/knowledge forget bindings` | Explicitly remove follow-up bindings, preserving action/request replay guards |
+| `/knowledge proposal <id>` | Explicitly re-present a pending proposal card after uncertain delivery; never executes it |
+| `/topics [page or id]` | Inspect retained complete briefs and their source/revision receipts (three records/page; at most 15 source checks) |
+| `/topics <query>` | Request one bounded, evidence-linked topic brief |
+| `/topics forget <id>` | Idempotently delete that private brief |
+| `/proposals all` | Inspect accepted/declined/uncertain/submitted/verified outcomes in the existing approval ledger |
+
+All runtime continuity stays in the existing private `personal-os` operational
+state, not Git or a raw conversation archive. Working memory/bindings expire after
+14 days, feedback after 90, topic briefs after 35; corrections last until deletion
+or source invalidation. Superseded memories are removed after a 35-day grace.
+Deleting/changing a source or making it private/ignored/derived invalidates its
+operational derivatives. Expired or invalidated bindings retain source-less
+tombstones so an old button cannot silently regain authority.
+
+State caps fail closed: 100 memories, 200 bindings, 300 request guards and 30 topic
+receipts, sharing the existing 1 MiB limit. Non-content unresolved replay guards and
+unresolved action receipts are not silently removed. Duplicate callbacks/retries
+never regenerate or resend an uncertain response automatically. Re-present a
+pending card explicitly with `/knowledge proposal <id>` when necessary; a fresh
+`/recap URL` supplies a new capture context. Memory cleanup and approved-action
+follow-through attach to the existing morning/Sunday jobs, with no new schedule.
+Each confirmed response part is privately bound before sending the next, so a
+later send failure does not orphan already delivered parts. An expired,
+never-executed proposal may be renewed by a fresh explicit request; old cards
+remain expired, and submitted/uncertain/completed actions are never renewed.
+
+The deployment must ship memex's `capture_context` contract first (see
+[the approved design](docs/design-knowledge-loop.md)). mindMe sends the exact
+owner chat and actual callback/replied-to message ID to the existing
+`MEMEX_WEBHOOK_URL`; callbacks additionally send their 32-hex capture key. Unknown,
+unpublished, deleted or ambiguous captures cannot establish authority.
+memex may resolve a confirmed summary before its source PR is merged. In that
+case mindMe reports the canonical source as pending/unavailable (503), creates no
+memory/proposal, and never interprets it as missing personal knowledge. The same
+control can resolve after publication; no failed request is treated as approval.
+No new SDK, model deployment or infrastructure is required. The optional
+`MINDME_KNOWLEDGE_MODEL` selects an existing deployment only for explicit knowledge
+follow-ups, falling back to the briefing model when empty. The production recipe
+selects the existing `gpt-4.1`: live comparison found the smaller briefing model
+invented a conflict between complementary sources. Routine briefings keep their
+existing model. The template exposes this as `knowledgeModelDeployment`; do not
+redeploy the infrastructure just to change this setting (see the rebuild caveat
+in the parameter file). Model calls remain on demand and bounded.
+
+Owner-only live acceptance after deployment (use a non-sensitive, already
+published test source):
+
+1. Send `/recap <public-source-url>`. Reply to an early summary part with
+   `Explain the second idea`, then reply to mindMe's answer with
+   `Dig into evidence against it`. Check source quotations and the proposed public
+   question; no issue or task should exist until approving its individual card.
+   Real Telegram replies carry the original shown text. A synthetic request must
+   carry the actual returned bot text, not reconstructed text; otherwise ask an
+   unambiguous question or expect a clarification.
+2. Tap **Already familiar**, ask another explanation, inspect `/knowledge`, and
+   `/knowledge forget <feedback-id>`. Check that it stops skipping basics based on
+   the deleted feedback. A `correction: ...` should supersede the earlier scoped
+   working assumption and be inspectable/deletable.
+3. Send `/topics <source-topic>`, inspect `/topics <brief-id>`, verify every quote
+   against the linked canonical revision, then `/topics forget <brief-id>`.
+   Assess semantic usefulness as well as quote matching: the validator establishes
+   citation provenance, not scientific truth or semantic entailment.
+4. Change/delete or mark the synthetic canonical source ignored. Its old message
+   must not authorize work or silently switch context. `/recap <url>` is the path
+   to a new context, not a retry of revoked authority.
+5. Inspect `/proposals all` and `/knowledge receipts`. If approving a test task is
+   appropriate, repeat the same approval and confirm only one external effect.
+   Verify submission versus canonical completion separately. An uncertain card
+   can be explicitly re-presented with `/knowledge proposal <id>`.
+
+Offline regression: run the existing compatible interpreter with
+`-m pytest harness\tests -q` from the repository root. No live deployment or model
+quality claim follows from passing synthetic tests; record those checks separately.
+
 ---
 
 ## Architecture

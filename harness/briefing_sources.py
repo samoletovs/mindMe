@@ -11,7 +11,7 @@ import os
 import re
 import unicodedata
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -258,7 +258,30 @@ def _excluded_metadata(pairs: list[tuple[str, str]]) -> bool:
     return False
 
 
-def _review_source_allowed(path: str, raw: str, kind: str) -> bool:
+def _captured_source_provenance(path: str, raw: str, pairs: list[tuple[str, str]]) -> bool:
+    """Allow subject words such as 'report' only for host-marked external captures."""
+    if (
+        len(path.split("/")) != 3 or not path.startswith("wiki/sources/")
+        or [value.casefold() for key, value in pairs if key == "type"] != ["source"]
+        or len(re.findall(r"(?m)^Source ID: [a-f0-9]{64}[ \t]*\r?$", raw)) != 1
+    ):
+        return False
+    urls = [value for key, value in pairs if key == "source"]
+    if len(urls) != 1 or len(urls[0]) > 2048 or any(ord(char) < 32 or ord(char) == 127 for char in urls[0]):
+        return False
+    try:
+        url = urlsplit(urls[0])
+        return (
+            url.scheme in {"http", "https"} and bool(url.hostname)
+            and url.username is None and url.password is None
+        )
+    except ValueError:
+        return False
+
+
+def _review_source_allowed(
+    path: str, raw: str, kind: str, *, allow_captured_sources: bool = False,
+) -> bool:
     if len(raw.encode("utf-8")) > 64_000 or len(path.split("/")) > 6:
         return False
     if any(char in path for char in '<>"[]') or any(
@@ -266,9 +289,13 @@ def _review_source_allowed(path: str, raw: str, kind: str) -> bool:
         for part in path.split("/")
     ):
         return False
-    if _REVIEW_SENSITIVE_CONTENT.search(raw) or _REVIEW_DERIVED.search(path):
+    if _REVIEW_SENSITIVE_CONTENT.search(raw):
         return False
     _, pairs = _metadata(raw)
+    if _REVIEW_DERIVED.search(path) and not (
+        allow_captured_sources and _captured_source_provenance(path, raw, pairs)
+    ):
+        return False
     for key, value in pairs:
         value = value.casefold()
         if key in {"private", "sensitive", "ignored", "work"} and value not in {"", "false", "no", "0"}:
@@ -512,12 +539,42 @@ def _recent_paths(
     return ranks
 
 
+def _canonical_head(client: httpx.Client, base: str, headers: dict[str, str]) -> str:
+    metadata = _json(client, base, headers)
+    branch = metadata.get("default_branch") if isinstance(metadata, dict) else None
+    if (
+        not isinstance(branch, str) or not branch or len(branch) > 200
+        or not re.fullmatch(r"[A-Za-z0-9_./-]+", branch) or ".." in branch
+        or any(not part or part.startswith(".") for part in branch.split("/"))
+    ):
+        raise SourceError("source_branch_invalid")
+    head = _json(client, base + "/git/ref/heads/" + quote(branch, safe=""), headers)
+    ref = head.get("object") if isinstance(head, dict) else None
+    if not isinstance(ref, dict) or ref.get("type") != "commit":
+        raise SourceError("source_revision_invalid")
+    return _sha(ref.get("sha"))
+
+
+def _canonical_inventory(
+    client: httpx.Client, base: str, headers: dict[str, str], revision: str,
+) -> dict[str, dict[str, Any]]:
+    commit = _json(client, base + "/git/commits/" + revision, headers)
+    if not isinstance(commit, dict) or commit.get("sha") != revision:
+        raise SourceError("source_revision_invalid")
+    tree_ref = commit.get("tree")
+    tree_sha = _sha(tree_ref.get("sha") if isinstance(tree_ref, dict) else None)
+    return _inventory(client, base, headers, tree_sha)
+
+
 def load_sources(
     client: httpx.Client, *, token: str, repo: str, sections: list[str],
     previous: dict[str, str] | None = None,
     known_revisions: dict[str, str] | None = None,
     scan_cursor: str | None = None,
     include_evidence: bool = False,
+    query: str | None = None,
+    anchor_paths: tuple[str, ...] = (),
+    allow_captured_sources: bool = False,
 ) -> dict[str, Any]:
     """Read one canonical snapshot; the host checkpoints only displayed changes.
 
@@ -547,25 +604,8 @@ def load_sources(
         raise SourceError("source_tracking_invalid")
     headers = _headers(token, repo)
     base = "/repos/" + repo
-    metadata = _json(client, base, headers)
-    branch = metadata.get("default_branch") if isinstance(metadata, dict) else None
-    if (
-        not isinstance(branch, str) or not branch or len(branch) > 200
-        or not re.fullmatch(r"[A-Za-z0-9_./-]+", branch) or ".." in branch
-        or any(not part or part.startswith(".") for part in branch.split("/"))
-    ):
-        raise SourceError("source_branch_invalid")
-    head = _json(client, base + "/git/ref/heads/" + quote(branch, safe=""), headers)
-    ref = head.get("object") if isinstance(head, dict) else None
-    if not isinstance(ref, dict) or ref.get("type") != "commit":
-        raise SourceError("source_revision_invalid")
-    revision = _sha(ref.get("sha"))
-    commit = _json(client, base + "/git/commits/" + revision, headers)
-    if not isinstance(commit, dict) or commit.get("sha") != revision:
-        raise SourceError("source_revision_invalid")
-    tree_ref = commit.get("tree")
-    tree_sha = _sha(tree_ref.get("sha") if isinstance(tree_ref, dict) else None)
-    inventory = _inventory(client, base, headers, tree_sha)
+    revision = _canonical_head(client, base, headers)
+    inventory = _canonical_inventory(client, base, headers, revision)
     result["revision"] = revision
     result["inventory_paths"] = sorted(inventory)
     previous = previous or {}
@@ -596,6 +636,10 @@ def load_sources(
     evidence_bytes = 0
 
     def priority(candidate: str) -> tuple[int, int, str]:
+        if query is not None:
+            terms = set(re.findall(r"[a-z0-9]{3,}", query.casefold()))
+            overlap = len(terms & set(re.findall(r"[a-z0-9]{3,}", candidate.casefold())))
+            return (0 if candidate in anchor_paths else 1, -overlap, candidate)
         if known_revisions is not None:
             changed = known_revisions.get(candidate) != candidates[candidate]["sha"]
             rank = (
@@ -645,7 +689,9 @@ def load_sources(
             result["scan_cursor"] = path
         kind = _kind(path)
         assert kind is not None
-        if include_evidence and kind != "goal" and not _review_source_allowed(path, raw, kind):
+        if include_evidence and kind != "goal" and not _review_source_allowed(
+            path, raw, kind, allow_captured_sources=allow_captured_sources,
+        ):
             result["source_revisions"].pop(path, None)
             result["warnings"].append("Some sources were excluded by the review publication policy.")
             continue
@@ -696,24 +742,107 @@ def load_sources(
 
 def read_source_revision(
     client: httpx.Client, *, token: str, repo: str, path: str, include_evidence: bool = False,
+    allow_captured_sources: bool = False,
 ) -> str | None:
-    """Compare immediately before acting. Only a real content 404 means removal."""
+    """Compare before acting; knowledge mode requires a pinned regular-file entry."""
     headers = _headers(token, repo)
     if _kind(path, tasks=True) is None:
         raise SourceError("source_path_not_allowed")
+    params = None
+    expected_revision = None
+    if allow_captured_sources:
+        base = "/repos/" + repo
+        head = _canonical_head(client, base, headers)
+        entry = _canonical_inventory(client, base, headers, head).get(path)
+        if entry is None:
+            return None
+        params = {"ref": head}
+        expected_revision = entry["sha"]
     data = _json(
         client, f"/repos/{repo}/contents/{quote(path, safe='/')}", headers,
-        missing_ok=True, limit=MAX_FILE_BYTES * 2 + 8000,
+        params=params, missing_ok=True, limit=MAX_FILE_BYTES * 2 + 8000,
     )
     if data is _MISSING:
+        if expected_revision is not None:
+            raise SourceError("source_snapshot_unavailable")
         return None
-    revision, raw = _content(data, path)
+    revision, raw = _content(data, path, expected_revision)
     _, pairs = _metadata(raw)
     if _excluded_metadata(pairs) or (_kind(path) != "goal" and _SENSITIVE_CONTENT.search(raw)):
         raise SourceError("source_no_longer_permitted")
     if include_evidence and (
         _kind(path) not in {"note", "wiki", "research", "idea", "project"}
-        or not _review_source_allowed(path, raw, _kind(path) or "")
+        or not _review_source_allowed(
+            path, raw, _kind(path) or "", allow_captured_sources=allow_captured_sources,
+        )
     ):
         raise SourceError("source_no_longer_permitted")
     return revision
+
+
+def read_knowledge_source(
+    client: httpx.Client, *, token: str, repo: str, path: str,
+) -> dict[str, Any] | None:
+    """Read the current canonical file, not a supplied excerpt or unpublished PR."""
+    headers = _headers(token, repo)
+    kind = _kind(path)
+    if kind not in {"note", "wiki", "research", "idea", "project"}:
+        raise SourceError("source_path_not_allowed")
+    base = "/repos/" + repo
+    head = _canonical_head(client, base, headers)
+    # Contents can dereference an in-repo symlink and still report type=file.
+    entry = _canonical_inventory(client, base, headers, head).get(path)
+    if entry is None:
+        return None
+    data = _json(
+        client, f"/repos/{repo}/contents/{quote(path, safe='/')}", headers,
+        params={"ref": head}, missing_ok=True, limit=MAX_FILE_BYTES * 2 + 8000,
+    )
+    if data is _MISSING:
+        raise SourceError("source_snapshot_unavailable")
+    revision, raw = _content(data, path, entry["sha"])
+    if not _review_source_allowed(path, raw, kind, allow_captured_sources=True):
+        return None
+    material = _material(path, raw, kind, set())
+    if material is None:
+        return None
+    title, text = material
+    return {
+        "path": path, "revision": revision, "digest": hashlib.sha256(text.encode()).hexdigest(),
+        "title": title, "text": text[:10000], "kind": kind,
+        "url": f"https://github.com/{repo}/blob/{head}/{quote(path, safe='/')}",
+        "bounded": len(text) > 10000,
+    }
+
+
+def load_topic_sources(
+    client: httpx.Client, *, token: str, repo: str, query: str,
+    anchor_paths: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Rank paths before 16 bounded reads, then rank permitted evidence; at most five sources."""
+    result = load_sources(
+        client, token=token, repo=repo, sections=["knowledge", "loops"],
+        include_evidence=True, query=query, anchor_paths=anchor_paths, allow_captured_sources=True,
+    )
+    stop = {"the", "and", "this", "that", "with", "from", "about", "what", "into", "topic"}
+    terms = set(re.findall(r"[a-z0-9]{3,}", query.casefold())) - stop
+
+    def score(source: dict[str, Any]) -> int:
+        title = set(re.findall(r"[a-z0-9]{3,}", (source["title"] + " " + source["path"]).casefold()))
+        body = set(re.findall(r"[a-z0-9]{3,}", source["text"].casefold()))
+        return 4 * len(terms & title) + len(terms & body)
+
+    selected = sorted(
+        (item for item in result["sources"] if item["path"] in anchor_paths or score(item) > 0),
+        key=lambda item: (item["path"] not in anchor_paths, -score(item), item["path"]),
+    )[:5]
+    result["sources"] = [
+        {key: item[key] for key in ("path", "revision", "digest", "title", "text", "kind", "url")}
+        for item in selected
+    ]
+    result["warnings"] = [
+        *result["warnings"],
+        "Selection is bounded: at most 16 candidate files read, five relevant sources compared. "
+        "Missing evidence is not proof of absence or unfamiliarity. Sources may share an origin.",
+    ]
+    return result

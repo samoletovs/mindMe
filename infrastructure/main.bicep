@@ -52,6 +52,9 @@ param actionBriefing ActionBriefingConfig = {
   modelDeployment: ''
 }
 
+@description('Optional existing deployment for explicit knowledge follow-ups; empty uses the briefing model. Does not provision a model.')
+param knowledgeModelDeployment string = ''
+
 @description('Daily proposal-only mindVault knowledge review on the existing morning timer. Requires an existing model and the memex review writer.')
 param dailyEvolveEnabled bool = false
 
@@ -421,6 +424,10 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
         {
           name: 'MINDME_BRIEFING_MODEL'
           value: actionBriefing.modelDeployment
+        }
+        {
+          name: 'MINDME_KNOWLEDGE_MODEL'
+          value: knowledgeModelDeployment
         }
         {
           name: 'MEMEX_ACTION_URL'
