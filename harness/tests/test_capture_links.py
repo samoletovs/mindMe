@@ -85,6 +85,32 @@ def test_multiple_links_keep_original_order_and_unmodified_input():
     assert message["text"] == "one two"
 
 
+@pytest.mark.parametrize("separator", [",", "", "\u2014"])
+def test_adjacent_named_links_remain_distinct_urls(separator):
+    message = {"text": f"Read one{separator}two", "entities": [
+        {"type": "text_link", "offset": 5, "length": 3, "url": ARTICLE},
+        {"type": "text_link", "offset": 8 + len(separator), "length": 3, "url": TIKTOK},
+    ]}
+    normalized = normalize_message_links(message)["text"]
+    assert fa._URL_RE.findall(normalized) == [ARTICLE, TIKTOK]
+    assert separator in normalized
+
+
+@pytest.mark.parametrize("before,after", [
+    ("Read ", "\u2014recommended"),
+    ("Read(", ")please"),
+    ("prefix", "suffix"),
+])
+def test_named_link_has_boundaries_without_losing_commentary(before, after):
+    message = {"text": before + "this" + after, "entities": [
+        {"type": "text_link", "offset": len(before), "length": 4, "url": ARTICLE},
+    ]}
+    normalized = normalize_message_links(message)["text"]
+    assert fa._URL_RE.findall(normalized) == [ARTICLE]
+    assert normalized.startswith(before)
+    assert normalized.endswith(after)
+
+
 @pytest.mark.parametrize("entity", [
     {"type": "text_link", "offset": -1, "length": 1, "url": ARTICLE},
     {"type": "text_link", "offset": True, "length": 1, "url": ARTICLE},

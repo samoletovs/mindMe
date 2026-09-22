@@ -54,6 +54,12 @@ def normalize_message_links(message: dict) -> dict:
     if any(left[1] > right[0] for left, right in zip(replacements, replacements[1:])):
         raise ValueError("overlapping_capture_links")
     for start, end, target in reversed(replacements):
+        before = encoded[:start].decode("utf-16-le")
+        after = encoded[end:].decode("utf-16-le")
+        if before and not before[-1].isspace():
+            target = " " + target
+        if after and not after[0].isspace():
+            target += " "
         encoded = encoded[:start] + target.encode("utf-16-le") + encoded[end:]
     normalized = encoded.decode("utf-16-le")
     if normalized == text:
