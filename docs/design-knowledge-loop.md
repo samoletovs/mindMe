@@ -101,7 +101,7 @@ the configured source folder. No raw source, chat ID, token, or personal-work
 context is returned. mindMe independently reads and validates the current
 canonical source; pending merge/deleted/unsafe sources cannot authorize actions.
 Read failures return explicit 503 and never fall through to an unrelated note.
-No new app setting or function-key scope is needed.
+No new endpoint/credential setting or function-key scope is needed.
 
 ## Acceptance matrix
 
@@ -125,6 +125,14 @@ No dependency install or new Azure resource is expected. Bounded model calls are
 on capture or explicit request; consolidation attaches to existing reviews.
 Measure actual usage; stop for approval if estimated incremental cost exceeds
 EUR 20/month or available credit is insufficient.
+
+Live evaluation found the small briefing model repeatedly invented a conflict
+between complementary DORA and code-review sources, despite valid quote IDs and
+explicit instructions. Explicit knowledge reasoning therefore selects the
+already-deployed `gpt-4.1` through `MINDME_KNOWLEDGE_MODEL`. Routine briefings keep
+their existing model. The optional setting falls back to the briefing model in
+unconfigured environments; the production Bicep recipe preserves the evaluated
+selection without provisioning any new deployment.
 
 Deploy the backward-compatible memex bindings/context/recap first, then mindMe.
 Keep old captures readable; /recap can provide new bound controls for old sources.

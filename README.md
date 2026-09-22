@@ -235,7 +235,14 @@ memex may resolve a confirmed summary before its source PR is merged. In that
 case mindMe reports the canonical source as pending/unavailable (503), creates no
 memory/proposal, and never interprets it as missing personal knowledge. The same
 control can resolve after publication; no failed request is treated as approval.
-No new SDK, model deployment, app setting or infrastructure is required.
+No new SDK, model deployment or infrastructure is required. The optional
+`MINDME_KNOWLEDGE_MODEL` selects an existing deployment only for explicit knowledge
+follow-ups, falling back to the briefing model when empty. The production recipe
+selects the existing `gpt-4.1`: live comparison found the smaller briefing model
+invented a conflict between complementary sources. Routine briefings keep their
+existing model. The template exposes this as `knowledgeModelDeployment`; do not
+redeploy the infrastructure just to change this setting (see the rebuild caveat
+in the parameter file). Model calls remain on demand and bounded.
 
 Owner-only live acceptance after deployment (use a non-sensitive, already
 published test source):

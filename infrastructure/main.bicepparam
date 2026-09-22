@@ -32,6 +32,9 @@ param actionBriefing = {
   modelDeployment: 'gpt-4o-mini'
 }
 
+// Reuse the capture model for explicit source reasoning; keep routine briefings on mini.
+param knowledgeModelDeployment = 'gpt-4.1'
+
 // Daily mindVault review approved 2026-09-14; no work-vault scheduling.
 param dailyEvolveEnabled = true
 

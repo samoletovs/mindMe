@@ -533,7 +533,11 @@ def _weekly_review() -> WeeklyReview:
 
 
 def _generate_knowledge(context: dict) -> dict:
-    model = os.environ.get("MINDME_BRIEFING_MODEL") or os.environ.get("AZURE_AI_MODEL_DEPLOYMENT")
+    model = (
+        os.environ.get("MINDME_KNOWLEDGE_MODEL")
+        or os.environ.get("MINDME_BRIEFING_MODEL")
+        or os.environ.get("AZURE_AI_MODEL_DEPLOYMENT")
+    )
     if not model:
         raise KnowledgeError("knowledge_model_not_configured")
     packet = knowledge_evidence_packet(context)
@@ -566,9 +570,19 @@ def _generate_knowledge(context: dict) -> dict:
                 "as a gap anchored to the limited evidence. Interpretations belong in understanding. "
                 "For topic requests compare agreement, conflict, gaps and changed understanding. Agreement "
                 "and conflict require two distinct cited sources; leave sections empty rather than invent. "
+                "A conflict requires directly incompatible claims. Different scopes, complementary methods, "
+                "or one source not discussing a subject are NOT contradictions. Anecdotes and creator claims "
+                "must be described as reported or claimed, not proven effectiveness, statistical significance "
+                "or causation. Preserve observational qualifications in every section, including continuity. "
+                "Limit gaps to what these supplied notes/excerpts do not establish; never claim that metrics "
+                "or evidence do not exist elsewhere. Source-note commentary is interpretation, not additional "
+                "empirical evidence. Keep internal source and quote IDs out of human-facing text; use them "
+                "only in the structured evidence references. "
                 "Two notes may share one origin and do not imply independent corroboration. "
                 "Gaps should retain useful open questions. Optionally suggest one modest experiment in "
-                "experiment, clearly hypothetical, or null; never say it was started. New understanding "
+                "experiment, clearly hypothetical, or null; never say it was started. Prefer a small offline "
+                "check on one example or change; preserve existing quality gates and do not propose bypassing "
+                "review in production. Avoid multi-team studies unless requested. New understanding "
                 "should explain what changed from any supplied, still-valid working memory. "
                 "Captured or previously explained is never proof the user is familiar. Explicit familiarity feedback "
                 "should skip basics unless asked; corrections override working assumptions. Record only "

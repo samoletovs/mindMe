@@ -1049,6 +1049,7 @@ def test_recap_url_preserves_existing_memex_forward_path(webhook, text):
 
 def test_model_call_is_bounded_stateless_and_memory_is_nonce_fenced(monkeypatch):
     monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-model")
+    monkeypatch.delenv("MINDME_KNOWLEDGE_MODEL", raising=False)
     packet = {"action": "explain", "query": "Explain", "sources": [SOURCE], "memories": []}
     client = Mock()
     client.with_options.return_value.responses.create.return_value.output_text = json.dumps(model_synthesis(packet))
@@ -1057,9 +1058,28 @@ def test_model_call_is_bounded_stateless_and_memory_is_nonce_fenced(monkeypatch)
     fa._generate_knowledge(packet)
     call = client.with_options.return_value.responses.create.call_args.kwargs
     assert call["store"] is False and call["max_output_tokens"] == 2800
+    assert call["model"] == "existing-model"
     assert "tools" not in call
     assert call["input"][1]["content"].startswith("<<<DATA_")
     assert "<<<END_DATA_" in call["input"][1]["content"]
+    instruction = call["input"][0]["content"]
+    assert "Different scopes, complementary methods" in instruction
+    assert "reported or claimed, not proven effectiveness" in instruction
+    assert "Limit gaps to what these supplied notes/excerpts do not establish" in instruction
+    assert "Keep internal source and quote IDs out of human-facing text" in instruction
+
+
+def test_explicit_knowledge_model_does_not_require_changing_the_briefing_model(monkeypatch):
+    monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-small-model")
+    monkeypatch.setenv("MINDME_KNOWLEDGE_MODEL", "existing-quality-model")
+    packet = {"action": "explain", "query": "Explain", "sources": [SOURCE], "memories": []}
+    client = Mock()
+    client.with_options.return_value.responses.create.return_value.output_text = json.dumps(model_synthesis(packet))
+    monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
+    monkeypatch.setattr(fa, "_http_client", lambda: Mock())
+    fa._generate_knowledge(packet)
+    call = client.with_options.return_value.responses.create.call_args.kwargs
+    assert call["model"] == "existing-quality-model"
 
 
 def test_actual_generation_restores_unicode_quotes_and_paths_from_host_ids(monkeypatch):
