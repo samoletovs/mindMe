@@ -77,6 +77,7 @@ from briefing_loop import BriefingLoop, LoopError
 from briefing_plan import PlanError, plan_schema
 from briefing_sources import SourceError, load_sources, read_source_revision
 from briefing_state import BriefingStore, StateError
+from capture_links import normalize_message_links
 from evolve_loop import DailyEvolve, EVOLVE_STATE_BLOB
 from execution_budget import (
     BudgetExceeded, BudgetRequestsTransport, bounded_timeout, checkpoint, execution_budget,
@@ -622,7 +623,7 @@ _GENERIC_CAPTURE_PREFIX_RE = re.compile(r"^\s*(save|n)\s*[:\-]\s*", re.IGNORECAS
 # capture pipeline) rather than answered by the companion. Kept in sync with
 # memex `_handle_command`: only verbs memex actually handles belong here, or the
 # forward would be silently dropped.
-_CAPTURE_COMMAND_RE = re.compile(r"^/(note|idea|task|diary|journal)(@\w+)?(\s|$)", re.IGNORECASE)
+_CAPTURE_COMMAND_RE = re.compile(r"^/(note|idea|task|diary|journal|refresh)(@\w+)?(\s|$)", re.IGNORECASE)
 _TASK_CAPTURE_RE = re.compile(
     r"\b(todo|to do|need to|needs to|should|must|follow up|follow-up|remind me|call|email|send|book|buy|fix)\b",
     re.IGNORECASE,
@@ -2017,7 +2018,14 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         log.warning("webhook rejected: unauthorized chat_id=%s", chat_id)
         return func.HttpResponse("ok", status_code=200)  # silent drop
 
-    user_text = message.get("text") or ""
+    try:
+        message = normalize_message_links(message)
+    except ValueError:
+        log.warning("webhook rejected: invalid capture text or link entities")
+        return func.HttpResponse("invalid message links", status_code=400)
+    message_key = "message" if update.get("message") else "edited_message"
+    update = {**update, message_key: message}
+    user_text = message.get("text") or message.get("caption") or ""
     if not isinstance(user_text, str):
         log.warning("webhook rejected: invalid text")
         return func.HttpResponse("bad request", status_code=400)
