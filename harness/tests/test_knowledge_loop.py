@@ -304,6 +304,65 @@ def test_confirmed_early_chunk_remains_bound_when_later_chunk_fails(system):
     assert not system.executed and not system.store.state["knowledge"]["memories"]
 
 
+def test_production_factory_checkpoints_first_telegram_id_before_second_part_failure(monkeypatch, system):
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "synthetic")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "synthetic")
+    monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "true")
+    calls = []
+
+    def telegram_transport(request):
+        assert request.url.path == "/botsynthetic/sendMessage"
+        calls.append(json.loads(request.content))
+        if len(calls) == 2:
+            return httpx.Response(503, json={"ok": False})
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 850 + len(calls)}})
+
+    client = httpx.Client(transport=httpx.MockTransport(telegram_transport))
+    lookup = Mock(return_value=copy.deepcopy(POINTER))
+    generate = Mock(side_effect=synthesis)
+    monkeypatch.setattr(fa, "_http_client", lambda: client)
+    monkeypatch.setattr(fa, "_briefing_loop", lambda: system.briefing)
+    monkeypatch.setattr(fa, "capture_context", lookup)
+    monkeypatch.setattr(fa, "read_knowledge_source", lambda *_, **__: copy.deepcopy(SOURCE))
+    monkeypatch.setattr(fa, "_generate_knowledge", generate)
+    parts = [
+        "Confirmed first source-bound explanation part.",
+        "Second source-bound explanation part.",
+    ]
+    monkeypatch.setattr(fa, "_telegram_chunks", lambda text: [text] if text in parts else parts)
+    monkeypatch.setattr(fa, "_evolve_reply", lambda *_: None)
+    monkeypatch.setattr(fa, "_proposal_reply", lambda *_: None)
+    forwarded, companion = Mock(), Mock()
+    monkeypatch.setattr(fa, "_forward_to_memex", forwarded)
+    monkeypatch.setattr(fa, "_ask_companion", companion)
+    original = {
+        "update_id": 100,
+        "message": {"message_id": 99, "chat": {"id": 7}, "text": "Explain spaced practice",
+                    "reply_to_message": {"message_id": 51}},
+    }
+
+    assert fa.telegram_webhook(request(original)).status_code == 503
+    assert system.store.state["knowledge"]["bindings"]["851"]["sources"] == {PATH: SOURCE["revision"]}
+    receipt = next(iter(system.store.state["knowledge"]["requests"].values()))
+    assert receipt["status"] == "uncertain" and receipt["message_ids"] == [851]
+    assert fa.telegram_webhook(request(original)).status_code == 200
+    assert len(calls) == 2 and generate.call_count == 1  # No automatic resend/regeneration.
+
+    followup = {
+        "update_id": 101,
+        "message": {"message_id": 100, "chat": {"id": 7}, "text": "Explain delayed recall",
+                    "reply_to_message": {"message_id": 851, "text": calls[0]["text"]}},
+    }
+    assert fa.telegram_webhook(request(followup)).status_code == 200
+    assert generate.call_count == 2 and len(calls) == 4
+    assert generate.call_args.args[0]["sources"][0]["path"] == PATH
+    lookup.assert_called_once()  # The confirmed early part uses its private binding.
+    forwarded.assert_not_called()
+    companion.assert_not_called()
+    assert not system.executed
+
+
 def test_expired_unexecuted_proposal_can_be_renewed_from_a_fresh_recap(system):
     handle(system, action="apply")
     old_id = next(iter(system.store.state["proposals"]))
@@ -438,7 +497,8 @@ def test_topic_command_retrieves_once_retains_inspectable_revision_receipt(syste
     assert not system.store.state["knowledge"]["topics"]
 
 
-def test_paginated_topics_with_five_distinct_sources_remain_inspectable_within_read_bound(system):
+@pytest.mark.parametrize("command,collection", [("/topics", "topics"), ("/knowledge", "memories")])
+def test_paginated_five_source_records_remain_inspectable_and_deletable(system, command, collection):
     identifiers = []
     for index in range(5):
         refs = {}
@@ -446,23 +506,36 @@ def test_paginated_topics_with_five_distinct_sources_remain_inspectable_within_r
             path = f"notes/topic-{index}-source-{number}.md"
             system.current[path] = {**SOURCE, "path": path}
             refs[path] = SOURCE["revision"]
-        identifier = f"{index + 1:024x}"
+        if collection == "topics":
+            identifier = f"{index + 1:024x}"
+            system.store.state["knowledge"]["topics"][identifier] = {
+                "sources": refs, "text": f"Topic receipt {index}",
+                "created_on": TODAY.isoformat(), "expires_on": (TODAY + timedelta(days=35)).isoformat(),
+            }
+        else:
+            identifier = decide_write(
+                system.store.state, kind="working", text=f"Compared source group {index}.",
+                sources=refs, today=TODAY,
+            )
         identifiers.append(identifier)
-        system.store.state["knowledge"]["topics"][identifier] = {
-            "sources": refs, "text": f"Topic receipt {index}",
-            "created_on": TODAY.isoformat(), "expires_on": (TODAY + timedelta(days=35)).isoformat(),
-        }
+    identifiers.sort()
     reader = Mock(side_effect=system.loop.read)
     system.loop.read = reader
-    system.loop.command("/topics", TODAY, "page-one")
+    system.loop.command(command, TODAY, "page-one")
     assert reader.call_count == 15
     assert all(identifier in system.sent[-1][0] for identifier in identifiers[2:])
     assert all(identifier not in system.sent[-1][0] for identifier in identifiers[:2])
     reader.reset_mock()
-    system.loop.command("/topics 2", TODAY, "page-two")
+    system.loop.command(command + " 2", TODAY, "page-two")
     assert reader.call_count == 10
     assert all(identifier in system.sent[-1][0] for identifier in identifiers[:2])
     assert all(identifier not in system.sent[-1][0] for identifier in identifiers[2:])
+    target = identifiers[0]  # Obtain a deletion ID from the second page, not hidden state.
+    assert target in system.sent[-1][0]
+    system.loop.command(command + " forget " + target, TODAY, "delete-visible-record")
+    system.loop.command(command + " forget " + target, TODAY, "repeat-safe-deletion")
+    assert target not in system.store.state["knowledge"][collection]
+    assert len(system.store.state["knowledge"][collection]) == 4
 
 
 def test_two_source_topic_keeps_conflict_quotes_gaps_and_optional_experiment(system):
