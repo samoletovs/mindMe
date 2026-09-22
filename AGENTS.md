@@ -53,6 +53,10 @@ SDK telemetry regression alongside any tracing changes.
 - Agent tools require Function auth and the Foundry `mindme-tools` Custom Keys connection (`x-functions-key`). Never restore anonymous tool access to work around a missing connection.
 - Timers run in UTC on the current Linux Flex app: daily 07:30 and Sunday 18:00. Do not describe them as local time.
 - Captures are forwarded to memex, not written by the legacy queue handler. A forwarding failure must remain retryable, and callback queries must pass the same chat allowlist.
+- `harness/capture_links.py` normalizes Telegram URL/text-link entities (UTF-16
+  offsets) before routing text or media captions. Preserve update/message IDs,
+  commentary and command/reply precedence; remove stale entity offsets only
+  when rewriting their text. Never fetch article/video content in the companion.
 - Briefing section preferences and the onboarding marker remain in the private container until explicitly removed. Ordinary companion calls are single-turn and use `store=False`; no durable chat memory is maintained.
 - The opt-in action briefing stores scoped proposal/decision receipts and concise
   corrections in `system/mindme/briefing-state-v1.json`, not conversation transcripts.

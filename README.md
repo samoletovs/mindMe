@@ -28,6 +28,23 @@ decisions and approval-gated task updates. There is no semantic search, calendar
 integration or autonomous task scheduling. `/task` captures an action; it does not schedule it.
 Onboarding, `/start`, `/ping`, and `/help` are also available.
 
+### Article and TikTok links
+
+Send an article URL or a public TikTok video/share link directly, with commentary,
+as a named Telegram hyperlink, or in a media caption. mindMe forwards the link to
+the same memex capture pipeline: retrieve source content, analyze it, connect it
+to existing knowledge, and send a contextual Telegram briefing. Routine validated
+captures merge automatically into mindVault after its checks pass; a queued
+acknowledgment or pending PR is not proof that the note is saved.
+
+Articles use readable page text. TikTok uses available captions/transcription,
+not visual analysis; a metadata-only result explicitly states that limitation.
+For an already saved metadata-only TikTok, `/refresh <original URL>` requests a
+guarded speech refresh without deleting the earlier note. Private/restricted or
+unavailable content cannot be promised. `/dig <question>` remains explicit deep
+research, even when its question contains a link; proposal-bound replies retain
+their decision/feedback behavior. As before, one message captures its first URL.
+
 ## Opt-in action briefing
 
 The [action-briefing implementation](docs/design-action-briefing.md) adds a separate,
