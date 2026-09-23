@@ -2063,7 +2063,9 @@ def _compose_local_briefing() -> str:
             )
     if not paragraphs:
         paragraphs.append(
-            "Every briefing section is switched off — use /briefing to turn some back on."
+            "No updates in the briefing sections you chose."
+            if sections
+            else "Every briefing section is switched off — use /briefing to turn some back on."
         )
     if sections - {"weather"}:
         warning = _freshness_warning(snapshot.get("source_freshness", {}))

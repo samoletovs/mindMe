@@ -214,6 +214,20 @@ def test_all_sections_off_does_not_fetch_weather(monkeypatch):
     weather.assert_not_called()
 
 
+@pytest.mark.parametrize("sections", [["vault"], ["journal"], ["vault", "journal"], ["areas"]])
+def test_quiet_enabled_sections_are_not_reported_as_switched_off(monkeypatch, sections):
+    monkeypatch.setattr(fa, "_load_briefing", lambda: {
+        "sections": sections,
+        "vault_state": {"inbox": {"count": 0}, "reviews": {"days_since": 1}},
+        "source_freshness": {"status": "current"},
+    })
+
+    text = fa._compose_local_briefing()
+
+    assert text == "No updates in the briefing sections you chose."
+    assert "switched off" not in text
+
+
 def test_weather_outage_preserves_personal_fallback(monkeypatch):
     monkeypatch.setattr(fa, "_load_briefing", lambda: {
         "sections": ["focus", "weather"], "today_focus": "Finish synthetic exercise",
