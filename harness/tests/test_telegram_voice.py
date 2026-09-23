@@ -203,3 +203,58 @@ def test_help_keeps_knowledge_actions_feedback_and_inspection_commands(monkeypat
     assert "proposals for approval" in text
     assert "feedback, not approval" in text
     assert len(text) < 2000
+
+
+@pytest.mark.parametrize("message", [
+    {"text": "https://evidence.example/article"},
+    {"text": "This looks useful: https://evidence.example/article"},
+    {"text": "/recap https://evidence.example/article"},
+    {"text": "/recap@synthetic_bot https://evidence.example/article"},
+    {"text": "save: https://evidence.example/article maybe try this"},
+    {"text": "n: need to read https://evidence.example/article"},
+    {"caption": "save: this looks useful https://evidence.example/article"},
+    {"text": "save: read this article", "entities": [
+        {"type": "text_link", "offset": 6, "length": 17, "url": "https://evidence.example/article"},
+    ]},
+])
+@pytest.mark.parametrize("forwarded", [True, False])
+def test_url_forwarding_adds_no_success_or_category_message_and_keeps_failures_retryable(
+    monkeypatch: pytest.MonkeyPatch, message: dict, forwarded: bool,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "false")
+    monkeypatch.setattr(fa, "_verify_telegram_secret", lambda _: True)
+    monkeypatch.setattr(fa, "_knowledge_reply", lambda *_: False)
+    monkeypatch.setattr(fa, "_evolve_reply", lambda *_: None)
+    forward = Mock(return_value=forwarded)
+    onboarding = Mock(return_value=True)
+    sent, companion = Mock(), Mock()
+    monkeypatch.setattr(fa, "_claim_onboarding", onboarding)
+    monkeypatch.setattr(fa, "_forward_to_memex", forward)
+    monkeypatch.setattr(fa, "_telegram_send", sent)
+    monkeypatch.setattr(fa, "_ask_companion", companion)
+
+    response = fa.telegram_webhook(request({"message": {"chat": {"id": 7}, **message}}))
+
+    assert response.status_code == (200 if forwarded else 503)
+    forward.assert_called_once()
+    onboarding.assert_not_called()
+    sent.assert_not_called()
+    companion.assert_not_called()
+
+
+def test_first_ordinary_chat_still_receives_deferred_onboarding(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "false")
+    monkeypatch.setattr(fa, "_verify_telegram_secret", lambda _: True)
+    monkeypatch.setattr(fa, "_knowledge_reply", lambda *_: False)
+    monkeypatch.setattr(fa, "_evolve_reply", lambda *_: None)
+    monkeypatch.setattr(fa, "_claim_onboarding", Mock(return_value=True))
+    monkeypatch.setattr(fa, "_ask_companion", lambda *_: "How can I help?")
+    sent = Mock()
+    monkeypatch.setattr(fa, "_telegram_send", sent)
+
+    response = fa.telegram_webhook(request({"message": {"chat": {"id": 7}, "text": "Hello"}}))
+
+    assert response.status_code == 200
+    assert [call.args[1] for call in sent.call_args_list] == [*fa._ONBOARDING_TUTORIAL, "How can I help?"]

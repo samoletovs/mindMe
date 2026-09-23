@@ -64,6 +64,11 @@ the same memex capture pipeline: retrieve source content, analyze it, connect it
 to existing knowledge, and send a contextual Telegram briefing. Routine validated
 captures merge automatically into mindVault after its checks pass; a queued
 acknowledgment or pending PR is not proof that the note is saved.
+Successful URL or `/recap` forwarding adds no mindMe success message or
+capture-category tip, including links with commentary. Capture requests defer
+the first-contact tutorial until the next non-capture interaction, so memex owns
+the completed summary without extra mindMe messages. Forwarding failures still
+return a retryable error, not a success response.
 
 Articles use readable page text. TikTok uses available captions/transcription,
 not visual analysis; a metadata-only result explicitly states that limitation.

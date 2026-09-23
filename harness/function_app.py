@@ -802,7 +802,7 @@ def _capture_category_suggestion(text: str) -> str | None:
     if not text or not _GENERIC_CAPTURE_PREFIX_RE.match(text):
         return None
     body = _GENERIC_CAPTURE_PREFIX_RE.sub("", text, count=1).strip()
-    if not body or _URL_RE.fullmatch(body):
+    if not body or _URL_RE.search(body):
         return None
     if _DIARY_CAPTURE_RE.search(body):
         return "For a journal entry, use /diary next time."
@@ -2176,7 +2176,7 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
     user_text = user_text.strip()
     knowledge_event = f"update:{update.get('update_id')}:{message.get('message_id')}:{message.get('edit_date')}"
 
-    if _claim_onboarding():
+    if not _is_capture_intent(user_text) and _claim_onboarding():
         for tutorial_message in _ONBOARDING_TUTORIAL:
             _telegram_send(chat_id, tutorial_message)
 

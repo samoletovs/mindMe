@@ -13,6 +13,11 @@ Plain-English copy has three delivery surfaces; updating one does not update all
 3. Refresh Telegram command descriptions with `scripts/dev/set_bot_commands.py`.
    No new flag, model, callback format, state migration or timer is needed.
 
+The checked-in `tests.yml` workflow runs tests only; it does not publish Functions
+or register the companion. Publish `harness/` from the intended clean checkout,
+not from another worktree. A green test workflow is not proof that this commit is
+running in Azure. Record the published package/commit and registered agent version.
+
 After approved deployment, check an ordinary question and **More details** on a
 saved recap. The latter must add useful explanation rather than repeat the recap.
 Confirm source claims remain qualified and links still point to their evidence.
