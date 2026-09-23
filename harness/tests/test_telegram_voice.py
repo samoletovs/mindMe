@@ -107,6 +107,19 @@ def test_topic_answer_omits_empty_sections_but_keeps_claims_quotes_and_limits() 
     assert "Reply Dig" in text and "Apply" in text
 
 
+def test_more_details_reveals_optional_followups_without_repeating_the_menu_on_ordinary_answers() -> None:
+    packet = {"action": "explain", "query": "explain", "sources": [SOURCE], "memories": []}
+    plan = synthesis(packet)
+    details = render_synthesis(plan, packet)
+    ordinary = render_synthesis(plan, {**packet, "query": "What does spaced practice mean?"})
+    for phrase in ("research this", "help me use this", "connect ideas", "useful", "already know", "correction:"):
+        assert phrase in details
+    assert "Proposed work still needs your approval" in details
+    assert "connect ideas" not in ordinary
+    assert plan["explanation"][0]["text"] in details
+    assert SOURCE["url"] in details
+
+
 def test_requested_long_detail_survives_rendering_and_message_splitting() -> None:
     packet = {"action": "topic", "sources": [SOURCE], "memories": []}
     plan = synthesis(packet)

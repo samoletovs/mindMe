@@ -45,6 +45,11 @@ Ordinary replies are short by default. **More details** uses the unchanged
 supported, and important limits—not another recap. Explicit detail requests,
 topic comparisons and inspection commands can span messages without losing text.
 Dig, Apply, familiarity/usefulness feedback and all topic/memory commands remain.
+The fuller answer lists the optional replies: “research this” prepares research,
+“help me use this” prepares a task, and “connect ideas” compares saved sources.
+“Useful”, “already know” and “correction: ...” save feedback about those sources.
+Reply to that answer, not a new unconnected chat message. Research and tasks still
+need approval on their own proposal card; feedback never approves work.
 
 Runtime prompt/copy changes need a Function App deployment. Companion voice also
 needs a new hosted agent version from `scripts/dev/create_agent.py`; deploying

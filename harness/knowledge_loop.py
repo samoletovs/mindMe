@@ -76,15 +76,15 @@ class KnowledgeLoop:
         if len(text) > 1200 or _SECRET.search(text):
             self.send("Ask one short question, up to 1,200 characters. Leave out passwords and other private details.")
             return True
-        normalized = text.strip().casefold()
+        normalized = " ".join(text.casefold().split()).rstrip(".!?")
         decision = parse_reply(text, today)
         if action is None:
             action = (
-                "known" if normalized in {"already familiar", "already known", "known"} else
+                "known" if normalized in {"already familiar", "already known", "already know", "known"} else
                 "useful" if normalized == "useful" else
                 "dig" if re.match(r"^(?:dig|research)\b", normalized) else
-                "apply" if re.match(r"^apply\b", normalized) else
-                "topic" if re.match(r"^(?:topic|compare|synthesize)\b", normalized) else "explain"
+                "apply" if normalized == "help me use this" or re.match(r"^apply\b", normalized) else
+                "topic" if normalized == "connect ideas" or re.match(r"^(?:topic|compare|synthesize)\b", normalized) else "explain"
             )
         if action not in {"explain", "dig", "apply", "topic", "known", "useful"}:
             raise KnowledgeError("unknown_capture_action")

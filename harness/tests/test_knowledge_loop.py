@@ -166,6 +166,54 @@ def test_more_details_callback_keeps_its_contract_and_passes_an_explicit_detail_
     assert len(system.packets) == 1
 
 
+@pytest.mark.parametrize(("reply", "action", "kind"), [
+    ("research this", "dig", "research"),
+    ("help me use this", "apply", "create_task"),
+    ("connect ideas", "topic", None),
+    ("Help me use this.", "apply", "create_task"),
+])
+def test_advertised_followups_on_more_details_prepare_the_right_work_without_approval(system, reply, action, kind):
+    handle(system, "explain", action="explain", key="c" * 32)
+    explanation = system.sent[0][0]
+    for phrase in ("research this", "help me use this", "connect ideas"):
+        assert phrase in explanation
+    system.lookup.reset_mock()
+
+    assert handle(system, reply, message_id=101, event="followup", shown_text=explanation)
+
+    system.lookup.assert_not_called()
+    assert system.packets[-1]["action"] == action
+    assert not system.executed
+    if kind:
+        proposal = next(iter(system.store.state["proposals"].values()))
+        assert proposal["kind"] == kind and proposal["status"] == "pending"
+        assert proposal["knowledge_sources"] == {PATH: SOURCE["revision"]}
+    else:
+        assert system.store.state["knowledge"]["topics"]
+        assert not system.store.state["proposals"]
+
+
+@pytest.mark.parametrize(("reply", "kind"), [
+    ("useful", "feedback"), ("already know", "feedback"),
+    ("Already know!", "feedback"), ("correction: I use spaced practice already", "correction"),
+])
+def test_advertised_feedback_on_more_details_saves_source_context_not_approval(system, reply, kind):
+    handle(system, "explain", action="explain", key="c" * 32)
+    explanation = system.sent[0][0]
+
+    assert handle(system, reply, message_id=101, event="feedback", shown_text=explanation)
+
+    saved = [
+        item for item in system.store.state["knowledge"]["memories"].values()
+        if item["kind"] == kind
+    ]
+    assert len(saved) == 1
+    assert saved[0]["sources"] == {PATH: SOURCE["revision"]}
+    assert len(system.packets) == 1
+    assert not system.executed and not system.store.state["proposals"]
+    assert "does not set a lasting interest or approve work" in system.sent[-1][0]
+
+
 def test_numbered_followup_targets_actual_displayed_idea_not_canonical_note_number(system):
     system.current[PATH]["text"] = (
         "Canonical ideas:\n1. Spaced practice improves delayed recall.\n"

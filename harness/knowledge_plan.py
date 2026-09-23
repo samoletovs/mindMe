@@ -333,5 +333,13 @@ def render_synthesis(plan: dict[str, Any], context: dict[str, Any]) -> str:
         lines.append("\nYou could try (not started)\n" + plan["experiment"])
     lines.extend(context.get("warnings", []))
     if plan["proposal"] is None:
-        lines.append("No action started. Reply Dig for a research proposal or Apply for a task proposal.")
+        if context["action"] == "explain" and context.get("query", "").strip().casefold() == "explain":
+            lines.append(
+                "No action started. Reply “research this” for a research proposal, "
+                "“help me use this” for a task proposal, or “connect ideas” to compare sources.\n"
+                "Feedback: “useful”, “already know”, or “correction: ...”. "
+                "Proposed work still needs your approval."
+            )
+        else:
+            lines.append("No action started. Reply Dig for a research proposal or Apply for a task proposal.")
     return "\n".join(lines)
