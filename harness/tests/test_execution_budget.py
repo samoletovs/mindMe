@@ -617,7 +617,7 @@ def test_useful_review_finishes_after_slow_sources_model_checks_and_publication(
         return next(identifiers)
 
     loop.send.side_effect = send
-    assert loop.run(TODAY) == "Knowledge review delivered. Proposals remain unapproved."
+    assert loop.run(TODAY) == "Knowledge review sent. No proposed work was approved."
     assert budgets == [45, 65, 30, 35, 20]
     assert clock[0] == 116
     record = store.state["deliveries"][TODAY.isoformat()]

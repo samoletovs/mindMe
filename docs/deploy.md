@@ -1,5 +1,30 @@
 # Deploying the Function App
 
+## Telegram copy rollout
+
+Plain-English copy has three delivery surfaces; updating one does not update all:
+
+1. Deploy `harness/` including `telegram_voice.py`. It supplies live daily/weekly,
+   knowledge and vault-evolve prompts plus fixed Telegram messages.
+2. Register a new companion version with `scripts/dev/create_agent.py` using the
+   existing configured project, model and authenticated tools connection. Both
+   phase prompts import the same voice guidance. The registration workflow needs
+   the full checkout, including `harness/telegram_voice.py`.
+3. Refresh Telegram command descriptions with `scripts/dev/set_bot_commands.py`.
+   No new flag, model, callback format, state migration or timer is needed.
+
+After approved deployment, check an ordinary question and **More details** on a
+saved recap. The latter must add useful explanation rather than repeat the recap.
+Confirm source claims remain qualified and links still point to their evidence.
+Inspect `/help`, `/briefing details`, `/review sources` and a proposal explanation.
+Do not approve real work just to test copy. Existing saved delivery text is not
+rewritten or resent: new prompts apply to newly generated messages.
+
+The default recap is rendered by memex. mindMe keeps `cap1|explain|<key>`,
+Dig/Apply preparation, feedback and topic commands compatible with it. A local
+mocked test proves routing and prompt construction, not live model wording;
+record the live sample and deployed/registered versions after rollout.
+
 ## Verified action-briefing release: 2026-09-13
 
 - memex [PR #3](https://github.com/samoletovs/memex/pull/3) merged as `0c9730f`;

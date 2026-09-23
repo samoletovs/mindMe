@@ -28,6 +28,29 @@ decisions and approval-gated task updates. There is no semantic search, calendar
 integration or autonomous task scheduling. `/task` captures an action; it does not schedule it.
 Onboarding, `/start`, `/ping`, and `/help` are also available.
 
+### Telegram voice
+
+The reader is busy, technically capable and reading on a phone. English is not
+their first language. Write in plain, calm, direct English: short sentences,
+everyday verbs, no corporate language, AI preamble or repeated empty sections.
+Explain necessary terms. Say “saved note”, “file version” and “I could not
+confirm delivery”, not internal workflow terms. Keep uncertainty and approval
+limits; “submitted for review” never means “done”.
+
+`harness/telegram_voice.py` is the shared generation guidance for companion
+registration, daily/weekly plans, knowledge answers and vault-evolve reviews.
+It is not a send-time text rewriter. Quotes, commands and inspection IDs stay exact.
+Ordinary replies are short by default. **More details** uses the unchanged
+`cap1|explain|<key>` callback and asks for reasoning, a useful example where
+supported, and important limits—not another recap. Explicit detail requests,
+topic comparisons and inspection commands can span messages without losing text.
+Dig, Apply, familiarity/usefulness feedback and all topic/memory commands remain.
+
+Runtime prompt/copy changes need a Function App deployment. Companion voice also
+needs a new hosted agent version from `scripts/dev/create_agent.py`; deploying
+Functions alone does not update its instructions. The menu descriptions need
+`scripts/dev/set_bot_commands.py`. See [deployment checks](docs/deploy.md#telegram-copy-rollout).
+
 ### Article and TikTok links
 
 Send an article URL or a public TikTok video/share link directly, with commentary,

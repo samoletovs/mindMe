@@ -39,7 +39,7 @@ def test_explanation_is_readable_without_exposing_ids_or_raw_urls(kind: str) -> 
     assert item["text"] in text and item["why"] in text
     assert PROPOSAL_ACTIONS[kind][2] in text
     assert "<b>Why now</b>" in reply.parts[0]
-    assert "<b>Scope</b>" in reply.parts[0]
+    assert "<b>What approval means</b>" in reply.parts[0]
     assert f'<a href="{SOURCE_URL}">Open source</a>' in reply.parts[0]
     assert "https://" not in text and item["id"] not in text
     assert "No work starts before approval." in text

@@ -150,7 +150,7 @@ def test_daily_cards_show_exact_action_scope_and_only_bound_approval(kind: str, 
     parser = TelegramHTML()
     parser.feed(card)
     assert proposal["text"] in "".join(parser.text)
-    assert "<b>Scope</b>" in card
+    assert "<b>What approval means</b>" in card
     assert keyboard[0][0] == {"text": label, "callback_data": "brief1|approve|" + "a" * 24}
     if kind == "review_task":
         assert "does not complete it" in card

@@ -630,7 +630,7 @@ def load_sources(
             recent = _recent_paths(client, base, headers, revision, inventory)
         except SourceError:
             result["complete"] = False
-            result["warnings"].append("Recent source ordering is unavailable; no filename is treated as a modification date.")
+            result["warnings"].append("I could not check which files changed most recently. Dates in filenames do not prove when files changed.")
     focused_projects: set[str] = set()
     total = fetches = 0
     evidence_bytes = 0
@@ -665,18 +665,18 @@ def load_sources(
         entry = candidates.pop(path)
         if fetches >= MAX_CONTENT_FETCHES or total >= MAX_TOTAL_CHARS:
             result["complete"] = False
-            result["warnings"].append("Source context is bounded; some eligible records remain unprocessed and may have changed.")
+            result["warnings"].append("I checked only part of the saved notes. Unread notes may have changed.")
             break
         size = entry.get("size")
         if not isinstance(size, int) or size < 0 or size > MAX_FILE_BYTES:
             result["complete"] = False
-            result["warnings"].append("A source exceeds the bounded reader or lacks size information.")
+            result["warnings"].append("A source was too large to read, or its size was unknown.")
             continue
         if include_evidence and path != "home.md" and (
             len(path.split("/")) > 6 or size > 64_000 or evidence_bytes + size > 512_000
         ):
             result["complete"] = False
-            result["warnings"].append("Some source files exceed the review writer's byte or path-depth limits.")
+            result["warnings"].append("Some files are too large or too deeply nested for the review to use.")
             continue
         fetches += 1
         data = _json(
@@ -693,7 +693,7 @@ def load_sources(
             path, raw, kind, allow_captured_sources=allow_captured_sources,
         ):
             result["source_revisions"].pop(path, None)
-            result["warnings"].append("Some sources were excluded by the review publication policy.")
+            result["warnings"].append("Some sources cannot be included under the review's privacy and publishing rules.")
             continue
         material = _material(path, raw, kind, focused_projects)
         if material is None:
@@ -708,7 +708,7 @@ def load_sources(
         excerpt = text[:MAX_SOURCE_CHARS]
         if total + len(excerpt) > MAX_TOTAL_CHARS:
             result["complete"] = False
-            result["warnings"].append("Source context is bounded; some eligible records remain unprocessed and may have changed.")
+            result["warnings"].append("I checked only part of the saved notes. Unread notes may have changed.")
             continue
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         source = {
@@ -733,7 +733,7 @@ def load_sources(
         if not result["initial_baseline"] and previous.get(path) != digest:
             result["changes"].append(source)
         if len(text) > len(excerpt):
-            result["warnings"].append("Some source excerpts are shortened; source links retain the full permitted context.")
+            result["warnings"].append("Some excerpts are shortened. Open the source links to read the full notes.")
         total += len(excerpt)
     result["warnings"] = list(dict.fromkeys(result["warnings"]))
     result["coverage"].update(read_files=fetches, included_notes=len(result["sources"]))
@@ -842,7 +842,7 @@ def load_topic_sources(
     ]
     result["warnings"] = [
         *result["warnings"],
-        "Selection is bounded: at most 16 candidate files read, five relevant sources compared. "
-        "Missing evidence is not proof of absence or unfamiliarity. Sources may share an origin.",
+        "I read up to 16 files and compared up to five relevant sources. "
+        "Other files may have more evidence. This does not test what you know. Sources may share an origin.",
     ]
     return result

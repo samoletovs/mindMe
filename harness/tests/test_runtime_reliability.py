@@ -159,7 +159,7 @@ def test_storage_outage_cannot_be_reported_as_empty_vault(monkeypatch):
     container.list_blobs.side_effect = ClientAuthenticationError("synthetic")
     container.get_blob_client.return_value.download_blob.side_effect = ClientAuthenticationError("synthetic")
     monkeypatch.setattr(fa, "_os_container_client", lambda: container)
-    assert "unavailable" in fa._status_line()
+    assert "could not load the vault status" in fa._status_line()
     response = fa.tool_briefing_context(request({}))
     assert response.status_code == 503
 
@@ -317,7 +317,7 @@ def test_stale_context_warning_survives_vault_section_being_disabled(monkeypatch
     })
     monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["focus"])
     text = fa._compose_local_briefing()
-    assert "38d ago" in text
+    assert "38 days ago" in text
     assert "synthetic focus" in text
 
 

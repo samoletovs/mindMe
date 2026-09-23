@@ -505,7 +505,7 @@ def test_action_card_names_the_effect_and_approval_executes_only_once(system):
     loop, store, sent, executed, _, _, _ = system
     loop.deliver(TODAY, ["knowledge"])
     card, keyboard = sent[1]
-    assert "<b>Scope</b>" in card
+    assert "<b>What approval means</b>" in card
     assert keyboard[0][0]["text"] == "Start research"
     assert not executed
     identifier = loop.target(2)
@@ -642,6 +642,6 @@ def test_verified_result_is_reported_once_in_a_subsequent_briefing(system):
     }
     loop.deliver(date(2026, 9, 14), ["knowledge"])
     loop.deliver(date(2026, 9, 15), ["knowledge"])
-    result_messages = [text for text, _ in sent if "<b>Follow-through</b>" in text]
+    result_messages = [text for text, _ in sent if "<b>Results checked</b>" in text]
     assert len(result_messages) == 1
     assert "https://github.com/example/vault/pull/3" in result_messages[0]
