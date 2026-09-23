@@ -24,6 +24,13 @@
 
 ## Code conventions
 
+Telegram copy uses the shared `harness/telegram_voice.py` guidance. Keep a plain,
+calm, direct voice for a busy non-native English reader on a phone. Ordinary
+answers are short; explicit More details, comparisons and inspection may be long.
+Improve prompts and fixed copy at their source, never rewrite outgoing text or
+trim evidence at the send boundary. Preserve exact quotes, status, uncertainty
+and approval requirements. See README's Telegram voice and deploy.md's rollout.
+
 Azure SDK auto-tracing is disabled too (`azure_sdk`, `AZURE_TRACING_ENABLED=false`,
 and the Azure Core tracing setting). SDK HTTP logs must stay suppressed: private
 blob filenames are personal data even when bodies are not logged. Keep the offline

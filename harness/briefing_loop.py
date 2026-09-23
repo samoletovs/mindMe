@@ -82,13 +82,13 @@ class BriefingLoop:
             loops = self.loops()
             context["open_loops"] = loops
             if loops.get("status") != "available":
-                context["warnings"].append("Task state is unavailable, not an empty task list.")
+                context["warnings"].append("I could not load the tasks. This does not mean the task list is empty.")
             else:
                 context["tasks"] = loops["tasks"]["items"]
                 if not all(task.get("revision") for task in context["tasks"]):
-                    context["warnings"].append("Some task records lack current source revisions; actions on them are disabled.")
+                    context["warnings"].append("I could not check the current file version for some tasks. Actions on those tasks are disabled.")
                 if loops.get("complete") is False:
-                    context["warnings"].append("The task view is bounded; some records were not inspected.")
+                    context["warnings"].append("I checked only part of the task list.")
         context["extras"] = self.extras(sections)
         context["warnings"].extend(context["extras"].get("warnings", []))
         inventory = context.get("inventory_paths")
@@ -355,7 +355,7 @@ class BriefingLoop:
                         record_transition(item, "corrected", today)
 
                 self.store.update(remember_knowledge)
-                return "Source-bound correction saved for later follow-ups. Inspect /knowledge; no source or action receipt was edited."
+                return "Correction saved for later questions about this source. See /knowledge. No source note or action record was edited."
             identifier = fingerprint([proposal_id, correction])[:24]
 
             def remember(current: dict[str, Any]) -> None:
@@ -379,7 +379,7 @@ class BriefingLoop:
                     record_transition(item, "corrected", today)
 
             self.store.update(remember)
-            return "Correction saved for future briefings. Any existing action receipt is preserved; no source plan was edited."
+            return "Correction saved for future briefings. Existing action records are kept; no source plan was edited."
         if proposal.get("status") in {"executing", "submitted", "completed", "uncertain"}:
             return self._receipt_text(proposal)
         if intent in {"approve", "done", "change"} or task_snooze:
@@ -394,7 +394,7 @@ class BriefingLoop:
                     continue
                 if self.knowledge_revision(path) != revision:
                     self.store.update(lambda current: current["proposals"][proposal_id].update(status="invalidated"))
-                    return "The knowledge evidence changed or is no longer eligible. Request a fresh proposal; no action was started."
+                    return "A source changed or can no longer be used. Request a fresh proposal; no action was started."
             if proposal.get("knowledge_sources") and proposal["kind"] == "research":
                 from knowledge_plan import public_knowledge_question
 
@@ -518,13 +518,13 @@ class BriefingLoop:
         status = proposal.get("status")
         label = {
             "accepted": "Next action selected and saved. The task remains open; reply done only when completed.",
-            "submitted": "Approved work submitted. Canonical completion is not yet verified.",
-            "completed": "Canonical result verified.",
+            "submitted": "Approved work submitted for review. Completion is not yet confirmed.",
+            "completed": "Done. I checked the saved result.",
             "executing": "The approved action is in progress. A repeated reply will not start another.",
-            "uncertain": "The external result is unconfirmed. No duplicate action will be started.",
+            "uncertain": "I could not confirm the result. No duplicate action will be started.",
             "invalidated": "The source changed; this action requires a fresh proposal.",
-            "failed": "The approved action failed. No completion is claimed.",
-            "snoozed": f"Review deferred until {proposal.get('review_on')}. The hard deadline is unchanged.",
+            "failed": "The approved action failed. It is not confirmed as complete.",
+            "snoozed": f"Review postponed until {proposal.get('review_on')}. The deadline is unchanged.",
         }.get(status, f"Proposal status: {status}.")
         result = proposal.get("result") or {}
         link = result.get("pr_url") or result.get("issue_url") or ""
@@ -537,7 +537,7 @@ class BriefingLoop:
             if not _ID.fullmatch(identifier):
                 return "Use /memory forget <memory-id> from /memory."
             self.store.update(lambda state: state["memories"].pop(identifier, None))
-            return "Memory removed. Repeating this deletion is safe; source notes are unchanged."
+            return "Correction removed if it was still saved. Source notes are unchanged."
         if arg:
             return "Use /memory to inspect corrections, or /memory forget <memory-id>."
         records = list(self.store.read()["memories"].values())

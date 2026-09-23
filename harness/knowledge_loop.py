@@ -74,22 +74,22 @@ class KnowledgeLoop:
         if context is None:
             return False
         if len(text) > 1200 or _SECRET.search(text):
-            self.send("Use one focused, non-sensitive question of at most 1,200 characters; do not include credentials.")
+            self.send("Ask one short question, up to 1,200 characters. Leave out passwords and other private details.")
             return True
-        normalized = text.strip().casefold()
+        normalized = " ".join(text.casefold().split()).rstrip(".!?")
         decision = parse_reply(text, today)
         if action is None:
             action = (
-                "known" if normalized in {"already familiar", "already known", "known"} else
+                "known" if normalized in {"already familiar", "already known", "already know", "known"} else
                 "useful" if normalized == "useful" else
                 "dig" if re.match(r"^(?:dig|research)\b", normalized) else
-                "apply" if re.match(r"^apply\b", normalized) else
-                "topic" if re.match(r"^(?:topic|compare|synthesize)\b", normalized) else "explain"
+                "apply" if normalized == "help me use this" or re.match(r"^apply\b", normalized) else
+                "topic" if normalized == "connect ideas" or re.match(r"^(?:topic|compare|synthesize)\b", normalized) else "explain"
             )
         if action not in {"explain", "dig", "apply", "topic", "known", "useful"}:
             raise KnowledgeError("unknown_capture_action")
         if decision["intent"] in {"approve", "done", "decline", "change", "snooze"}:
-            self.send("This is source context, not approval. Reply to the specific proposal card; no action was taken.")
+            self.send("To approve or change work, reply to its proposal card. This message is about the source; no action was taken.")
             return True
         refs = context["binding"]["sources"]
         request_id = fingerprint([event, message_id, action])[:32]
@@ -104,17 +104,16 @@ class KnowledgeLoop:
                 )
                 self.store.update(lambda state: decide_write(state, kind=kind, text=value, sources=refs, today=today))
                 self._send_bound(
-                    request_id, "Scoped feedback saved. Inspect /knowledge or delete it there. "
-                    "This does not create a permanent interest or approve work.", refs, today,
+                    request_id, "Feedback saved for this source. Use /knowledge to see or delete it. "
+                    "It does not set a lasting interest or approve work.", refs, today,
                 )
                 return True
             shown, clarify = shown_reference(text, shown_text)
             if clarify:
                 self._send_bound(
                     request_id,
-                    "Please quote the idea or sentence you mean in a short reply. I cannot reliably "
-                    "identify that reference from the available shown message, and the canonical "
-                    "note may order its ideas differently. No action was taken.", refs, today,
+                    "Please quote the idea or sentence you mean. I cannot tell which one you mean; "
+                    "the saved note may list ideas in a different order. No action was taken.", refs, today,
                 )
                 return True
             self._synthesize(context["sources"], text, action, request_id, today, shown_text=shown)
@@ -189,7 +188,7 @@ class KnowledgeLoop:
             warnings = selection["warnings"]
         if len(sources) > 1:
             sources = [{**item, "text": item["text"][:3000]} for item in sources]
-            warnings.append("Multi-source context uses at most 3,000 characters per source.")
+            warnings.append("I used up to 3,000 characters from each source.")
         refs = {item["path"]: item["revision"] for item in sources}
         state = self.store.read()
         memories = recall(state, query=query, sources=refs, today=today)
@@ -203,7 +202,7 @@ class KnowledgeLoop:
                 "is_evidence": False, "grants_permission": False,
             }
         if any(item.get("bounded") for item in sources):
-            context["warnings"].append("The source exceeded the 10,000-character excerpt bound; unseen material is not covered.")
+            context["warnings"].append("I used only the first 10,000 characters of this source. Later text is not covered.")
         plan = validate_synthesis(self.generate(context), context)
         # Recheck all evidence after synthesis, before retaining content or preparing a card.
         self._check_sources(refs, today)
@@ -229,7 +228,7 @@ class KnowledgeLoop:
                 }
 
         self.store.update(retain)
-        self._send_bound(request_id, text + (f"\n\nRetained topic receipt: {topic_id}" if topic_id else ""), refs, today)
+        self._send_bound(request_id, text + (f"\n\nRead this saved comparison: /topics {topic_id}" if topic_id else ""), refs, today)
         def remember(current: dict[str, Any]) -> None:
             mark_used(current, plan["used_memory_ids"], today)
             decide_write(
@@ -262,7 +261,7 @@ class KnowledgeLoop:
             "status": "pending", "created_on": today.isoformat(),
             "expires_on": (today + timedelta(days=14)).isoformat(), "message_ids": [],
             "action": {"kind": kind, "text": text}, "knowledge_sources": refs,
-            "why": "Requested from this canonical source. Nothing executes until this specific card is approved.",
+            "why": "You requested this from the saved source. Nothing starts until you approve this card.",
         }
 
         def prepare(state: dict[str, Any]) -> bool:
@@ -284,7 +283,7 @@ class KnowledgeLoop:
             return True
 
         if not self.store.update(prepare):
-            self.send("A proposal for this source and action is already recorded. Inspect /proposals all; no duplicate work was created.")
+            self.send("There is already a proposal for this source and action. Use /proposals all to check it. No duplicate work was created.")
             return
         rendered, keyboard = render_weekly_proposal(record, 1, 1)
         message_id = self.briefing.send_html(rendered, keyboard)
@@ -304,10 +303,10 @@ class KnowledgeLoop:
             identifier = argument[9:].strip()
             proposal = self.store.read()["proposals"].get(identifier)
             if not proposal or not proposal.get("knowledge_sources") or proposal["status"] != "pending":
-                self.send("Use /knowledge proposal <pending-proposal-id> from /proposals all. This explicitly re-presents a card, never re-executes an action.")
+                self.send("Find the pending proposal ID in /proposals all, then use /knowledge proposal <id> to show its card again. This does not run the action.")
                 return
             if proposal["expires_on"] <= today.isoformat():
-                self.send("That proposal expired. Request a new source-bound proposal.")
+                self.send("That proposal expired. Reply Dig or Apply to a new summary to request another.")
                 return
             self._check_sources(proposal["knowledge_sources"], today)
             request_id = fingerprint([event, "present-proposal", identifier])[:32]
@@ -340,13 +339,13 @@ class KnowledgeLoop:
                 + ", ".join(f"{path} @ {sha}" for path, sha in item["sources"].items())
                 for identifier, item in state["bindings"].items()
             ]
-            self.send(f"Operational receipts page {page}. Uncertain requests are never silently replayed.\n"
+            self.send(f"Message and request records, page {page}. Requests with an unknown result are not retried automatically.\n"
                       + "\n".join(rows[(max(1, page) - 1) * 10:max(1, page) * 10])
-                      + "\n/knowledge forget bindings removes follow-up bindings. Action receipts remain under /proposals all.")
+                      + "\n/knowledge forget bindings removes links between replies and sources. Action records remain under /proposals all.")
             return
         if command == "/knowledge" and argument == "forget bindings":
             self.store.update(lambda state: state["knowledge"]["bindings"].clear())
-            self.send("Follow-up bindings removed. Capture buttons still require memex's confirmed receipt. Action/request replay guards are preserved.")
+            self.send("Links between replies and sources removed. Capture buttons still need a confirmed saved source. Protection against repeating actions and requests is unchanged.")
             return
         if argument.startswith("forget "):
             identifier = argument[7:].strip()
@@ -361,7 +360,7 @@ class KnowledgeLoop:
                     state["knowledge"]["topics"].pop(identifier, None)
 
             self.store.update(forget)
-            self.send("Removed idempotently. Canonical sources and action receipts are unchanged.")
+            self.send("Removed if it was still saved. Source notes and action records are unchanged.")
             return
         if command == "/topics" and argument and not re.fullmatch(r"[a-f0-9]{24}|\d+", argument):
             if len(argument) > 400:
@@ -369,7 +368,7 @@ class KnowledgeLoop:
                 return
             selection = self.retrieve(argument, ())
             if not selection["sources"]:
-                self.send("No relevant evidence in the bounded canonical selection. This is not proof that the vault has no relevant source.")
+                self.send("I found no relevant evidence in the notes I checked. Other notes in the vault may still help.")
                 return
             request_id = fingerprint([event, "topic"])[:32]
             if self._claim(request_id, today):
@@ -403,7 +402,7 @@ class KnowledgeLoop:
         refreshed = self.store.read()["knowledge"]["topics" if command == "/topics" else "memories"]
         items = [(identifier, item) for identifier, item in items if identifier in refreshed]
         self.send(
-            f"{command} page {page}; {len(refreshed)} retained records. Use {command} <id> to inspect, {command} forget <id> to delete.\n\n"
+            f"{command} page {page}; {len(refreshed)} saved records. Use {command} <id> to read, {command} forget <id> to delete.\n\n"
             + ("\n\n".join(self._describe(identifier, item, compact=True) for identifier, item in items) or "No records on this page.")
         )
 
@@ -411,13 +410,13 @@ class KnowledgeLoop:
     def _describe(identifier: str, item: dict[str, Any], *, compact: bool = False) -> str:
         text = item["text"]
         if compact and len(text) > 280:
-            text = text[:280] + "… (inspect the ID for the complete retained brief)"
+            text = text[:280] + "… (use the ID above to read the full saved text)"
         refs = "\n".join(f"{path} @ {sha}" for path, sha in item["sources"].items())
         return (
-            f"{identifier} [{item.get('kind', 'topic')}; {'active' if item.get('active', True) else 'superseded'}]\n{text}\n"
-            f"{refs}\nCreated {item['created_on']}; expires {item.get('expires_on', 'on source invalidation/deletion')}; "
+            f"{identifier} [{item.get('kind', 'topic')}; {'active' if item.get('active', True) else 'replaced'}]\n{text}\n"
+            f"{refs}\nCreated {item['created_on']}; expires {item.get('expires_on', 'when the source changes or is deleted')}; "
             f"used {item.get('use_count', 0)}, last used {item.get('last_used_on') or 'never'}"
-            + (f"\nSupersedes: {item['supersedes']}" if item.get("supersedes") else "")
+            + (f"\nReplaces: {item['supersedes']}" if item.get("supersedes") else "")
         )
 
     def maintenance(self, today: date) -> None:

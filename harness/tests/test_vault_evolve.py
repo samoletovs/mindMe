@@ -131,8 +131,8 @@ def test_telegram_keeps_evidence_labels_next_steps_and_truthful_publication_stat
     packet = evidence_packet(context(), [])
     review = complete_review(generated(), packet)
     parts = telegram_parts(review, {"status": "submitted", "pr_url": "https://github.com/example/mindVault/pull/2"}, packet)
-    assert "not yet canonical" in parts[0]["text"]
-    assert "observed" in parts[1]["text"]
+    assert "not yet added to mindVault" in parts[0]["text"]
+    assert "from the source" in parts[1]["text"]
     assert review["proposals"][0]["next_step"] in parts[1]["text"]
     assert all(len(part["text"]) <= 4000 for part in parts)
 
@@ -222,13 +222,13 @@ def test_feedback_is_bound_persistent_and_used_next_day_without_executing_work(s
     assert generations[-1]["previous_findings"][0]["feedback"]["text"] == "Already use a controlled comparison"
     assert len(publishes) == 1
     assert store.read()["deliveries"]["2026-09-15"]["review"]["findings"] == []
-    assert "no new vault PR" in sends[-1][0]
+    assert "No new review request" in sends[-1][0]
 
 
 def test_approval_like_feedback_does_not_execute_or_save_a_decision(system):
     loop, store, _, publishes, _, _ = system
     loop.run(TODAY)
-    assert "has not authorized work" in loop.feedback("2026-09-14", "F1", "approve", TODAY)
+    assert "No work was approved" in loop.feedback("2026-09-14", "F1", "approve", TODAY)
     assert store.read()["deliveries"]["2026-09-14"]["feedback"] == {}
     assert len(publishes) == 1
 
@@ -411,7 +411,7 @@ def test_snooze_cannot_outlive_its_original_review_record(system):
     loop, store, _, _, _, _ = system
     loop.run(TODAY)
     result = loop.feedback("2026-09-14", "F1", "snooze 2026-10-03", date(2026, 9, 20))
-    assert "before this review" in result
+    assert "within 14 days" in result
     assert not store.read()["deliveries"]["2026-09-14"]["feedback"]
 
 

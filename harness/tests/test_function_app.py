@@ -30,13 +30,13 @@ class DummyRequest:
 
 def test_capture_category_suggestion_points_actionable_notes_to_task():
     assert app._capture_category_suggestion("save: need to call the dentist") == (
-        "That sounds actionable — next time use /task so it can turn into an open loop."
+        "For something you need to do, use /task next time."
     )
 
 
 def test_capture_category_suggestion_points_reflection_to_diary():
     assert app._capture_category_suggestion("n: today felt heavier than expected") == (
-        "That reads like a journal entry — next time use /diary so it lands with your daily log."
+        "For a journal entry, use /diary next time."
     )
 
 
@@ -67,7 +67,7 @@ def test_webhook_sends_category_suggestion_for_ambiguous_capture(monkeypatch):
 
     assert resp.status_code == 200
     assert sent_messages == [
-        (123, "That sounds actionable — next time use /task so it can turn into an open loop.")
+        (123, "For something you need to do, use /task next time.")
     ]
 
 
@@ -496,7 +496,7 @@ def test_briefing_command_reports_save_failure(monkeypatch):
     monkeypatch.setattr(fa, "_save_briefing_prefs", lambda _sections: False)
 
     assert fa._handle_briefing_command("focus") == (
-        "couldn't save your briefing preferences — try again later."
+        "I could not save your briefing preferences. Please try again later."
     )
 
 
@@ -541,7 +541,7 @@ def test_briefing_seed_mentions_only_enabled_sections():
     seed = fa._briefing_seed(["focus", "weather"])
 
     assert "get_weather" in seed
-    assert "2 short paragraphs" in seed
+    assert "up to 120 words" in seed
     assert "vault_state" not in seed
     assert "open_loops" not in seed
 

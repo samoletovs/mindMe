@@ -155,6 +155,65 @@ def test_followup_injects_current_canonical_source_and_requested_context_not_gen
     assert not system.executed
 
 
+def test_more_details_callback_keeps_its_contract_and_passes_an_explicit_detail_request(system):
+    assert handle(system, "explain", action="explain", key="c" * 32)
+    assert system.packets[0]["action"] == "explain"
+    assert system.packets[0]["query"] == "explain"
+    system.lookup.assert_called_once_with(50, "c" * 32)
+    assert SOURCE["url"] in system.sent[0][0]
+    assert not system.executed and not system.store.state["proposals"]
+    handle(system, "explain", action="explain", key="c" * 32)
+    assert len(system.packets) == 1
+
+
+@pytest.mark.parametrize(("reply", "action", "kind"), [
+    ("research this", "dig", "research"),
+    ("help me use this", "apply", "create_task"),
+    ("connect ideas", "topic", None),
+    ("Help me use this.", "apply", "create_task"),
+])
+def test_advertised_followups_on_more_details_prepare_the_right_work_without_approval(system, reply, action, kind):
+    handle(system, "explain", action="explain", key="c" * 32)
+    explanation = system.sent[0][0]
+    for phrase in ("research this", "help me use this", "connect ideas"):
+        assert phrase in explanation
+    system.lookup.reset_mock()
+
+    assert handle(system, reply, message_id=101, event="followup", shown_text=explanation)
+
+    system.lookup.assert_not_called()
+    assert system.packets[-1]["action"] == action
+    assert not system.executed
+    if kind:
+        proposal = next(iter(system.store.state["proposals"].values()))
+        assert proposal["kind"] == kind and proposal["status"] == "pending"
+        assert proposal["knowledge_sources"] == {PATH: SOURCE["revision"]}
+    else:
+        assert system.store.state["knowledge"]["topics"]
+        assert not system.store.state["proposals"]
+
+
+@pytest.mark.parametrize(("reply", "kind"), [
+    ("useful", "feedback"), ("already know", "feedback"),
+    ("Already know!", "feedback"), ("correction: I use spaced practice already", "correction"),
+])
+def test_advertised_feedback_on_more_details_saves_source_context_not_approval(system, reply, kind):
+    handle(system, "explain", action="explain", key="c" * 32)
+    explanation = system.sent[0][0]
+
+    assert handle(system, reply, message_id=101, event="feedback", shown_text=explanation)
+
+    saved = [
+        item for item in system.store.state["knowledge"]["memories"].values()
+        if item["kind"] == kind
+    ]
+    assert len(saved) == 1
+    assert saved[0]["sources"] == {PATH: SOURCE["revision"]}
+    assert len(system.packets) == 1
+    assert not system.executed and not system.store.state["proposals"]
+    assert "does not set a lasting interest or approve work" in system.sent[-1][0]
+
+
 def test_numbered_followup_targets_actual_displayed_idea_not_canonical_note_number(system):
     system.current[PATH]["text"] = (
         "Canonical ideas:\n1. Spaced practice improves delayed recall.\n"
@@ -297,7 +356,8 @@ def test_dig_apply_prepare_only_then_actual_bound_approval_executes_once(system,
 def test_approval_words_on_capture_never_execute(system):
     handle(system, "approve")
     assert not system.executed and not system.packets and not system.store.state["proposals"]
-    assert "not approval" in system.sent[0][0]
+    assert "reply to its proposal card" in system.sent[0][0]
+    assert "no action was taken" in system.sent[0][0]
 
 
 def test_revising_a_research_card_cannot_bypass_private_question_guard(system):
@@ -536,8 +596,9 @@ def test_topic_command_retrieves_once_retains_inspectable_revision_receipt(syste
     system.retrieve.assert_called_once()
     identifier, topic = next(iter(system.store.state["knowledge"]["topics"].items()))
     assert topic["sources"] == {PATH: SOURCE["revision"]}
-    for heading in ("Agreement", "Conflict", "Evidence gaps", "New understanding"):
-        assert heading in topic["text"]
+    assert "Topic comparison" in topic["text"]
+    assert "Spaced practice concerns durable rather than immediate learning." in topic["text"]
+    assert "Not established" not in topic["text"]
     system.loop.command("/topics " + identifier, TODAY, "inspect")
     assert topic["text"] in system.sent[-1][0]
     system.loop.command("/topics forget " + identifier, TODAY, "forget")
@@ -618,7 +679,7 @@ def test_two_source_topic_keeps_conflict_quotes_gaps_and_optional_experiment(sys
     assert "Massed practice" in topic["text"]
     assert "What happens when" in topic["text"]
     assert "Different measurement intervals" in topic["text"]
-    assert "Optional experiment (proposal only)" in topic["text"]
+    assert "You could try (not started)" in topic["text"]
     assert not system.store.state["proposals"] and not system.executed
 
 
@@ -629,7 +690,7 @@ def test_approval_checks_every_topic_source_not_only_the_primary(system):
     handle(system, "apply this", message_id=101, event="apply-two")
     identifier = next(iter(system.store.state["proposals"]))
     system.current[other["path"]]["revision"] = "e" * 40
-    assert "knowledge evidence changed" in system.briefing.reply(identifier, "approve", TODAY).lower()
+    assert "source changed or can no longer be used" in system.briefing.reply(identifier, "approve", TODAY).lower()
     assert not system.executed
 
 
@@ -1283,7 +1344,7 @@ def test_evidence_packet_is_bounded_exact_and_does_not_duplicate_full_sources():
         assert "text" not in source
         assert all(12 <= len(quote) <= 240 and quote in original[source["path"]] for quote in source["quotes"].values())
     assert len(json.dumps(packet, ensure_ascii=False)) <= 36000
-    assert any("bounded" in warning for warning in packet["warnings"])
+    assert any("Only selected quotes" in warning for warning in packet["warnings"])
 
 
 def test_only_canonical_sources_receive_evidence_ids_not_shown_reference_or_memory():

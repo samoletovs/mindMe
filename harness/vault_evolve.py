@@ -13,6 +13,7 @@ MAX_FINDINGS = 3
 KINDS = ["maintenance", "conceptual", "evidence", "application", "connection"]
 RELATIONSHIPS = ["supports", "contradicts", "extends", "duplicates", "applies_to"]
 ACTIONS = ["curate", "research", "experiment", "remind", "explain", "no_action"]
+BASIS_LABELS = {"observed": "from the source", "inferred": "interpretation", "question": "open question"}
 QUESTION = "What useful connections, evidence gaps or small applications emerge from the selected mindVault knowledge and current approved focus?"
 
 
@@ -221,31 +222,36 @@ def telegram_parts(review: dict[str, Any], receipt: dict[str, Any], packet: dict
     date_key = review["as_of"]
     status = receipt.get("status")
     location = (
-        f"Review artifacts: {receipt['pr_url']}\n"
-        + ("Merged into mindVault." if status == "merged" else "Submitted for review; not yet canonical.")
+        f"Review draft: {receipt['pr_url']}\n"
+        + ("Merged into mindVault." if status == "merged" else "Submitted for review; not yet added to mindVault.")
         if status in {"submitted", "merged"}
-        else "Quiet review saved privately; no new vault PR or work was created."
+        else "Review saved privately. No new review request or work was created."
     )
     parts: list[dict[str, Any]] = [{
         "text": (
-            f"mindVault evolution - {date_key}\n{location}\n"
-            f"Reviewed {len(review['sources'])} source excerpts, not the whole vault. "
-            "Personal knowledge is not assessed. Research, tasks and source edits still need approval."
-            + ("\nNo new candidate earned attention in this scope." if not review["findings"] else "")
+            f"Daily knowledge review - {date_key}\n{location}\n"
+            f"Checked excerpts from {len(review['sources'])} sources, not the whole vault. "
+            "This does not test what you know. Research, tasks and note edits still need approval."
+            + ("\nNothing new to suggest from these sources." if not review["findings"] else "")
         ),
         "finding": None, "keyboard": None,
     }]
     sources = {source["id"]: source for source in packet["sources"]}
     proposals = {proposal["finding"]: proposal for proposal in review["proposals"]}
+    labels = {
+        "maintenance": "Note to update", "conceptual": "Idea to explore",
+        "evidence": "Evidence to check", "application": "Something to try",
+        "connection": "Related ideas",
+    }
     for finding in review["findings"]:
         proposal = proposals[finding["id"]]
         links = list(dict.fromkeys(sources[item["source"]]["url"] for item in finding["evidence"]))
         text = (
-            f"{finding['id']} - {finding['kind']} ({finding['basis']})\n"
-            f"{finding['statement']}\n\nProposed {proposal['action']}: {proposal['next_step']}\n\n"
+            f"{labels[finding['kind']]} ({BASIS_LABELS[finding['basis']]})\n"
+            f"{finding['statement']}\n\nPossible next step: {proposal['next_step']}\n\n"
             + "\n".join(links)
-            + "\n\nUseful, already familiar, or missing context? Reply here to save scoped feedback. "
-            "Feedback does not approve the proposed work."
+            + "\n\nReply with feedback about this idea, or use a button below. "
+            "Feedback does not approve work."
         )
         parts.append({
             "text": text, "finding": finding["id"],

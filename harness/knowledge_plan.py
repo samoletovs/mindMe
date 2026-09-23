@@ -196,7 +196,7 @@ def knowledge_evidence_packet(context: dict[str, Any]) -> dict[str, Any]:
             "quotes": {f"{identifier}Q{number}": quote for number, quote in enumerate(selected, 1)},
         })
         if len(selected) < len(candidates) or len(text) > 10000:
-            packet["warnings"].append("Evidence quotes are bounded; some canonical excerpt material was not supplied to synthesis.")
+            packet["warnings"].append("Only selected quotes from the saved excerpts were used for this answer.")
     if not packet["sources"]:
         raise KnowledgeError("no_citable_evidence")
     packet["warnings"] = list(dict.fromkeys(packet["warnings"]))
@@ -312,27 +312,34 @@ def validate_synthesis(raw: object, context: dict[str, Any]) -> dict[str, Any]:
 
 def render_synthesis(plan: dict[str, Any], context: dict[str, Any]) -> str:
     sources = {item["path"]: item for item in context["sources"]}
-    lines = ["Topic brief" if context["action"] == "topic" else "Source-bound follow-up"]
+    lines = ["Topic comparison"] if context["action"] == "topic" else []
     labels = {
-        "explanation": "Explanation", "agreement": "Agreement (not independent verification)",
-        "conflict": "Conflict / tension", "gaps": "Evidence gaps in this bounded selection",
-        "understanding": "New understanding (interpretation)",
+        "explanation": "Explanation", "agreement": "Where the sources agree (not proof)",
+        "conflict": "Where the sources disagree", "gaps": "What these sources do not show",
+        "understanding": "What this may mean",
     }
     for key, label in labels.items():
         items = plan[key]
         if not items:
-            if context["action"] == "topic" and key != "explanation":
-                lines.append(f"\n{label}\nNot established by the selected evidence.")
             continue
-        lines.append("\n" + label)
+        if key != "explanation" or context["action"] == "topic":
+            lines.append(("\n" if lines else "") + label)
         for index, item in enumerate(items, 1):
             lines.append(f"{index}. {item['text']}")
             for cite in item["evidence"]:
                 lines.append(f'“{cite["quote"]}”\n{sources[cite["path"]]["url"]}')
-    lines.append("\nScope: canonical excerpts only; no external browsing. Claims belong to the cited sources, not verified truth.")
+    lines.append("\nBased on saved excerpts, not a web search. These are source claims, not independently checked facts.")
     if plan["experiment"]:
-        lines.append("\nOptional experiment (proposal only)\n" + plan["experiment"])
+        lines.append("\nYou could try (not started)\n" + plan["experiment"])
     lines.extend(context.get("warnings", []))
     if plan["proposal"] is None:
-        lines.append("No action started. Reply Dig or Apply to prepare a proposal.")
+        if context["action"] == "explain" and context.get("query", "").strip().casefold() == "explain":
+            lines.append(
+                "No action started. Reply “research this” for a research proposal, "
+                "“help me use this” for a task proposal, or “connect ideas” to compare sources.\n"
+                "Feedback: “useful”, “already know”, or “correction: ...”. "
+                "Proposed work still needs your approval."
+            )
+        else:
+            lines.append("No action started. Reply Dig for a research proposal or Apply for a task proposal.")
     return "\n".join(lines)

@@ -13,7 +13,7 @@ from briefing_plan import fingerprint, safe_text
 from briefing_sources import SourceError, _SENSITIVE_CONTENT
 from briefing_state import BriefingStore
 from execution_budget import checkpoint, execution_budget
-from vault_evolve import EvolveError, complete_review, evidence_packet, telegram_parts
+from vault_evolve import BASIS_LABELS, EvolveError, complete_review, evidence_packet, telegram_parts
 
 EVOLVE_STATE_BLOB = "system/mindme/vault-evolve-state-v1.json"
 RETENTION_DAYS = 14
@@ -239,7 +239,7 @@ class DailyEvolve:
             }
 
         save(finish)
-        return "Knowledge review delivered. Proposals remain unapproved."
+        return "Knowledge review sent. No proposed work was approved."
 
     def _live_record(self, key: str, today: date) -> dict[str, Any] | None:
         self._expire(today)
@@ -253,16 +253,17 @@ class DailyEvolve:
     def show(self, today: date) -> str:
         record = self._live_record(today.isoformat(), today)
         if not record:
-            return "No current review is available. Use /evolve now; a changed-source review is not presented as current."
+            return "No current review is available. Use /evolve now to prepare one from the latest saved sources."
         review = record["review"]
         receipt = record.get("receipt", {})
-        lines = [f"mindVault evolution - {review['as_of']}"]
+        lines = [f"Daily knowledge review - {review['as_of']}"]
         if receipt.get("pr_url"):
-            lines.append(f"Review artifacts ({receipt['status']}): {receipt['pr_url']}")
+            status = "added to mindVault" if receipt["status"] == "merged" else "submitted for review, not yet added to mindVault"
+            lines.append(f"Review draft ({status}): {receipt['pr_url']}")
         if not review["findings"]:
-            lines.append("No new candidate earned attention in this bounded review.")
+            lines.append("Nothing new to suggest from the sources checked.")
         for finding in review["findings"]:
-            lines.append(f"{finding['id']} ({finding['basis']}): {finding['statement']}")
+            lines.append(f"{finding['id']} ({BASIS_LABELS[finding['basis']]}): {finding['statement']}")
         lines.append("Reply to a finding or use its buttons. /evolve feedback lists feedback; /evolve forget YYYY-MM-DD removes it.")
         return "\n\n".join(lines)
 
@@ -293,11 +294,11 @@ class DailyEvolve:
         safe_text(value, 280)
         if value.casefold() == "why":
             return "\n\n".join([
-                "Evidence records source claims, not proof that the interpretation is true.",
-                *[f"{item['source']}: {item['quote']}" for item in finding["evidence"]],
+                "These quotes show what the sources say. They do not prove the interpretation is true.",
+                *[f"“{item['quote']}”" for item in finding["evidence"]],
             ])
         if value.casefold() in {"yes", "approve", "do it", "research this", "create task"}:
-            return "This finding has not authorized work. Use /dig with an explicit public research question, or /task with the exact task. Source-note changes still need review."
+            return "No work was approved. Use /dig with a public research question, or /task with the exact task. Note edits still need review."
         review_on = None
         if value.casefold() == "later":
             return "Use 'snooze YYYY-MM-DD' to choose when to reconsider this finding."
@@ -307,7 +308,7 @@ class DailyEvolve:
             except ValueError:
                 return "Use 'snooze YYYY-MM-DD' with a valid date."
             if not today < review_on < date.fromisoformat(key) + timedelta(days=RETENTION_DAYS):
-                return "Choose a future date before this review's 14-day retention window ends."
+                return "Choose a future date within 14 days of this review. The saved review expires after that."
         feedback = {"text": value, "recorded_on": today.isoformat(), "review_on": review_on.isoformat() if review_on else None}
 
         def persist(state: dict[str, Any]) -> None:
@@ -317,7 +318,7 @@ class DailyEvolve:
             current.setdefault("feedback", {})[finding_id] = feedback
 
         self.store.update(persist)
-        return "Scoped review feedback saved for up to 14 days. It will shape later reviews; no task, research or source edit was approved."
+        return "Feedback saved for this review for up to 14 days. It will guide later reviews. No task, research or note edit was approved."
 
     def feedback_command(self, argument: str) -> str:
         today = self.clock().date()
@@ -331,7 +332,7 @@ class DailyEvolve:
                 if key in state["deliveries"]:
                     state["deliveries"][key]["feedback"] = {}
             self.store.update(forget)
-            return "Review feedback removed. Published review artifacts and delivery receipts are unaffected."
+            return "Review feedback removed. Published review drafts and message records are unchanged."
         lines = []
         for key in list(self.store.read()["deliveries"]):
             record = self._live_record(key, today)

@@ -184,7 +184,7 @@ def render_weekly_sources(context: dict[str, Any], previous: dict[str, Any]) -> 
         coverage = context.get("coverage")
         if coverage:
             notes.append(
-                f"Read <b>{coverage['read_files']} / {coverage['candidate_files']}</b> candidates "
+                f"Read <b>{coverage['read_files']} / {coverage['candidate_files']}</b> selected files "
                 f"· <b>{coverage['included_notes']} usable notes</b>"
             )
         notes.append(
@@ -209,11 +209,11 @@ def render_weekly_sources(context: dict[str, Any], previous: dict[str, Any]) -> 
     comparison = ["📅 <b>Comparison history</b>"]
     if previous:
         comparison.append(
-            f"Last delivered weekly baseline: <b>{_escape(previous['date'])}</b>\n"
+            f"Last weekly review sent: <b>{_escape(previous['date'])}</b>\n"
             "Later reviews compare against it; daily briefings do not replace it."
         )
     else:
-        comparison.append("No delivered weekly baseline yet. The first successful review starts the comparison.")
+        comparison.append("No weekly review has been sent yet. The first one starts the comparison.")
     comparison.append(
         "Recorded outcomes cover verified agent actions, <b>not all your work</b>. "
         "Missing outcomes do not mean inactivity."
@@ -297,7 +297,7 @@ def _due_items(context: dict[str, Any], today: date, budget: int) -> str:
         due.append((task, ", ".join(timing)))
     if not due and not invalid_dates:
         return ""
-    heading = "<b>Date-relevant tasks</b>"
+    heading = "<b>Tasks with dates to check</b>"
     unavailable = "Other date-relevant tasks are not shown; a complete task-source link is unavailable here."
     index = _task_source_index([item for item, _ in due])
     remainder = f"More due items are in the task sources: {index}." if index else unavailable
@@ -412,7 +412,7 @@ def render_weekly(
         decisions.append("No new approval is requested in this review.")
     if plan.get("proposals"):
         decisions.append(
-            "Choose on each separate card; the exact action and scope are there. "
+            "Choose on each separate card. It explains the action and what approval means. "
             "Nothing starts automatically."
         )
     decisions.append("/proposals all shows recorded actions and decisions, not every due task.")
@@ -422,8 +422,7 @@ def render_weekly(
     ]
     if shortened:
         sections.append(
-            "Some detail is abbreviated or unlinked here; consult linked or connected sources "
-            "for full context."
+            "Some details are shortened or have no link here. Read the saved sources for the full text."
         )
     if open_actions:
         reserve = 100 if context.get("tasks") else 0
@@ -475,12 +474,12 @@ def render_weekly_proposal(
     heading = f"{title} · {number} of {total}" if total > 1 else title
     before = f"<b>{heading}</b>\n\n<b>Proposed action</b>\n{action}\n\n<b>Why now</b>\n"
     after = (
-        f"\n\n<b>Scope</b>\n{scope}\n\n{link}\n\n"
+        f"\n\n<b>What approval means</b>\n{scope}\n\n{link}\n\n"
         "Reply <code>change: your correction</code> or <code>snooze YYYY-MM-DD</code> "
         "to this card. Use the button or reply approve to this card. Other actions stay unchanged."
     )
     remaining = TELEGRAM_LIMIT - _units(before) - _units(after)
-    note = "\nRationale abbreviated to fit; the action and scope are unchanged."
+    note = "\nThe reason is shortened to fit. The action and approval limits are unchanged."
     if _units(_escape(why)) > remaining:
         if remaining < _units(note) + 30:
             raise PlanError("weekly_card_too_long")

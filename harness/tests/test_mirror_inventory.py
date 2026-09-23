@@ -311,9 +311,9 @@ def timer_calls(monkeypatch: pytest.MonkeyPatch) -> TimerCalls:
     [
         (
             _manifest([], "2026-07-30T07:24:22+00:00"),
-            "Personal context may be stale: mirror last synced 38d ago.",
+            "Your personal data copy may be out of date. It was last synced 38 days ago.",
         ),
-        (_manifest(), "Personal context freshness is unknown."),
+        (_manifest(), "I do not know when your personal data copy was last updated."),
     ],
 )
 def test_timer_prepends_manifest_warning_even_when_companion_ignores_it(
@@ -344,7 +344,7 @@ def test_sync_during_generation_cannot_remove_the_stale_warning(
 
     timer_calls.send.assert_called_once_with(
         7,
-        "Personal context may be stale: mirror last synced 38d ago.\n\n"
+        "Your personal data copy may be out of date. It was last synced 38 days ago.\n\n"
         "Synthetic reply based on older context.",
     )
 
@@ -388,7 +388,7 @@ def test_timer_warns_unknown_and_logs_only_error_type_when_metadata_read_fails(
 
     timer_calls.send.assert_called_once_with(
         7,
-        "Personal context freshness is unknown.\n\n"
+        "I do not know when your personal data copy was last updated.\n\n"
         "Synthetic briefing deliberately ignores freshness.",
     )
     assert "ServiceRequestError" in caplog.text
@@ -406,7 +406,7 @@ def test_timer_does_not_duplicate_the_local_fallback_warning(
         "today_focus": "Synthetic focus",
         "source_freshness": {"status": "stale", "age_days": 38},
     })
-    warning = "Personal context may be stale: mirror last synced 38d ago."
+    warning = "Your personal data copy may be out of date. It was last synced 38 days ago."
 
     app.morning_briefing_timer(None)
 

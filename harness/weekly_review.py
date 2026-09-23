@@ -55,7 +55,7 @@ class WeeklyReview:
             today, sections, previous=previous.get("baseline", {}), reconcile_sources=False,
         )
         context["warnings"] = [
-            "No earlier weekly baseline; existing notes are not new progress."
+            "There is no earlier weekly review to compare. Existing notes are not new progress."
             if warning.startswith("Initial source baseline;") else warning
             for warning in model_input(context, [])["warnings"]
         ]
@@ -241,7 +241,7 @@ class WeeklyReview:
             if part != "summary":
                 proposal = state["proposals"][part]
                 if proposal["status"] != "pending" or not proposal.get("source_path"):
-                    text = "A suggested action is no longer awaiting approval. Use /proposals for its current receipt."
+                    text = "A suggested action is no longer waiting for approval. Use /proposals to check its status."
                 else:
                     text, keyboard = render_weekly_proposal(proposal, parts.index(part), len(parts) - 1)
 

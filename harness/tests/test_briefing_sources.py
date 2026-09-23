@@ -141,7 +141,7 @@ def test_review_excludes_sources_the_publication_writer_would_refuse(monkeypatch
     assert [source["path"] for source in result["sources"]] == ["notes/allowed.md"]
     assert path not in result["source_revisions"]
     assert path not in result["fingerprints"]
-    assert any("publication policy" in warning for warning in result["warnings"])
+    assert any("privacy and publishing rules" in warning for warning in result["warnings"])
 
 
 def test_review_filter_does_not_change_ordinary_briefing_eligibility(monkeypatch):
@@ -486,7 +486,7 @@ def test_source_caps_are_visible_and_unprocessed_items_are_not_checkpointed() ->
     assert all(len(source["text"]) <= MAX_SOURCE_CHARS for source in result["sources"])
     assert sum(len(source["text"]) for source in result["sources"]) <= MAX_TOTAL_CHARS
     assert result["complete"] is False
-    assert any("unprocessed" in warning for warning in result["warnings"])
+    assert any("Unread notes may have changed" in warning for warning in result["warnings"])
     assert len(result["fingerprints"]) < len(result["source_revisions"]) == len(files)
     assert set(result["fingerprints"]) == {source["path"] for source in result["sources"]}
     assert set(result["inventory_paths"]) == set(files)

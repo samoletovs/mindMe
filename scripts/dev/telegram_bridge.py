@@ -141,7 +141,7 @@ async def cmd_ping(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_help(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "/ping - health check\n"
+        "/ping - check the bot\n"
         "/reset - start a new conversation\n"
         "/status - show what mindMe can do right now\n"
         "/help - this message"
@@ -151,15 +151,15 @@ async def cmd_help(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent: FoundryAgent = context.application.bot_data["agent"]
     await update.message.reply_text(
-        f"phase 1 smoke test. agent={agent.agent_name}. "
-        "no tools wired yet (briefing, capture, weather all come in phase 2)."
+        f"Local test bot. Agent: {agent.agent_name}. "
+        "This bridge supports chat only, not capture or scheduled briefings."
     )
 
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     agent: FoundryAgent = context.application.bot_data["agent"]
     agent.reset()
-    await update.message.reply_text("conversation reset. starting fresh.")
+    await update.message.reply_text("Conversation reset. Your next message starts a new chat.")
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -174,7 +174,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         reply = await asyncio.to_thread(agent.ask, text)
     except Exception:
         log.exception("agent error chat=%s in_len=%d", chat_id, in_len)
-        await msg.reply_text("mindMe hit an error. check the bridge log.")
+        await msg.reply_text("I could not answer just now. Please try again later.")
         return
 
     duration = time.monotonic() - started

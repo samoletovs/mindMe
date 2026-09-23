@@ -24,7 +24,7 @@ PROPOSAL_ACTIONS = {
     "research": (
         "Research", "Start research",
         "One public question, at most 5 sources, one short report; no further jobs. "
-        "Uses existing agent capacity.",
+        "Uses the current research service.",
     ),
     "create_task": (
         "Draft task", "Draft task",
@@ -462,7 +462,7 @@ def render_briefing(
     if results:
         link = github_link(results[0].get("url"), "View result")
         if not add(
-            f"<b>Follow-through</b>\n{len(results)} approved result(s) verified."
+            f"<b>Results checked</b>\n{len(results)} approved result(s) verified."
             + (f" {link}." if link else "") + " /proposals all"
         ):
             raise PlanError("morning_summary_too_long")
@@ -472,7 +472,7 @@ def render_briefing(
         add("No new approval requested. Existing decisions: /proposals")
     due = [item for item in due_tasks(context, today) if item.get("path") != plan.get("focus_path")]
     if due:
-        rows = ["<b>Also on your radar</b>"]
+        rows = ["<b>Also due</b>"]
         for item in due[:2]:
             title, _ = excerpt(item["title"], 85)
             timing, _ = excerpt(task_timing(item, today), 160)
@@ -508,12 +508,12 @@ def render_briefing(
 def render_briefing_details(context: dict[str, Any], today: date) -> str:
     lines = [
         f"Morning details - {today.isoformat()}",
-        "Current source view, not a replay of this morning. No work is started.",
-        "", "Date-relevant tasks",
+        "These are the current notes, not a repeat of this morning's message. No work is started.",
+        "", "Tasks with dates to check",
     ]
     tasks = due_tasks(context, today)
     if not tasks:
-        lines.append("No date-relevant tasks in the available records; source notices still apply.")
+        lines.append("No tasks with dates to check in the available records. Some sources may be missing; see below.")
     for task in tasks:
         lines.extend([
             "", task["title"], task_timing(task, today),
@@ -527,7 +527,7 @@ def render_briefing_details(context: dict[str, Any], today: date) -> str:
     if extras.get("weather"):
         lines.extend(["", str(extras["weather"])])
     if not context.get("goals"):
-        lines.extend(["", "No confirmed goals were available from the canonical source."])
+        lines.extend(["", "No confirmed goals were available in the saved notes."])
     lines.extend(["", "Source updates (not necessarily new work)"])
     for source in context.get("changes", []):
         lines.extend([source["title"], source.get("url") or source["path"]])
@@ -553,7 +553,7 @@ def render_proposal(proposal: dict[str, Any]) -> TelegramHTMLReply:
         f"<b>{title} - Why this?</b>",
         f"<b>Proposed action</b>\n{action}",
         f"<b>Why now</b>\n{why}",
-        f"<b>Scope</b>\n{scope}\nNo work starts before approval.",
+        f"<b>What approval means</b>\n{scope}\nNo work starts before approval.",
         link,
         guidance,
     ])

@@ -293,10 +293,10 @@ def test_source_check_preserves_all_warnings_without_private_content(context: di
     messages = render_weekly_sources(context, {"date": TODAY.isoformat()})
     assert len(messages) == 1
     text = messages[0]
-    assert "Read <b>16 / 150</b> candidates · <b>11 usable notes</b>" in text
+    assert "Read <b>16 / 150</b> selected files · <b>11 usable notes</b>" in text
     assert all(warning in text for warning in context["warnings"])
     assert "<b>Refresh:</b> manually sync only the verified Personal OS folder" in text
-    assert "Last delivered weekly baseline: <b>2026-09-21</b>" in text
+    assert "Last weekly review sent: <b>2026-09-21</b>" in text
     assert "Missing outcomes do not mean inactivity" in text
     assert "404" in text and "personal GitHub account" in text
     assert "PRIVATE" not in text
@@ -313,7 +313,7 @@ def test_source_check_discloses_missing_task_access_and_first_comparison(context
     context["open_loops"] = {"status": "unavailable"}
     text = "\n".join(render_weekly_sources(context, {}))
     assert "<b>Unavailable</b> — not an empty task list." in text
-    assert "first successful review starts the comparison" in text
+    assert "first one starts the comparison" in text
 
 
 def test_formatted_source_check_preserves_long_warnings_and_balanced_html(context: dict) -> None:
@@ -488,7 +488,7 @@ def test_due_tasks_show_real_dates_and_links_with_at_most_three_rows(context: di
         for index in range(5)
     ]
     text = render(validate(raw_plan(context), context), context)
-    task_section = text.split("<b>Date-relevant tasks</b>", 1)[1].split("<b>Your choices</b>", 1)[0]
+    task_section = text.split("<b>Tasks with dates to check</b>", 1)[1].split("<b>Your choices</b>", 1)[0]
 
     assert task_section.count("• ") == 3
     assert task_section.count("deadline 2026-09-24, review 2026-09-20") == 3
@@ -520,7 +520,7 @@ def test_unlinked_due_remainder_is_disclosed_without_inventing_navigation(contex
         for index in range(5)
     ]
     text = render(validate(raw_plan(context), context), context)
-    task_section = text.split("<b>Date-relevant tasks</b>", 1)[1].split("<b>Your choices</b>", 1)[0]
+    task_section = text.split("<b>Tasks with dates to check</b>", 1)[1].split("<b>Your choices</b>", 1)[0]
 
     assert "Other date-relevant tasks are not shown" in task_section
     assert "complete task-source link is unavailable" in task_section
@@ -794,7 +794,7 @@ def test_escaped_summary_expansion_and_large_inputs_remain_bounded(context: dict
     assert "More recorded actions: /proposals all." in text
     assert "Other waiting decisions: /proposals all." in text
     assert "full recommendation does not fit" in text
-    assert "consult linked or connected sources" in text
+    assert "Read the saved sources for the full text" in text
 
 
 def test_card_rationale_can_shorten_but_never_approved_action_or_scope(context: dict) -> None:
@@ -805,7 +805,7 @@ def test_card_rationale_can_shorten_but_never_approved_action_or_scope(context: 
 
     assert telegram_units(text) <= TELEGRAM_LIMIT
     assert proposal["text"] in "".join(parsed(text).text)
-    assert "Rationale abbreviated to fit" in text
+    assert "reason is shortened to fit" in text
     assert "does not complete it" in text
 
 
@@ -828,7 +828,7 @@ def test_emoji_and_escaped_card_keeps_exact_action_within_utf16_limit(context: d
     assert telegram_units(text) <= TELEGRAM_LIMIT
     assert telegram_units(text) > len(text)
     assert proposal["text"] in "".join(parsed(text).text)
-    assert "Rationale abbreviated to fit" in text
+    assert "reason is shortened to fit" in text
     assert "does not complete it" in text
 
 

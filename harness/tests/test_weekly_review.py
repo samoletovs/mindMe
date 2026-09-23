@@ -134,7 +134,7 @@ def test_source_check_does_not_advance_baseline_prune_or_reconcile_decisions(sys
     loop.execute = Mock(side_effect=AssertionError("diagnostics must not reconcile"))
     store.update = Mock(side_effect=AssertionError("diagnostics must not write state"))
     text = "\n".join(review.source_status(TODAY, ["knowledge"]))
-    assert "Last delivered weekly baseline: <b>2026-09-21</b>" in text
+    assert "Last weekly review sent: <b>2026-09-21</b>" in text
     assert previous_reads[-1] == latest_weekly(before)["baseline"]
     assert store.read() == before
     assert not sent and not generated and not executions
@@ -143,7 +143,7 @@ def test_source_check_does_not_advance_baseline_prune_or_reconcile_decisions(sys
 def test_source_check_does_not_create_a_first_baseline(system):
     review, _, store, _, _, sent, generated, executions, _ = system
     before = store.read()
-    assert "No delivered weekly baseline yet" in "\n".join(review.source_status(TODAY, ["knowledge"]))
+    assert "No weekly review has been sent yet" in "\n".join(review.source_status(TODAY, ["knowledge"]))
     assert store.read() == before
     assert not sent and not generated and not executions
 
@@ -197,7 +197,7 @@ def test_task_creation_starts_only_after_its_own_approval_and_is_not_completion(
     receipt = loop.reply(identifier, "approve", TODAY)
     assert len(executions) == 1
     assert store.state["proposals"][identifier]["status"] == "submitted"
-    assert "not yet verified" in receipt
+    assert "not yet confirmed" in receipt
 
 
 def test_dismissed_and_snoozed_actions_are_not_repeated_next_week(system):
