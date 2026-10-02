@@ -24,6 +24,13 @@
 
 ## Code conventions
 
+Optional voice transcription uses `AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT`.
+The legacy `AZURE_OPENAI_WHISPER_DEPLOYMENT` setting remains a fallback; its
+`whisper` value resolves to `gpt-4o-mini-transcribe` (`2025-12-15`) on the same
+account. An unset pair still disables local transcription: do not enable it as
+a side effect of a model migration. JSON response format and a 60-second request
+timeout preserve the transcript contract. Never use real personal audio in tests.
+
 Telegram copy uses the shared `harness/telegram_voice.py` guidance. Keep a plain,
 calm, direct voice for a busy non-native English reader on a phone. Ordinary
 answers are short; explicit More details, comparisons and inspection may be long.
