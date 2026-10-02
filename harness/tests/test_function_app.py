@@ -311,8 +311,38 @@ def test_voice_note_falls_back_to_raw_forward_on_download_error(monkeypatch):
 
 def test_transcribe_voice_returns_none_when_deployment_unset(monkeypatch):
     """_transcribe_voice returns None immediately when the deployment env var is absent."""
+    monkeypatch.delenv("AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT", raising=False)
     monkeypatch.delenv("AZURE_OPENAI_WHISPER_DEPLOYMENT", raising=False)
     assert fa._transcribe_voice(b"audio", "audio/ogg") is None
+
+
+def test_transcribe_voice_resolves_retired_whisper_without_logging_content(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    monkeypatch.delenv("AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT", raising=False)
+    monkeypatch.setenv("AZURE_OPENAI_WHISPER_DEPLOYMENT", "whisper")
+    client = Mock()
+    client.audio.transcriptions.create.return_value = SimpleNamespace(text=" synthetic words ")
+    monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
+    assert fa._transcribe_voice(b"synthetic", "audio/ogg") == "synthetic words"
+    client.audio.transcriptions.create.assert_called_once_with(
+        model="gpt-4o-mini-transcribe", file=("voice.ogg", b"synthetic", "audio/ogg"),
+        response_format="json", timeout=60,
+    )
+
+
+def test_transcribe_voice_prefers_explicit_supported_setting(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    monkeypatch.setenv("AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT", "supported-transcription")
+    monkeypatch.setenv("AZURE_OPENAI_WHISPER_DEPLOYMENT", "whisper")
+    client = Mock()
+    client.audio.transcriptions.create.return_value = SimpleNamespace(text="synthetic")
+    monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
+    assert fa._transcribe_voice(b"synthetic") == "synthetic"
+    assert client.audio.transcriptions.create.call_args.kwargs["model"] == "supported-transcription"
 
 
 def test_download_telegram_file_calls_getfile_then_download(monkeypatch):

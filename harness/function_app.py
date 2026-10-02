@@ -851,11 +851,11 @@ def _download_telegram_file(file_id: str) -> bytes:
 
 
 def _transcribe_voice(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str | None:
-    """Transcribe *audio_bytes* using OpenAI Whisper via Azure AI Foundry.
+    """Transcribe audio using the configured, supported Azure deployment.
 
     Returns the stripped transcript string, or ``None`` when:
-    * ``AZURE_OPENAI_WHISPER_DEPLOYMENT`` is not set (feature disabled), or
-    * the Whisper deployment is unreachable / returns an error, or
+    * neither transcription deployment setting is set (feature disabled), or
+    * the configured deployment is unreachable / returns an error, or
     * the transcript is empty after stripping.
 
     The caller should fall back to raw-forwarding on ``None``.
@@ -864,9 +864,14 @@ def _transcribe_voice(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str |
     Hard Rule 9: span attributes carry byte count and status only — never
     prompts, completions, or the transcript itself.
     """
-    deployment = os.environ.get("AZURE_OPENAI_WHISPER_DEPLOYMENT")
+    deployment = (
+        os.environ.get("AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT", "").strip()
+        or os.environ.get("AZURE_OPENAI_WHISPER_DEPLOYMENT", "").strip()
+    )
     if not deployment:
         return None
+    if deployment == "whisper":
+        deployment = "gpt-4o-mini-transcribe"
     sub = (mime_type or "audio/ogg").split("/")[-1].split(";")[0].strip().lower()
     ext = _VOICE_EXT_MAP.get(sub, "ogg")
     with tracer.start_as_current_span(
@@ -879,6 +884,8 @@ def _transcribe_voice(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str |
             result = openai_client.audio.transcriptions.create(
                 model=deployment,
                 file=(f"voice.{ext}", audio_bytes, mime_type),
+                response_format="json",
+                timeout=60,
             )
             text = (result.text or "").strip()
             span.set_attribute("transcript.length", len(text))
