@@ -15,7 +15,7 @@ RELATIONSHIPS = ["supports", "contradicts", "extends", "duplicates", "applies_to
 ACTIONS = ["curate", "research", "experiment", "remind", "explain", "no_action"]
 BASIS_LABELS = {"observed": "from the source", "inferred": "interpretation", "question": "open question"}
 QUESTION = "What useful connections, evidence gaps or small applications emerge from the selected mindVault knowledge and current approved focus?"
-DISCARDED_CONNECTION_NOTE = "A model-proposed connection was discarded because it did not cite two distinct sources."
+DISCARDED_CONNECTION_NOTE = "At least one model-proposed connection was discarded because it did not cite two distinct sources."
 
 
 class EvolveError(RuntimeError):
@@ -245,7 +245,7 @@ def telegram_parts(review: dict[str, Any], receipt: dict[str, Any], packet: dict
             f"Checked excerpts from {len(review['sources'])} sources, not the whole vault. "
             "This does not test what you know. Research, tasks and note edits still need approval."
             + ("\nNothing new to suggest from these sources." if not review["findings"] else "")
-            + ("\nOne suggested link between ideas was left out because it relied on a single source."
+            + ("\nAt least one suggested link was left out because it relied on a single source."
                if DISCARDED_CONNECTION_NOTE in review["scope"]["limitations"] else "")
         ),
         "finding": None, "keyboard": None,
