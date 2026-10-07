@@ -268,6 +268,19 @@ def _daily_evolve_enabled() -> bool:
     return os.environ.get("MINDME_DAILY_EVOLVE_ENABLED", "").lower() == "true"
 
 
+def _failure_code(exc: BaseException) -> str:
+    """The fixed snake_case code an internal error carries, or "-" for anything else.
+
+    Review, source, state, plan, loop and action errors are raised with literal
+    codes, so logging them names the failing check without logging content. SDK and
+    HTTP errors can carry URLs or payloads, so they are never logged beyond the type.
+    """
+    if not isinstance(exc, (EvolveError, SourceError, StateError, PlanError, LoopError, ActionError)):
+        return "-"
+    reason = str(exc)
+    return reason if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", reason) else "-"
+
+
 def _generate_evolve_review(context: dict) -> dict:
     checkpoint()
     model = os.environ.get("MINDME_BRIEFING_MODEL") or os.environ.get("AZURE_AI_MODEL_DEPLOYMENT")
@@ -2300,7 +2313,7 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
                         else:
                             result = "Use /evolve to see the review, /evolve now to run it, or /evolve feedback to see saved feedback. Delete feedback with /evolve forget YYYY-MM-DD. Use /evolve retry only if a message is missing; it may send the last message again."
                 except (BudgetExceeded, EvolveError, StateError, SourceError, PlanError, ActionError, AzureError, OpenAIError, httpx.HTTPError, TelegramDeliveryError) as exc:
-                    log.error("daily knowledge review unavailable error=%s", type(exc).__name__)
+                    log.error("daily knowledge review unavailable error=%s reason=%s", type(exc).__name__, _failure_code(exc))
                     try:
                         with execution_budget(10):
                             _telegram_send(chat_id, "The knowledge review could not finish. I cannot confirm whether it was published or sent. Use /evolve to check what was saved.")
@@ -2511,7 +2524,7 @@ def morning_briefing_timer(timer: func.TimerRequest) -> None:
                     _evolve_loop().run(date.today())
         except (BudgetExceeded, EvolveError, StateError, SourceError, PlanError, ActionError, AzureError, OpenAIError, httpx.HTTPError, TelegramDeliveryError) as exc:
             failed = True
-            log.error("daily knowledge review failed error=%s", type(exc).__name__)
+            log.error("daily knowledge review failed error=%s reason=%s", type(exc).__name__, _failure_code(exc))
             try:
                 with execution_budget(10):
                     _telegram_send(
