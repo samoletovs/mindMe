@@ -15,6 +15,7 @@ RELATIONSHIPS = ["supports", "contradicts", "extends", "duplicates", "applies_to
 ACTIONS = ["curate", "research", "experiment", "remind", "explain", "no_action"]
 BASIS_LABELS = {"observed": "from the source", "inferred": "interpretation", "question": "open question"}
 QUESTION = "What useful connections, evidence gaps or small applications emerge from the selected mindVault knowledge and current approved focus?"
+DISCARDED_CONNECTION_NOTE = "A model-proposed connection was discarded because it did not cite two distinct sources."
 
 
 class EvolveError(RuntimeError):
@@ -138,11 +139,13 @@ def review_schema(packet: dict[str, Any]) -> dict[str, Any]:
     connection["properties"]["kind"]["enum"] = ["connection"]
     connection["properties"]["relationship"]["enum"] = RELATIONSHIPS
     connection["properties"]["evidence"]["minItems"] = 2
+    # One source cannot ground a connection, so do not offer the model that dead end.
+    branches = [ordinary, connection] if len(packet["sources"]) >= 2 else [ordinary]
     return {
         "type": "object", "additionalProperties": False,
         "properties": {"findings": {
             "type": "array", "maxItems": MAX_FINDINGS if evidence else 0,
-            "items": {"anyOf": [ordinary, connection]},
+            "items": {"anyOf": branches},
         }},
         "required": ["findings"],
     }
@@ -168,6 +171,7 @@ def complete_review(raw: object, packet: dict[str, Any]) -> dict[str, Any]:
         ],
         "findings": [], "proposals": [],
     }
+    discarded = 0
     for row in rows:
         if not isinstance(row, dict) or set(row) != {
             "kind", "basis", "statement", "relationship", "evidence", "action", "next_step",
@@ -194,8 +198,14 @@ def complete_review(raw: object, packet: dict[str, Any]) -> dict[str, Any]:
                 "source": item["source"], "quote": source["quotes"][item["quote_id"]],
             })
         if row["kind"] == "connection":
-            if row["relationship"] not in RELATIONSHIPS or len({item["source"] for item in finding["evidence"]}) < 2:
+            if row["relationship"] not in RELATIONSHIPS:
                 raise EvolveError("ungrounded_connection")
+            # The strict schema cannot express "two distinct sources", and the model
+            # often cites two quotes from one page. Never publish that, but do not let
+            # one unusable finding abort the whole day's review either.
+            if len({item["source"] for item in finding["evidence"]}) < 2:
+                discarded += 1
+                continue
             finding["relationship"] = row["relationship"]
         elif row["relationship"] != "none":
             raise EvolveError("unexpected_relationship")
@@ -215,6 +225,8 @@ def complete_review(raw: object, packet: dict[str, Any]) -> dict[str, Any]:
             "action": row["action"], "status": "proposed",
             "next_step": safe_text(row["next_step"]),
         })
+    if discarded:
+        review["scope"]["limitations"] = [*review["scope"]["limitations"], DISCARDED_CONNECTION_NOTE]
     return deepcopy(review)
 
 
@@ -233,6 +245,8 @@ def telegram_parts(review: dict[str, Any], receipt: dict[str, Any], packet: dict
             f"Checked excerpts from {len(review['sources'])} sources, not the whole vault. "
             "This does not test what you know. Research, tasks and note edits still need approval."
             + ("\nNothing new to suggest from these sources." if not review["findings"] else "")
+            + ("\nOne suggested link between ideas was left out because it relied on a single source."
+               if DISCARDED_CONNECTION_NOTE in review["scope"]["limitations"] else "")
         ),
         "finding": None, "keyboard": None,
     }]

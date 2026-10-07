@@ -12,7 +12,9 @@ from briefing_actions import ActionGateway
 from briefing_state import _encode
 from evolve_loop import DailyEvolve
 from test_briefing_loop import MemoryStore
-from vault_evolve import EvolveError, complete_review, evidence_packet, review_schema, telegram_parts
+from vault_evolve import (
+    DISCARDED_CONNECTION_NOTE, EvolveError, complete_review, evidence_packet, review_schema, telegram_parts,
+)
 
 TODAY = date(2026, 9, 14)
 TEXT = "Both the model and the operating procedure changed."
@@ -76,11 +78,63 @@ def test_invalid_or_unsupplied_evidence_is_rejected(field, value):
         complete_review(raw, evidence_packet(context(), []))
 
 
+def two_source_context():
+    ctx = context()
+    text = "A second pilot changed only the operating procedure."
+    other = {
+        **copy.deepcopy(SOURCE), "path": "wiki/insights/second.md", "title": "Second pilot",
+        "sha256": hashlib.sha256(text.encode()).hexdigest(), "evidence_text": text,
+        "url": SOURCE["url"].replace("pilot.md", "second.md"),
+    }
+    ctx["sources"].append(other)
+    ctx["inventory_paths"].append(other["path"])
+    ctx["source_revisions"][other["path"]] = other["revision"]
+    ctx["processed_revisions"][other["path"]] = other["revision"]
+    return ctx
+
+
+def same_page_connection():
+    return {
+        **generated()["findings"][0], "kind": "connection", "relationship": "supports",
+        "evidence": [{"source": "S1", "quote_id": "Q1"}, {"source": "S1", "quote_id": "Q1"}],
+    }
+
+
 def test_connection_needs_two_distinct_sources_not_two_quotes_from_one_page():
+    # The 2026-10-06/07 production failure: gpt-4o-mini labelled one page quoted twice
+    # a "connection". It must never be published, and it must not take the valid
+    # findings of the day down with it.
     raw = generated()
-    raw["findings"][0].update(kind="connection", relationship="supports")
-    with pytest.raises(EvolveError, match="ungrounded_connection"):
-        complete_review(raw, evidence_packet(context(), []))
+    raw["findings"].append(same_page_connection())
+    packet = evidence_packet(two_source_context(), [])
+    review = complete_review(raw, packet)
+    assert [finding["kind"] for finding in review["findings"]] == ["evidence"]
+    assert DISCARDED_CONNECTION_NOTE in review["scope"]["limitations"]
+
+
+def test_a_review_whose_only_finding_was_ungrounded_says_so_instead_of_looking_quiet():
+    packet = evidence_packet(two_source_context(), [])
+    review = complete_review({"findings": [same_page_connection()]}, packet)
+    assert review["findings"] == [] and review["proposals"] == []
+    first = telegram_parts(review, {"status": "no_action"}, packet)[0]["text"]
+    assert "relied on a single source" in first
+
+
+def test_a_connection_across_two_sources_is_still_published():
+    raw = {"findings": [{
+        **same_page_connection(),
+        "evidence": [{"source": "S1", "quote_id": "Q1"}, {"source": "S2", "quote_id": "Q1"}],
+    }]}
+    review = complete_review(raw, evidence_packet(two_source_context(), []))
+    assert review["findings"][0]["relationship"] == "supports"
+    assert DISCARDED_CONNECTION_NOTE not in review["scope"]["limitations"]
+
+
+def test_one_source_is_never_offered_a_connection_it_cannot_ground():
+    one = review_schema(evidence_packet(context(), []))["properties"]["findings"]["items"]["anyOf"]
+    assert all("connection" not in variant["properties"]["kind"]["enum"] for variant in one)
+    two = review_schema(evidence_packet(two_source_context(), []))["properties"]["findings"]["items"]["anyOf"]
+    assert any(variant["properties"]["kind"]["enum"] == ["connection"] for variant in two)
 
 
 def test_model_schema_cannot_choose_an_unseen_source_or_rewrite_a_quote():
@@ -93,7 +147,8 @@ def test_model_schema_cannot_choose_an_unseen_source_or_rewrite_a_quote():
 
 
 def test_model_schema_prevents_the_real_non_connection_relationship_failure():
-    variants = review_schema(evidence_packet(context(), []))["properties"]["findings"]["items"]["anyOf"]
+    variants = review_schema(evidence_packet(two_source_context(), []))["properties"]["findings"]["items"]["anyOf"]
+    assert len(variants) == 2
     for variant in variants:
         props = variant["properties"]
         if props["kind"]["enum"] == ["connection"]:

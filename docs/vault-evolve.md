@@ -21,7 +21,9 @@ checking as proof of factual correctness or knowledge acquisition.
   Explicit `/evolve now` is an on-demand request even while that section is off.
 - The original briefing and the knowledge review are independent deliveries.
   Failure is surfaced, not treated as a successful empty review; one failing
-  review does not prevent the original briefing.
+  review does not prevent the original briefing. Failures log the error type and
+  its fixed snake_case reason code (for example `reason=review_sources_unavailable`),
+  never content; non-internal errors log `reason=-`.
 - The host timeout is five minutes for the combined timer workload, within the
   existing consumption plan. An HTTP caller can time out earlier; inspect retained
   state before retrying rather than inferring failure or success from that timeout.
@@ -45,6 +47,13 @@ checking as proof of factual correctness or knowledge acquisition.
   literal quotations, raw-byte SHA-256 hashes and proposal-only receipt.
   Source revisions are rechecked before publication. memex independently checks
   source bytes, quotations and source eligibility before accepting the pair.
+- A connection needs two distinct sources. The strict schema cannot express that,
+  so a packet with one source is never offered the connection kind, and a
+  connection citing one page twice is discarded rather than published. The day's
+  other findings still publish, and the receipt limitations and Telegram summary
+  say a connection was discarded, so this is never mistaken for a quiet review.
+  Before 2026-10-08 such a finding aborted the whole review; with gpt-4o-mini that
+  happened in most one-source runs and kept the scan cursor from advancing.
 - Review selection and revalidation apply the writer's stricter privacy,
   metadata and derived-source rules. Ordinary action-briefing eligibility is
   unchanged. A retained prepared review with an ineligible source is invalidated,

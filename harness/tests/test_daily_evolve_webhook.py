@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from unittest.mock import Mock
 
+import httpx
 import pytest
 
 import function_app as fa
@@ -159,3 +160,25 @@ def test_existing_briefing_failure_does_not_prevent_independent_review(monkeypat
     with pytest.raises(RuntimeError, match="Morning delivery incomplete"):
         fa.morning_briefing_timer(Mock())
     loop.run.assert_called_once()
+
+
+def test_a_failed_review_logs_which_check_failed(monkeypatch, owner, caplog):
+    # Three silent failures (09-30, 10-06, 10-07) logged only "EvolveError", which
+    # cannot tell a source outage from a rejected model answer.
+    loop, _, _ = owner
+    loop.run.side_effect = EvolveError("review_sources_unavailable")
+    monkeypatch.setattr(fa, "_deliver_morning_briefing", Mock())
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["knowledge"])
+    with caplog.at_level("ERROR", logger="mindMe.harness"), pytest.raises(RuntimeError):
+        fa.morning_briefing_timer(Mock())
+    assert "error=EvolveError reason=review_sources_unavailable" in caplog.text
+
+
+@pytest.mark.parametrize("exc", [
+    EvolveError("Quote: a private sentence"),
+    EvolveError("x" * 65),
+    RuntimeError("timeout"),
+    httpx.HTTPError("https://api.telegram.org/bot123:secret/sendMessage"),
+])
+def test_failure_codes_never_carry_content_or_foreign_messages(exc):
+    assert fa._failure_code(exc) == "-"
