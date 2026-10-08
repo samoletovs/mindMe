@@ -53,6 +53,7 @@ class BriefingLoop:
         extras: Callable[[list[str]], dict[str, Any]],
         send_html: Callable[[str, list[list[dict[str, str]]] | None], int] | None = None,
         knowledge_revision: Callable[[str], str | None] | None = None,
+        before_claim: Callable[[dict[str, Any], dict[str, Any], date], None] | None = None,
     ) -> None:
         self.store = store
         self.sources = sources
@@ -64,6 +65,7 @@ class BriefingLoop:
         self.knowledge_revision = knowledge_revision or revision
         self.execute = execute
         self.extras = extras
+        self.before_claim = before_claim
 
     def context(
         self, today: date, sections: list[str], *, previous: dict[str, str] | None = None,
@@ -113,24 +115,26 @@ class BriefingLoop:
         context["warnings"] = model_input(context, [])["warnings"]
         return render_briefing_details(context, today)
 
-    def reconcile(self, today: date | None = None) -> None:
+    def reconcile(self, today: date | None = None, *, proposal_id: str | None = None) -> None:
         today = today or date.today()
         pending = [
             copy.deepcopy(record) for record in self.store.read()["proposals"].values()
             if record.get("status") in {"submitted", "uncertain", "executing"}
             and record.get("invalidation_reason") != "source_removed"
+            and (not record.get("task_workspace") or self.before_claim is not None)
+            and (proposal_id is None or record["id"] == proposal_id)
         ][:10]
         for record in pending:
             result = self.execute(record, True)
             status = result.get("status")
-            if status not in {"submitted", "merged", "conflict", "failed", "in_progress", "unknown"}:
+            if status not in {"submitted", "merged", "prepared", "conflict", "failed", "in_progress", "unknown"}:
                 raise LoopError("invalid_action_receipt")
 
             def save(state: dict[str, Any]) -> None:
                 current = state["proposals"].get(record["id"])
                 if current and current.get("status") in {"submitted", "uncertain", "executing"}:
                     current["result"] = result
-                    if status == "merged":
+                    if status in {"merged", "prepared"}:
                         record_transition(current, "snoozed" if current.get("requested_snooze") else "completed", today)
                     elif status == "conflict":
                         record_transition(current, "invalidated", today)
@@ -331,6 +335,15 @@ class BriefingLoop:
         proposal = state["proposals"].get(proposal_id)
         if not proposal or not proposal.get("source_path"):
             return "That proposal is unavailable or its source was removed. Request a new briefing."
+        if proposal.get("task_workspace"):
+            if self.before_claim is None:
+                return "Task actions are unavailable through this handler. No action was started."
+            if intent not in {"approve", "decline", "explain"}:
+                return "Use approve or decline on this exact task action. To change it, prepare a new source-bound action in Tasks."
+            if intent == "explain":
+                return "The exact action is on the original card. Approval never grants permission for other work."
+            if proposal.get("action_id"):
+                return self._receipt_text(proposal)
         task_snooze = intent == "snooze" and proposal["kind"] in {"review_task", "update_task"}
         if intent == "unknown":
             return decision.get("clarification") or (
@@ -473,6 +486,10 @@ class BriefingLoop:
             item = current["proposals"][proposal_id]
             if item["status"] not in {"pending", "accepted", "snoozed", "failed"}:
                 return None
+            if item.get("task_workspace") and self.before_claim is None:
+                raise LoopError("task_approval_requires_task_service")
+            if self.before_claim is not None:
+                self.before_claim(current, item, today)
             if intent == "approve" and item["kind"] == "review_task":
                 record_transition(item, "accepted", today)
                 return None
@@ -497,7 +514,7 @@ class BriefingLoop:
             return self._receipt_text(self.store.read()["proposals"][proposal_id])
         result = self.execute(claimed, False)
         status = result.get("status")
-        if status not in {"merged", "submitted", "failed", "conflict", "in_progress", "unknown"}:
+        if status not in {"merged", "prepared", "submitted", "failed", "conflict", "in_progress", "unknown"}:
             raise LoopError("invalid_action_receipt")
 
         def save_result(current: dict[str, Any]) -> None:
@@ -505,6 +522,7 @@ class BriefingLoop:
             item["result"] = result
             next_status = {
                 "merged": "snoozed" if item.get("requested_snooze") else "completed",
+                "prepared": "completed",
                 "submitted": "submitted", "conflict": "invalidated",
                 "failed": "failed", "in_progress": "executing", "unknown": "uncertain",
             }[status]
@@ -516,6 +534,12 @@ class BriefingLoop:
     @staticmethod
     def _receipt_text(proposal: dict[str, Any]) -> str:
         status = proposal.get("status")
+        if proposal.get("source_status") in {"unavailable", "changed_or_removed"}:
+            return "The receipt is retained, but its source is no longer current or available. Open a fresh task before acting."
+        if proposal.get("task_workspace") and status == "completed":
+            if proposal.get("kind") == "prepare_task":
+                return "Preparation is ready to review in Tasks. It is a draft, not verified task completion."
+            return "I verified the approved result. This does not verify any other real-world task outcome."
         label = {
             "accepted": "Next action selected and saved. The task remains open; reply done only when completed.",
             "submitted": "Approved work submitted for review. Completion is not yet confirmed.",

@@ -28,6 +28,21 @@ decisions and approval-gated task updates. There is no semantic search, calendar
 integration or autonomous task scheduling. `/task` captures an action; it does not schedule it.
 Onboarding, `/start`, `/ping`, and `/help` are also available.
 
+### Personal task workspace
+
+The default-off [single-owner task workspace](docs/task-workspace.md) adds a
+responsive phone/laptop surface on the same Functions host and owner/message-bound
+Telegram clarification. It reads the same canonical task Markdown and reuses the
+existing proposal ledger, approval engine and memex writer. Exact owner approval
+precedes task edits, bounded preparation or public research; submitted writes are
+not described as saved until canonical readback succeeds. Closing a task requires
+the owner to verify its done condition and retain the result/evidence/learning.
+
+Microsoft sign-in is a server-side code+PKCE flow with an exact personal-directory
+owner allowlist. It is not enabled merely by checking out or merging this code.
+App registration, secrets, HTTPS-only host configuration and deployment require
+the separate release gate; there is no production demo-account fallback.
+
 ### Telegram voice
 
 The reader is busy, technically capable and reading on a phone. English is not

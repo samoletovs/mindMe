@@ -149,6 +149,24 @@ composition respects an empty selection and does not fetch disabled weather.
 - Linux Flex timers currently run at 07:30 UTC daily and Sunday 18:00 UTC,
   not Stockholm or Riga local time.
 
+### Owner task surface (default-off code pilot)
+
+The [personal task workspace](task-workspace.md) adds distinct `/api/tasks/*`
+routes to the same Functions package. Their platform-anonymous declarations
+serve only the shell/sign-in flow without a session; data/action handlers require
+the exact configured personal Microsoft owner and mutations require CSRF.
+Existing tool Function keys and Telegram secret/allowlist checks are unchanged.
+No global EasyAuth change, new host, task database, vector store or timer is added.
+
+Canonical task/project views pin regular Git-tree entries. New proposals, exact
+approvals and result receipts share the existing private briefing ledger.
+Publication stays in memex through its exact-manifest `publish_task` operation,
+not a competing GitHub writer. Private preparation can run only inside explicit
+standing scope and hard work/review limits; public research still requires its
+own approval. Closure needs owner verification and a canonical move with retained
+evidence/learning. Local implementation does not imply auth configuration,
+deployment or live acceptance; those gates are recorded separately.
+
 ## 4. Security model
 
 - **Container is private.** No public access. No anonymous read.

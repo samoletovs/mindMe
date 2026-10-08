@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -30,6 +31,7 @@ class ActionGateway:
     def __init__(
         self, *, client: httpx.Client, token: str, repo: str,
         memex_url: str | None, chat_id: int,
+        task_enabled: Callable[[], bool] | None = None,
     ) -> None:
         if not token or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
             raise ActionError("actions_not_configured")
@@ -37,6 +39,7 @@ class ActionGateway:
         self.repo = repo
         self.memex_url = memex_url
         self.chat_id = chat_id
+        self.task_enabled = task_enabled
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
@@ -44,6 +47,8 @@ class ActionGateway:
         }
 
     def __call__(self, proposal: dict[str, Any], reconcile: bool = False) -> dict[str, Any]:
+        if proposal.get("task_workspace") and (self.task_enabled is None or not self.task_enabled()):
+            raise ActionError("task_workspace_not_authorized")
         identifier = proposal.get("action_id", "")
         if not _ACTION_ID.fullmatch(identifier):
             raise ActionError("invalid_action_identifier")
@@ -52,8 +57,13 @@ class ActionGateway:
             if reconcile:
                 return self._research_status(proposal)
             return self._research_start(proposal)
-        if action["kind"] not in {"create_task", "update_task"}:
+        if action["kind"] not in {"create_task", "update_task", "refine_task"}:
             raise ActionError("unsupported_action")
+        if reconcile and proposal.get("task_workspace"):
+            publication_id = proposal.get("publication_action_id")
+            if not isinstance(publication_id, str):
+                return {"status": "unknown", "error": "task_receipt_requires_reconciliation"}
+            return self.publish_task(proposal, publication_id)
         if reconcile and self._repo_url((proposal.get("result") or {}).get("pr_url"), "pull"):
             return self._task_status(proposal)
         if not self.memex_url:
@@ -66,12 +76,20 @@ class ActionGateway:
             "action_id": identifier, "kind": action["kind"],
         }
         if action["kind"] == "create_task":
-            payload["text"] = safe_text(action["text"])
+            validated_text = safe_text(action["text"], 2000 if "definition" in action else 700)
+            payload["text"] = action["text"] if "definition" in action else validated_text
+            if "definition" in action:
+                payload["definition"] = action["definition"]
         else:
             payload.update(
                 path=action["path"], expected_revision=proposal["source_revision"],
-                change=action["change"],
             )
+            field = "changes" if action["kind"] == "refine_task" else "change"
+            payload[field] = action[field]
+            if "completion" in action:
+                payload["completion"] = action["completion"]
+        if len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 8192:
+            raise ActionError("task_payload_capacity")
         try:
             response = self.client.post(self.memex_url, json=payload, follow_redirects=False)
             if response.status_code >= 500:
@@ -82,14 +100,85 @@ class ActionGateway:
             if (
                 not isinstance(result, dict)
                 or result.get("action_id") != identifier
+                or not isinstance(result.get("status"), str)
                 or result.get("status") not in {"submitted", "merged", "conflict", "failed", "in_progress"}
             ):
                 raise ActionError("invalid_task_receipt")
             if result.get("pr_url") and not self._repo_url(result["pr_url"], "pull"):
                 raise ActionError("invalid_result_link")
+            if proposal.get("task_workspace") and (
+                result["status"] == "merged"
+                or (result["status"] == "submitted" and (
+                    result.get("version") != 1
+                    or not self._repo_url(result.get("pr_url"), "pull")
+                    or not isinstance(result.get("source_revision"), str)
+                    or not re.fullmatch(r"[a-f0-9]{40}", result["source_revision"])
+                    or not self._task_result_path(proposal, result.get("path"))
+                ))
+            ):
+                raise ActionError("invalid_task_receipt")
             return result
         except (httpx.HTTPError, ValueError):
             return {"status": "unknown", "error": "task_result_unconfirmed"}
+
+    def publish_task(self, proposal: dict[str, Any], publication_id: str) -> dict[str, Any]:
+        if not proposal.get("task_workspace") or self.task_enabled is None or not self.task_enabled():
+            raise ActionError("task_workspace_not_authorized")
+        target = proposal.get("action_id")
+        if (
+            not isinstance(target, str) or not _ACTION_ID.fullmatch(target)
+            or not _ACTION_ID.fullmatch(publication_id) or not proposal.get("approved_on")
+            or proposal.get("action", {}).get("kind") not in {"create_task", "update_task", "refine_task"}
+            or not self.memex_url
+        ):
+            raise ActionError("task_publication_not_authorized")
+        url = urlsplit(self.memex_url)
+        if url.scheme != "https" or not url.netloc or url.username or url.password:
+            raise ActionError("unsafe_action_endpoint")
+        try:
+            response = self.client.post(
+                self.memex_url, follow_redirects=False,
+                json={
+                    "version": 1, "vault_id": "mindMe", "chat_id": self.chat_id,
+                    "action_id": publication_id, "kind": "publish_task", "target_action_id": target,
+                },
+            )
+            if response.status_code not in {200, 202, 400, 403, 409, 422, 503}:
+                return {"status": "unknown", "error": "task_publication_unconfirmed"}
+            result = response.json()
+            if (
+                not isinstance(result, dict) or result.get("action_id") != publication_id
+                or result.get("target_action_id") != target
+                or not isinstance(result.get("status"), str)
+                or result.get("status") not in {"submitted", "merged", "conflict", "failed", "in_progress"}
+                or (result.get("pr_url") and not self._repo_url(result["pr_url"], "pull"))
+                or (result.get("status") in {"merged", "submitted"} and (
+                    not self._task_result_path(proposal, result.get("path"))
+                    or not self._repo_url(result.get("pr_url"), "pull")
+                    or ((proposal.get("result") or {}).get("pr_url")
+                        and result["pr_url"] != proposal["result"]["pr_url"])
+                ))
+                or (result.get("status") == "merged" and (
+                    not isinstance(result.get("canonical_revision"), str)
+                    or not re.fullmatch(r"[a-f0-9]{40}", result["canonical_revision"])
+                ))
+            ):
+                raise ActionError("invalid_publication_receipt")
+            return result
+        except (httpx.HTTPError, ValueError):
+            return {"status": "unknown", "error": "task_publication_unconfirmed"}
+
+    @staticmethod
+    def _task_result_path(proposal: dict[str, Any], path: object) -> bool:
+        action = proposal["action"]
+        if action["kind"] in {"update_task", "refine_task"}:
+            expected = action["path"]
+            if action.get("change", {}).get("status") == "done":
+                expected = "tasks/done/" + expected.rsplit("/", 1)[-1]
+            return path == expected
+        return isinstance(path, str) and bool(re.fullmatch(
+            rf"tasks/\d{{4}}-\d{{2}}-\d{{2}}-action-{re.escape(proposal['action_id'])}\.md", path,
+        ))
 
     def save_review(self, identifier: str, review: dict[str, Any], source_revision: str) -> dict[str, Any]:
         if not _ACTION_ID.fullmatch(identifier) or not self.memex_url or not re.fullmatch(r"[a-f0-9]{40}", source_revision):
@@ -131,17 +220,7 @@ class ActionGateway:
         number = result["pr_url"].rsplit("/", 1)[-1]
         path = result.get("path")
         action = proposal["action"]
-        if action["kind"] == "update_task":
-            expected_path = action["path"]
-            if action.get("change", {}).get("status") == "done":
-                expected_path = "tasks/done/" + expected_path.rsplit("/", 1)[-1]
-            valid_path = path == expected_path
-        else:
-            valid_path = isinstance(path, str) and bool(re.fullmatch(
-                rf"tasks/\d{{4}}-\d{{2}}-\d{{2}}-action-{re.escape(proposal['action_id'])}\.md",
-                path,
-            ))
-        if not valid_path:
+        if not self._task_result_path(proposal, path):
             raise ActionError("invalid_task_result_path")
         try:
             response = self.client.get(

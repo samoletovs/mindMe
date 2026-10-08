@@ -27,6 +27,7 @@ def owner(monkeypatch):
     monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "true")
     sent = Mock()
     loop = Mock()
+    loop.store.read.return_value = {"proposals": {}}
     loop.target.return_value = "a" * 24
     loop.reply.return_value = "Decision saved."
     monkeypatch.setattr(fa, "_telegram_send", sent)
