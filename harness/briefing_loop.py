@@ -66,6 +66,7 @@ class BriefingLoop:
         self.execute = execute
         self.extras = extras
         self.before_claim = before_claim
+        self.capture_revision: Callable[[str], str | None] | None = None
 
     def context(
         self, today: date, sections: list[str], *, previous: dict[str, str] | None = None,
@@ -399,6 +400,10 @@ class BriefingLoop:
             if is_expired(proposal["expires_on"], today):
                 return "That proposal expired. Request a fresh proposal before acting."
             revision_reader = self.knowledge_revision if proposal.get("knowledge_sources") else self.revision
+            if proposal.get("dashboard_source"):
+                if self.capture_revision is None:
+                    return "Source-bound capture is unavailable through this handler. No action was started."
+                revision_reader = self.capture_revision
             if revision_reader(proposal["source_path"]) != proposal["source_revision"]:
                 self.store.update(lambda current: current["proposals"][proposal_id].update(status="invalidated"))
                 return "The source changed or was removed. The old approval cannot be used; request a fresh proposal."

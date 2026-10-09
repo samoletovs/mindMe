@@ -5,11 +5,18 @@ The implemented source is `harness/web/index.html`, `tasks.css`, and `tasks.js`.
 
 ## Composition
 
-A short navigation rail leads to Needs you, All tasks, Areas & projects, and Activity.
+A short navigation rail leads to Today, Tasks, Knowledge, Areas & projects, and
+Activity. Needs you and All tasks remain filters inside Tasks.
 The task ledger and a detail pane share the desktop work surface. On narrow screens,
 opening a task replaces the list; a visible Back to tasks control restores it.
 The optional board is horizontally scrollable, with normal forms for stage changes.
 Dragging is never required.
+
+Today puts dated approved focus before a paired view of task attention and source
+changes. Knowledge starts with an Inbox, using the same ruled ledger and detail
+pane to show exact quotations and a same-origin source reader. A finding's
+evidence takes one interaction; its source takes two. On a phone the reader
+replaces the inbox with an explicit Back control. No future-phase tabs are shown.
 
 Capture remains in the header. Exact proposed changes are reviewed in the work
 stream, not behind a generic confirmation modal. The interface distinguishes

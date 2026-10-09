@@ -176,10 +176,19 @@ SDK telemetry regression alongside any tracing changes.
 - Not a template. Don't generalize.
 - Not multi-user. Don't add user tables.
 - Not a chatbot platform. Don't add session management beyond what Foundry provides.
-- Not a productivity SaaS. The explicitly approved personal-task pilot is the
-  only web surface: one configured personal Microsoft owner, the existing
-  Functions host, canonical task Markdown, and the existing approval ledger.
+- Not a productivity SaaS. The explicitly approved personal-task pilot and its
+  first-release Today/Knowledge dashboard share one web surface: one configured
+  personal Microsoft owner, the existing Functions host, safe canonical
+  mindVault material, canonical task Markdown, and the existing approval ledger.
   Do not generalize it into a public app or add another task database.
+
+The dashboard's generated daily reviews and weekly digests are display-only;
+`dashboard_sources.py` must not loosen generation eligibility. Every displayed
+field and reference is subject to privacy checks. Evidence reads resolve
+server-owned IDs in pinned regular-file trees; no arbitrary URL reader.
+Feedback uses `evolve_feedback.py` and the same private fourteen-day evolve state
+as Telegram, not browser callback replay. `dashboard_visit` is one content-free
+CAS-protected marker, not a reading history. See `docs/vault-dashboard.md`.
 
 If a feature request doesn't fit, push back. The success criterion is "does this make my mornings calmer?" — nothing else.
 

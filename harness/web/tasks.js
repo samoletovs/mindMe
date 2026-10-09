@@ -1,3 +1,5 @@
+import { Dashboard } from "./dashboard.js";
+
 const API = "/api/tasks/api/";
 const STAGES = ["untriaged", "clarify", "backlog", "ready", "doing", "waiting", "verify"];
 const LABELS = {
@@ -9,10 +11,16 @@ const LABELS = {
 };
 const $ = (id) => document.getElementById(id);
 const state = {
-  csrf: "", view: "needs", layout: "list", items: [], overview: null, selected: null,
+  csrf: "", view: "today", layout: "list", items: [], overview: null, selected: null,
   tab: "overview", busy: false, unknown: null, proposal: null, clarification: null,
   loading: false, detailGeneration: 0, sessionGeneration: 0, authExpires: 0, expiryTimer: null,
+  captureSource: null,
 };
+const dashboard = new Dashboard({
+  state, element, append, button, writeButton, empty, api, mutate, showNotice, setBusy,
+  renderTaskRow, setView, beginSourceCapture,
+  openTask: (path) => { setView("tasks"); openTask(path); },
+});
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -203,9 +211,12 @@ function isAttention(task) {
 function pendingProposals() {
   return (state.overview?.history || []).filter((record) => record.status === "pending" && record.action && record.approval_digest);
 }
-function setView(view) {
+function setView(view, load = true) {
+  if (!["today", "needs", "tasks", "knowledge", "areas", "activity"].includes(view)) view = "today";
   state.view = view;
   const titles = {
+    today: ["Today", "Approved focus, current work and something worth revisiting."],
+    knowledge: ["Knowledge", "Understand the finding. Check its evidence. Choose what happens next."],
     needs: ["Needs you", "Decisions, due follow-ups and the work you selected."],
     tasks: ["All tasks", "An open task is not automatically today's commitment."],
     areas: ["Areas & projects", "Keep responsibilities visible. Choose which outcomes to advance."],
@@ -213,17 +224,25 @@ function setView(view) {
   };
   $("view-title").textContent = titles[view][0];
   $("view-description").textContent = titles[view][1];
+  if (location.hash !== `#${view}`) history.replaceState(null, "", `#${view}`);
   document.querySelectorAll("[data-view]").forEach((node) => {
-    if (node.dataset.view === view) node.setAttribute("aria-current", "page");
+    if (node.dataset.view === view || (view === "needs" && node.dataset.view === "tasks")) node.setAttribute("aria-current", "page");
     else node.removeAttribute("aria-current");
   });
   $("tasks-section").hidden = !["needs", "tasks"].includes(view);
   $("areas-section").hidden = view !== "areas";
   $("activity-section").hidden = view !== "activity";
+  $("today-section").hidden = view !== "today";
+  $("knowledge-section").hidden = view !== "knowledge";
+  $("warnings").hidden = view === "knowledge";
+  $("scope-needs").setAttribute("aria-pressed", String(view === "needs"));
+  $("scope-all").setAttribute("aria-pressed", String(view !== "needs"));
   render();
+  if (load && state.csrf && view === "today" && !dashboard.today) dashboard.loadToday();
+  if (load && state.csrf && view === "knowledge" && !dashboard.inbox) dashboard.loadInbox();
 }
-function renderTaskRow(task) {
-  const row = button("", () => openTask(task.path), "task-row");
+function renderTaskRow(task, action = () => openTask(task.path)) {
+  const row = button("", action, "task-row");
   row.setAttribute("aria-pressed", String(state.selected?.path === task.path));
   const top = element("div", null, "row-top");
   append(top, statusBadge(task.stage), element("span", task.area ? prettyId(task.area) : "Area not clarified"));
@@ -318,6 +337,12 @@ function render() {
   renderTasks();
   if (state.view === "areas") renderAreas();
   if (state.view === "activity") renderActivity();
+  if (state.view === "today") dashboard.renderToday();
+  if (state.view === "knowledge") {
+    $("snapshot").textContent = dashboard.inbox
+      ? `Canonical review snapshot ${dashboard.inbox.canonical_revision.slice(0, 7)}`
+      : "Review sources checked separately from tasks";
+  }
 }
 async function loadOverview(appendPage = false) {
   if (state.loading) return;
@@ -824,6 +849,7 @@ function renderAreas() {
   setBusy(state.busy);
 }
 function clearData() {
+  dashboard.clear();
   clearTimeout(state.expiryTimer);
   state.expiryTimer = null;
   state.authExpires = 0;
@@ -831,6 +857,9 @@ function clearData() {
   state.detailGeneration += 1;
   state.csrf = ""; state.items = []; state.overview = null; state.selected = null;
   state.proposal = null; state.clarification = null; state.unknown = null;
+  state.captureSource = null;
+  $("capture-context").textContent = "";
+  $("capture-context").hidden = true;
   for (const id of ["task-list", "inspector", "activity-list", "proposal-preview", "project-options",
     "standing-options", "area-list", "capture-details", "warnings", "budget-details", "snapshot", "attention"]) $(id).replaceChildren();
   $("capture-form").reset();
@@ -868,7 +897,7 @@ async function start() {
   $("workspace").hidden = true;
   $("sign-in").hidden = true;
   $("access-retry").hidden = true;
-  $("access-message").textContent = "Checking your personal workspace. No task data is stored in this browser.";
+  $("access-message").textContent = "Checking your personal workspace. No private content is stored in this browser.";
   try {
     const session = await api("session");
     if (session.authenticated !== true || typeof session.csrf !== "string" || !session.csrf
@@ -881,6 +910,7 @@ async function start() {
     $("connection").textContent = "Personal workspace";
     checkSessionExpiry();
     await loadOverview();
+    setView(location.hash.slice(1) || "today");
   } catch (error) {
     state.csrf = "";
     $("access-message").textContent = error.status === 401
@@ -905,7 +935,14 @@ function setLayout(layout) {
   $("layout-board").setAttribute("aria-pressed", String(layout === "board"));
   renderTasks();
 }
-$("refresh").addEventListener("click", () => loadOverview());
+$("refresh").addEventListener("click", () => {
+  loadOverview();
+  if (state.view === "today") dashboard.loadToday();
+  if (state.view === "knowledge") dashboard.loadInbox();
+});
+$("scope-needs").addEventListener("click", () => setView("needs"));
+$("scope-all").addEventListener("click", () => setView("tasks"));
+window.addEventListener("hashchange", () => setView(location.hash.slice(1)));
 $("load-more").addEventListener("click", () => loadOverview(true));
 $("projects-more").addEventListener("click", loadProjects);
 $("history-more").addEventListener("click", loadHistory);
@@ -913,8 +950,33 @@ $("access-retry").addEventListener("click", start);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) checkSessionExpiry(); });
 window.addEventListener("focus", checkSessionExpiry);
 window.addEventListener("pageshow", checkSessionExpiry);
-$("capture-open").addEventListener("click", () => { $("capture-section").hidden = false; $("capture-text").focus(); $("capture-section").scrollIntoView({ block: "start" }); });
-$("capture-cancel").addEventListener("click", () => { $("capture-section").hidden = true; $("capture-open").focus(); });
+function beginSourceCapture(source, finding) {
+  state.captureSource = { id: source.id, revision: source.revision, finding: finding?.id || null };
+  $("capture-form").reset();
+  const text = finding?.next_step || `Review ${source.title} and choose a concrete next action.`;
+  $("capture-text").value = text;
+  $("capture-title-input").value = Array.from(text).slice(0, 120).join("");
+  $("capture-context").textContent = `From ${source.title}${finding ? `, ${finding.id}` : ""}. Canonical provenance and exact evidence will be retained and rechecked before approval.`;
+  $("capture-context").hidden = false;
+  openCapture();
+}
+function openCapture() {
+  $("capture-section").hidden = false;
+  $("capture-text").focus();
+  $("capture-section").scrollIntoView({ block: "start" });
+}
+$("capture-open").addEventListener("click", () => {
+  if (state.captureSource) $("capture-form").reset();
+  state.captureSource = null;
+  $("capture-context").hidden = true;
+  openCapture();
+});
+$("capture-cancel").addEventListener("click", () => {
+  if (state.captureSource) $("capture-form").reset();
+  state.captureSource = null;
+  $("capture-context").hidden = true;
+  $("capture-section").hidden = true; $("capture-open").focus();
+});
 $("proposal-close").addEventListener("click", () => { $("proposal-section").hidden = true; state.proposal = null; });
 $("recover-request").addEventListener("click", () => {
   if (state.unknown && !state.busy) performMutation(state.unknown);
@@ -931,10 +993,13 @@ $("capture-form").addEventListener("submit", (event) => {
     const value = String(form.get(name) || "").trim();
     if (value) definition[name] = value;
   }
-  mutate("capture", { request_id: requestId(), text, definition }, async (record) => {
+  const source = state.captureSource;
+  mutate(source ? "dashboard/capture" : "capture", { request_id: requestId(), text, definition, ...(source || {}) }, async (record) => {
     showProposal(record);
     $("capture-form").reset();
     $("capture-section").hidden = true;
+    state.captureSource = null;
+    $("capture-context").hidden = true;
     await loadOverview();
   });
 });

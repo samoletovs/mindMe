@@ -159,6 +159,7 @@ class TaskService:
         attention_timezone: ZoneInfo,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         publish: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
+        capture_reader: Callable[[str], dict[str, Any] | None] | None = None,
         enabled: Callable[[], bool] = lambda: True,
         daily_limit: int = 3, monthly_limit: int = 40, review_capacity: int = 3,
     ) -> None:
@@ -174,6 +175,7 @@ class TaskService:
         self.attention_timezone, self.clock = attention_timezone, clock
         self.generate = generate
         self.publish_action = publish
+        self.capture_reader = capture_reader
         self.enabled = enabled
         self.daily_limit, self.monthly_limit, self.review_capacity = daily_limit, monthly_limit, review_capacity
         original = loop.execute
@@ -191,6 +193,16 @@ class TaskService:
                 ):
                     raise TaskError("task_execution_requires_claim")
             if record["action"]["kind"] != "prepare_task":
+                if record.get("dashboard_source"):
+                    try:
+                        self._capture_recheck(record)
+                    except TaskError as error:
+                        if str(error) != "task_source_changed":
+                            raise
+                        return {
+                            **_safe_receipt(record.get("result") or {}),
+                            "status": "unknown" if reconcile else "conflict", "error": "task_source_changed",
+                        }
                 return original(record, reconcile)
             if reconcile:
                 return record.get("result") or {"status": "unknown", "error": "preparation_unconfirmed"}
@@ -229,6 +241,11 @@ class TaskService:
 
         loop.execute = execute
         loop.before_claim = self._before_claim
+        if capture_reader is not None:
+            def capture_revision(path: str) -> str | None:
+                current = capture_reader(path)
+                return current["revision"] if current else None
+            loop.capture_revision = capture_revision
 
     def _require_enabled(self) -> None:
         if not self.enabled():
@@ -268,10 +285,11 @@ class TaskService:
 
     def _save(
         self, source: dict[str, Any], action: dict[str, Any], kind: str, request_id: str, today: date,
+        *, dashboard_source: bool = False,
     ) -> dict[str, Any]:
         request_id = _identifier(request_id)
         request_key = fingerprint(["task-request", request_id])
-        digest = fingerprint([source["path"], source["revision"], action, kind])
+        digest = fingerprint([source["path"], source["revision"], action, kind, *([True] if dashboard_source else [])])
         identifier = fingerprint([digest, request_id if kind == "capture_task" else "source-bound"])[:24]
         record = {
             "id": identifier, "kind": kind, "text": (
@@ -286,6 +304,8 @@ class TaskService:
             "expires_on": (today + timedelta(days=14)).isoformat(), "message_ids": [],
             "action": action, "task_workspace": True, "approval_digest": digest,
         }
+        if dashboard_source:
+            record["dashboard_source"] = True
         if len(json.dumps(action, ensure_ascii=False).encode("utf-8")) > 6800:
             raise TaskError("task_action_too_large")
 
@@ -305,7 +325,9 @@ class TaskService:
 
         return self._project_receipt(self.store.update(save), today)
 
-    def capture(self, payload: dict[str, Any], today: date) -> dict[str, Any]:
+    def capture(
+        self, payload: dict[str, Any], today: date, *, source: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if set(payload) != {"request_id", "text", "definition"}:
             raise TaskError("task_request_invalid")
         _text(payload["text"], 2000, paragraph=False)
@@ -318,9 +340,17 @@ class TaskService:
             raise TaskError("task_definition_incomplete")
         self._project(definition)
         return self._save(
-            self._source("tasks/README.md"), {"kind": "create_task", "text": text, "definition": definition},
-            "capture_task", payload["request_id"], today,
+            source if source is not None else self._source("tasks/README.md"),
+            {"kind": "create_task", "text": text, "definition": definition},
+            "capture_task", payload["request_id"], today, dashboard_source=source is not None,
         )
+
+    def _capture_recheck(self, record: dict[str, Any]) -> None:
+        if not record.get("dashboard_source"):
+            return
+        source = self.capture_reader(record["source_path"]) if self.capture_reader else None
+        if source is None or source["revision"] != record["source_revision"]:
+            raise TaskError("task_source_changed")
 
     def refine(self, payload: dict[str, Any], today: date) -> dict[str, Any]:
         if set(payload) != {"request_id", "path", "revision", "changes"}:
@@ -420,7 +450,10 @@ class TaskService:
         if not proposal.get("task_workspace"):
             return
         self._require_enabled()
-        if fingerprint([proposal["source_path"], proposal["source_revision"], proposal["action"], proposal["kind"]]) != proposal["approval_digest"]:
+        if fingerprint([
+            proposal["source_path"], proposal["source_revision"], proposal["action"], proposal["kind"],
+            *([True] if proposal.get("dashboard_source") else []),
+        ]) != proposal["approval_digest"]:
             raise TaskError("task_approval_changed")
         standing = proposal.get("standing_authorization")
         if standing:
@@ -520,6 +553,7 @@ class TaskService:
         record = self.store.update(claim)
         if record["status"] == "completed":
             return self._project_receipt(record, today)
+        self._capture_recheck(record)
         result = self.publish_action(record, record["publication_action_id"])
         if result.get("status") not in {"submitted", "merged", "conflict", "failed", "in_progress", "unknown"}:
             raise TaskError("task_publication_invalid")
@@ -588,16 +622,31 @@ class TaskService:
         path, revision = record.get("source_path"), record.get("source_revision")
         result = record.get("result") or {}
         tombstone = record.get("invalidation_reason") == "source_removed"
+        origin_current = True
+        if record.get("dashboard_source") and not tombstone and path:
+            if path not in checked:
+                try:
+                    checked[path] = self.capture_reader(path) if self.capture_reader else None
+                except SourceError:
+                    checked[path] = None
+                    unavailable.add(path)
+            origin = checked[path]
+            origin_current = origin is not None and origin["revision"] == revision
         if not tombstone and record.get("kind") in {"capture_task", "refine_task", "edit_task", "close_task"} and result.get("status") == "merged":
-            path, revision = result.get("path"), result.get("source_revision")
+            if origin_current:
+                path, revision = result.get("path"), result.get("source_revision")
         if not tombstone and path and path not in checked:
             try:
-                checked[path] = self.repository.read_receipt_source(path)
+                reader = (
+                    self.capture_reader if record.get("dashboard_source") and result.get("status") != "merged"
+                    else self.repository.read_receipt_source
+                )
+                checked[path] = reader(path) if reader else None
             except SourceError:
                 checked[path] = None
                 unavailable.add(path)
         current = checked.get(path) if path and not tombstone else None
-        if current is not None and revision == current["revision"]:
+        if origin_current and current is not None and revision == current["revision"]:
             return {**_receipt_fields(record), "source_status": "current"}
         item = {
             "id": record["id"], "kind": record["kind"], "status": record["status"],

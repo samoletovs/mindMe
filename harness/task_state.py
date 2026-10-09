@@ -43,8 +43,16 @@ def _refs(value: object, limit: int) -> bool:
 
 
 def validate_workspace(value: object) -> None:
-    if not isinstance(value, dict) or set(value) != set(empty_workspace()):
+    if not isinstance(value, dict) or set(value) - {"dashboard_visit"} != set(empty_workspace()):
         raise StateError("invalid_task_workspace")
+    if "dashboard_visit" in value:
+        visit = value["dashboard_visit"]
+        if (
+            not isinstance(visit, dict) or set(visit) != {"revision", "observed_at"}
+            or not isinstance(visit["revision"], str) or not SHA.fullmatch(visit["revision"])
+            or type(visit["observed_at"]) is not int or visit["observed_at"] <= 0
+        ):
+            raise StateError("invalid_dashboard_visit")
     if not _refs(value["active_projects"], 8) or any(
         not PROJECT.fullmatch(identifier) for identifier in value["active_projects"]
     ):

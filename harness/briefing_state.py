@@ -228,6 +228,11 @@ def _validate_proposal(identifier: str, record: object) -> None:
         return
     if not _PROPOSAL_KEYS <= record.keys():
         raise StateError("invalid_proposal")
+    if "dashboard_source" in record and (
+        record["dashboard_source"] is not True or not record.get("task_workspace")
+        or record.get("kind") != "capture_task"
+    ):
+        raise StateError("invalid_dashboard_capture")
     if "knowledge_sources" in record:
         from knowledge_state import _refs
 

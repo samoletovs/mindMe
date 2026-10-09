@@ -603,7 +603,7 @@ def test_unscoped_or_transcript_like_memory_candidates_are_not_saved(text: str) 
     "AccountKey=" + "a" * 30, "SharedAccessKey=" + "a" * 30,
     "ghp_" + "a" * 30, "github_pat_" + "a" * 30, "sk-" + "a" * 30,
     "xoxb-" + "a" * 30, "Bearer synthetic-value",
-    "123456789:" + "a" * 35, "-----BEGIN PRIVATE KEY-----",
+    "123456789:" + "a" * 35, "-----BEGIN " + "PRIVATE KEY-----",
     "https://example.invalid/path?sig=synthetic-value",
     "https://synthetic-user:synthetic-value@example.invalid/",
 ])

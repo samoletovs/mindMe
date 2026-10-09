@@ -9,18 +9,17 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from briefing_plan import fingerprint, safe_text
-from briefing_sources import SourceError, _SENSITIVE_CONTENT
+from briefing_plan import fingerprint
 from briefing_state import BriefingStore
+from evolve_feedback import RETENTION_DAYS, ReviewFeedback
 from execution_budget import checkpoint, execution_budget
 from vault_evolve import BASIS_LABELS, EvolveError, complete_review, evidence_packet, telegram_parts
 
 EVOLVE_STATE_BLOB = "system/mindme/vault-evolve-state-v1.json"
-RETENTION_DAYS = 14
 LEASE_SECONDS = 600
 
 
-class DailyEvolve:
+class DailyEvolve(ReviewFeedback):
     def __init__(
         self, *, store: BriefingStore,
         sources: Callable[[dict[str, Any]], dict[str, Any]],
@@ -30,51 +29,11 @@ class DailyEvolve:
         revision: Callable[[str], str | None],
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
-        self.store = store
+        super().__init__(store=store, revision=revision, clock=clock)
         self.sources = sources
         self.generate = generate
         self.publish = publish
         self.send = send
-        self.revision = revision
-        self.clock = clock
-
-    def _expire(self, today: date) -> None:
-        def remove(state: dict[str, Any]) -> None:
-            for key in list(state["deliveries"]):
-                if today >= date.fromisoformat(key) + timedelta(days=RETENTION_DAYS):
-                    del state["deliveries"][key]
-        self.store.update(remove)
-
-    def _invalidate(self, key: str) -> None:
-        def remove(state: dict[str, Any]) -> None:
-            current = state["deliveries"].get(key)
-            if current:
-                parts = current.get("parts", [])
-                current["bindings"] = {
-                    str(message_id): parts[index]["finding"]
-                    for index, message_id in enumerate(current["message_ids"])
-                    if index < len(parts) and parts[index].get("finding")
-                } or current.get("bindings", {})
-                for field in ("review", "packet", "parts", "feedback", "owner", "inflight"):
-                    current.pop(field, None)
-                current.update(phase="invalidated", status="failed", lease_until=0)
-        self.store.update(remove)
-
-    def _sources_current(self, key: str, record: dict[str, Any]) -> bool:
-        for source in record.get("packet", {}).get("sources", []):
-            checkpoint()
-            try:
-                revision = self.revision(source["path"])
-                checkpoint()
-            except SourceError as error:
-                if str(error) != "source_no_longer_permitted":
-                    raise
-                self._invalidate(key)
-                return False
-            if revision != source["revision"]:
-                self._invalidate(key)
-                return False
-        return True
 
     def _reconcile_sources(self, context: dict[str, Any]) -> None:
         inventory = context.get("inventory_paths")
@@ -188,6 +147,10 @@ class DailyEvolve:
                     "review", "packet", "processed_revisions", "scan_cursor", "source_revision", "phase",
                 )
             }))
+        if record["phase"] == "canonical":
+            parts = telegram_parts(record["review"], record["receipt"], record["packet"])
+            record.update(parts=parts, phase="delivering")
+            save(lambda current, state: current.update(parts=parts, phase="delivering"))
         if record["phase"] == "prepared":
             with execution_budget(30, reserve=45):
                 if not self._sources_current(key, record):
@@ -241,15 +204,6 @@ class DailyEvolve:
         save(finish)
         return "Knowledge review sent. No proposed work was approved."
 
-    def _live_record(self, key: str, today: date) -> dict[str, Any] | None:
-        self._expire(today)
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", key):
-            raise EvolveError("invalid_review_identifier")
-        record = self.store.read()["deliveries"].get(key)
-        if not record or not record.get("review"):
-            return None
-        return record if self._sources_current(key, record) else None
-
     def show(self, today: date) -> str:
         record = self._live_record(today.isoformat(), today)
         if not record:
@@ -280,45 +234,6 @@ class DailyEvolve:
                     finding = parts[index].get("finding") if index < len(parts) else None
                     return (key, finding) if finding else None
         return None
-
-    def feedback(self, key: str, finding_id: str, text: str, today: date) -> str:
-        record = self._live_record(key, today)
-        if not record:
-            return "That review is unavailable or its evidence changed. No feedback or action was recorded."
-        finding = next((item for item in record["review"]["findings"] if item["id"] == finding_id), None)
-        if not finding:
-            raise EvolveError("invalid_finding_identifier")
-        value = text.strip()
-        if not value or len(value) > 280 or _SENSITIVE_CONTENT.search(value):
-            return "Use at most 280 non-sensitive characters for review feedback. Nothing was saved."
-        safe_text(value, 280)
-        if value.casefold() == "why":
-            return "\n\n".join([
-                "These quotes show what the sources say. They do not prove the interpretation is true.",
-                *[f"“{item['quote']}”" for item in finding["evidence"]],
-            ])
-        if value.casefold() in {"yes", "approve", "do it", "research this", "create task"}:
-            return "No work was approved. Use /dig with a public research question, or /task with the exact task. Note edits still need review."
-        review_on = None
-        if value.casefold() == "later":
-            return "Use 'snooze YYYY-MM-DD' to choose when to reconsider this finding."
-        if value.lower().startswith("snooze "):
-            try:
-                review_on = date.fromisoformat(value[7:].strip())
-            except ValueError:
-                return "Use 'snooze YYYY-MM-DD' with a valid date."
-            if not today < review_on < date.fromisoformat(key) + timedelta(days=RETENTION_DAYS):
-                return "Choose a future date within 14 days of this review. The saved review expires after that."
-        feedback = {"text": value, "recorded_on": today.isoformat(), "review_on": review_on.isoformat() if review_on else None}
-
-        def persist(state: dict[str, Any]) -> None:
-            current = state["deliveries"].get(key)
-            if not current or current.get("review") != record["review"]:
-                raise EvolveError("review_feedback_conflict")
-            current.setdefault("feedback", {})[finding_id] = feedback
-
-        self.store.update(persist)
-        return "Feedback saved for this review for up to 14 days. It will guide later reviews. No task, research or note edit was approved."
 
     def feedback_command(self, argument: str) -> str:
         today = self.clock().date()
