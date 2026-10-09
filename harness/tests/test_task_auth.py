@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, urlsplit
@@ -11,6 +12,7 @@ import pytest
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.asymmetric import rsa
 from task_auth import FLOW_COOKIE, SESSION_COOKIE, AuthConfig, AuthError, TaskAuth
+from task_state import CAPS, workspace
 from test_briefing_state import FakeBlob, store_for
 
 
@@ -207,3 +209,43 @@ def test_state_csrf_and_untrusted_proxy_headers_do_not_authenticate(identity):
 def test_configuration_has_no_first_visitor_or_local_demo_fallback():
     with pytest.raises(AuthError, match="auth_unconfigured"):
         AuthConfig.load({})
+
+
+@pytest.mark.parametrize("collection,code", [
+    ("auth_sessions", "auth_session_capacity"),
+    ("auth_nonces", "auth_flow_capacity"),
+])
+def test_sign_in_capacity_has_explicit_error_and_preserves_existing_receipts(identity, collection, code):
+    auth, _, claims, _, _, blob = identity
+    uri, flow_cookie = auth.login()
+    query = parse_qs(urlsplit(uri).query)
+    claims["nonce"] = query["nonce"][0]
+
+    def fill(state):
+        workspace(state)[collection] = {
+            f"{index:064x}": int(time.time()) + 3600 for index in range(CAPS[collection])
+        }
+
+    auth.store.update(fill)
+    before = blob.payload
+    with pytest.raises(AuthError, match=code) as failure:
+        auth.callback(cookie_pair(flow_cookie, FLOW_COOKIE), {"state": query["state"][0], "code": "synthetic-code"})
+    assert failure.value.status == 429
+    assert blob.payload == before
+
+
+@pytest.mark.parametrize("cookie,check", [
+    ("", "missing_cookie"),
+    ("unrelated=synthetic-private", "missing_cookie"),
+    (SESSION_COOKIE + "=synthetic-private", "sealed_cookie"),
+    (SESSION_COOKIE + "=synthetic-private; " + SESSION_COOKIE + "=duplicate", "cookie_format"),
+])
+def test_session_rejection_logs_only_fixed_diagnostic_codes(identity, cookie, check, caplog):
+    auth, _, _, _, _, _ = identity
+    caplog.set_level(logging.INFO, logger="task_auth")
+    with pytest.raises(AuthError, match="authentication_required"):
+        auth.authenticate(cookie)
+    assert [record.getMessage() for record in caplog.records if record.name == "task_auth"] == [
+        f"task auth session rejected check={check}",
+    ]
+    assert "synthetic-private" not in caplog.text

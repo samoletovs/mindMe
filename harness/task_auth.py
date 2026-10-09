@@ -20,7 +20,7 @@ import msal
 from briefing_state import BriefingStore
 from cryptography.fernet import Fernet, InvalidToken
 from execution_budget import bounded_timeout
-from task_state import prune_auth, workspace
+from task_state import CAPS, prune_auth, workspace
 
 log = logging.getLogger(__name__)
 FLOW_COOKIE = "__Host-mindme-flow"
@@ -286,6 +286,10 @@ class TaskAuth:
             data = workspace(state)
             if nonce_hash in data["auth_nonces"]:
                 raise AuthError("auth_flow_replayed")
+            if len(data["auth_sessions"]) >= CAPS["auth_sessions"]:
+                raise AuthError("auth_session_capacity", 429)
+            if len(data["auth_nonces"]) >= CAPS["auth_nonces"]:
+                raise AuthError("auth_flow_capacity", 429)
             data["auth_nonces"][nonce_hash] = now + FLOW_SECONDS
             data["auth_sessions"][session_hash] = expiry
 
@@ -298,7 +302,19 @@ class TaskAuth:
         return cookie_header(SESSION_COOKIE, value, max_age=expiry - now)
 
     def authenticate(self, cookie: str) -> dict[str, Any]:
-        session = self._open(_cookie(cookie, SESSION_COOKIE), SESSION_SECONDS)
+        try:
+            value = _cookie(cookie, SESSION_COOKIE)
+        except AuthError:
+            check = "missing_cookie" if not any(
+                part.strip().startswith(SESSION_COOKIE + "=") for part in cookie.split(";")
+            ) else "cookie_format"
+            log.info("task auth session rejected check=%s", check)
+            raise
+        try:
+            session = self._open(value, SESSION_SECONDS)
+        except AuthError:
+            log.warning("task auth session rejected check=sealed_cookie")
+            raise
         if (
             type(session.get("exp")) is not int or session["exp"] <= self.clock()
             or session.get("tid") != self.config.tenant_id or session.get("oid") != self.config.owner_id
@@ -306,9 +322,11 @@ class TaskAuth:
             or session.get("idp") != "live.com" or not isinstance(session.get("sid"), str)
             or not isinstance(session.get("csrf"), str)
         ):
+            log.warning("task auth session rejected check=session_claims")
             raise AuthError("authentication_required")
         session_hash = hashlib.sha256(session["sid"].encode()).hexdigest()
         if workspace(self.store.read())["auth_sessions"].get(session_hash, 0) <= self.clock():
+            log.warning("task auth session rejected check=session_receipt")
             raise AuthError("authentication_required")
         return session
 

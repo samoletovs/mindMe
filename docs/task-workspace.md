@@ -82,6 +82,10 @@ uses `form_post`, not a code-bearing query string. The one-hour session cookie
 is encrypted, `__Host-`, Secure, HttpOnly, and SameSite=Lax. Only hashed replay
 and session identifiers with expiry are saved privately. Logout revokes that
 session. Concurrent callback replay is rejected using the existing ETag store.
+At the eight-session or forty-recent-sign-in bound, a verified owner receives
+an explicit 429 response instead of a generic service failure. Expired receipts
+are pruned before capacity checks; live sessions and replay receipts are not
+silently evicted.
 
 Each data/action route validates its actual HTTPS request URL against the exact
 configured origin. Forwarded scheme or identity headers cannot bypass it.
@@ -257,6 +261,8 @@ Source text, model output, task text, identity claim values and credentials neve
 go to logs or span attributes. A signed-token owner rejection logs only its
 fixed check code: `tenant`, `owner`, `provider`, `client` or `nonce`. The public
 response remains `owner_not_authorized`.
+Rejected browser sessions log only a fixed cookie, sealed-payload, session-claim
+or receipt check code; cookie values and private state are never logged.
 
 ## Configuration and release gate
 

@@ -41,6 +41,8 @@ ERROR_TEXT = {
     "authentication_required": "Sign in with the configured personal Microsoft account.",
     "auth_unconfigured": "Owner sign-in is not configured. No task data is available.",
     "auth_configuration_invalid": "Owner sign-in configuration needs attention. Access is disabled.",
+    "auth_session_capacity": "The eight-session limit has been reached. Sign out of another Tasks session or wait for an existing session to expire, then start a fresh sign-in.",
+    "auth_flow_capacity": "Too many recent sign-ins. Wait ten minutes, then start a fresh sign-in.",
     "owner_not_authorized": "This Microsoft account is not the configured personal owner.",
     "secure_origin_required": "Use the configured HTTPS task address.",
     "csrf_rejected": "This action could not be verified. Reload Tasks before trying again.",
