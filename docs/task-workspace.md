@@ -331,6 +331,16 @@ invalid output, unmatched evidence or source drift. Logs include only that code
 and the fixed source-check/generation/validation/source-recheck phase, never
 model output or arbitrary exception text. Unknown error text remains generic.
 
+Local preparation validation translates only the shared text validator's known
+`invalid_text` and `unsafe_text` failures into the existing safe failed-receipt
+codes. Empty, oversized, wrongly typed or secret-shaped model strings remain
+rejected; exact source quotation and all output limits are unchanged. These
+definite local rejections no longer leave a preparation stuck as executing.
+Charges remain reserved and replay cannot call the model again. Unrelated
+validation exceptions are not swallowed, and historical receipts are not rewritten.
+This fixes an offline-reproduced error-boundary defect; it does not reconstruct
+the cause of older generic failure receipts or establish live AI acceptance.
+
 Run `python -m pytest` for the complete synthetic suite. New `test_task_*` tests
 exercise actual MSAL flow construction/token exchange with generated signed
 synthetic JWTs, owner/issuer/audience/key/lifetime/nonce rejection, cookies/CSRF,

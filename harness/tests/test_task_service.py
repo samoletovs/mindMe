@@ -251,6 +251,84 @@ def test_preparation_validation_records_safe_reason_without_output(caplog):
     assert "synthetic-private" not in caplog.text
 
 
+@pytest.mark.parametrize(("field", "value", "code"), [
+    ("summary", "x" * 701, "task_preparation_invalid"),
+    ("summary", "", "task_preparation_invalid"),
+    ("owner_next_action", None, "task_preparation_invalid"),
+    ("steps", [""], "task_preparation_invalid"),
+    ("uncertainties", ["x" * 401], "task_preparation_invalid"),
+    ("source_quote", "", "task_preparation_invalid"),
+    ("summary", "token: synthetic-private-marker", "task_text_not_permitted"),
+], ids=["overlong-summary", "empty-summary", "null-owner-action", "empty-step",
+        "overlong-uncertainty", "empty-quote", "secret-shaped-summary"])
+def test_invalid_model_text_retains_failed_receipt_through_actual_sdk(monkeypatch, caplog, field, value, code):
+    import json
+
+    import httpx
+    from openai import OpenAI
+
+    import function_app as fa
+
+    subject, _, execute, generate, publish, _ = service()
+    output = {**generate.return_value, field: value}
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={
+            "id": "synthetic", "object": "chat.completion", "created": 1,
+            "model": "existing-small-model",
+            "choices": [{
+                "index": 0, "finish_reason": "stop",
+                "message": {"role": "assistant", "content": json.dumps(output), "refusal": None},
+            }],
+        })
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        with OpenAI(
+            api_key="synthetic-not-a-credential", base_url="https://synthetic.invalid/openai/v1/",
+            http_client=http,
+        ) as client:
+            monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-small-model")
+            monkeypatch.setattr(fa, "_http_client", lambda: http)
+            monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
+            subject.generate = fa._generate_task_preparation
+            proposal = subject.prepare(prepare_payload(), TODAY)
+            result = approve(subject, proposal)
+            assert result["status"] == "failed"
+            assert result["result"] == {"status": "failed", "error": code}
+            assert "preparation" not in result["result"]
+            assert approve(subject, proposal)["result"] == result["result"]
+
+    assert len(requests) == 1
+    assert subject.store.read()["task_workspace"]["budget"] == {
+        "month": TODAY.isoformat()[:7], "day": TODAY.isoformat(), "used": 1, "daily_used": 1,
+    }
+    assert f"phase=validation code={code}" in caplog.text
+    assert "synthetic-private-marker" not in caplog.text
+    assert "x" * 401 not in caplog.text
+    execute.assert_not_called()
+    publish.assert_not_called()
+
+
+def test_unrelated_plan_error_is_not_swallowed_as_a_known_model_text_rejection(monkeypatch):
+    from briefing_plan import PlanError
+
+    subject, _, execute, generate, publish, _ = service()
+    proposal = subject.prepare(prepare_payload(), TODAY)
+    monkeypatch.setattr("task_service._text", Mock(side_effect=PlanError("unbacked_focus")))
+    with pytest.raises(PlanError, match="unbacked_focus"):
+        approve(subject, proposal)
+    record = subject.store.read()["proposals"][proposal["id"]]
+    assert record["status"] == "executing"
+    assert "result" not in record
+    assert subject.store.read()["task_workspace"]["budget"]["used"] == 1
+    assert approve(subject, proposal)["status"] == "executing"
+    generate.assert_called_once()
+    execute.assert_not_called()
+    publish.assert_not_called()
+
+
 def test_preparation_unrecognized_failure_never_exposes_exception_content(caplog):
     subject, _, _, generate, _, _ = service()
     generate.side_effect = TaskError("synthetic-private-failure-detail")

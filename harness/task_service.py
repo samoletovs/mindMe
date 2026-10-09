@@ -13,7 +13,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from briefing_loop import BriefingLoop
-from briefing_plan import fingerprint, safe_text
+from briefing_plan import PlanError, fingerprint, safe_text
 from briefing_sources import SourceError, _SENSITIVE_CONTENT
 from briefing_state import StateError, _safe_receipt, record_transition
 from execution_budget import checkpoint, execution_budget
@@ -464,12 +464,19 @@ class TaskService:
         if not isinstance(raw, dict) or set(raw) != set(PREPARATION_SCHEMA["required"]):
             raise TaskError("task_preparation_invalid")
         result = {}
-        for key, limit in (("summary", 700), ("owner_next_action", 500), ("source_quote", 500)):
-            result[key] = _text(raw[key], limit, paragraph=key != "source_quote")
-        for key, count in (("steps", 5), ("uncertainties", 3)):
-            if not isinstance(raw[key], list) or len(raw[key]) > count:
-                raise TaskError("task_preparation_invalid")
-            result[key] = [_text(item, 400) for item in raw[key]]
+        try:
+            for key, limit in (("summary", 700), ("owner_next_action", 500), ("source_quote", 500)):
+                result[key] = _text(raw[key], limit, paragraph=key != "source_quote")
+            for key, count in (("steps", 5), ("uncertainties", 3)):
+                if not isinstance(raw[key], list) or len(raw[key]) > count:
+                    raise TaskError("task_preparation_invalid")
+                result[key] = [_text(item, 400) for item in raw[key]]
+        except PlanError as error:
+            if error.code == "invalid_text":
+                raise TaskError("task_preparation_invalid") from None
+            if error.code == "unsafe_text":
+                raise TaskError("task_text_not_permitted") from None
+            raise
         if result["source_quote"] not in source["text"]:
             raise TaskError("task_preparation_evidence_invalid")
         return result
