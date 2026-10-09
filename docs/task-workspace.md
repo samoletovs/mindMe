@@ -303,7 +303,10 @@ gates. A test/PR merge does not deploy this application. See [deploy.md](deploy.
 
 ## Offline proof
 
-Private preparation uses Azure's supported strict JSON Schema subset; array
+Private preparation uses the existing model's single-turn Chat Completions API
+with `store: false`, no tools, no retries and a 1,200-token bound. Other agent and
+briefing paths are unchanged. The provider schema uses Azure's supported strict
+JSON Schema subset; array
 limits are enforced by the existing local validator, not unsupported `maxItems`
 keywords in the provider request. Explicit 400/422 provider rejections become
 failed, retained receipts with no automatic retry or budget refund. Diagnostics
@@ -311,6 +314,7 @@ contain only the HTTP status and allowlisted code/parameter labels, never the
 upstream message or task input. Repeating an approval cannot reexecute a claimed
 preparation, including a failed one; another attempt needs a new reviewed proposal.
 Transport uncertainty remains uncertain and is never treated as a successful draft.
+Refused, truncated or missing completions are failed drafts, not successful output.
 
 Run `python -m pytest` for the complete synthetic suite. New `test_task_*` tests
 exercise actual MSAL flow construction/token exchange with generated signed

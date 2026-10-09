@@ -164,25 +164,30 @@ async def test_functions_routes_use_off_event_loop_adapter(monkeypatch):
 
 
 def test_preparation_host_uses_existing_model_no_tools_no_storage_or_retries(monkeypatch):
+    from types import SimpleNamespace
+
     http = Mock()
     model = Mock()
     model.with_options.return_value = model
-    model.responses.create.return_value.output_text = json.dumps({
+    content = json.dumps({
         "summary": "A synthetic draft.", "steps": [], "uncertainties": [],
         "owner_next_action": "Review it.", "source_quote": "One topic.",
     })
+    model.chat.completions.create.return_value.choices = [
+        SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content=content, refusal=None)),
+    ]
     monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-small-model")
     monkeypatch.setattr(fa, "_http_client", lambda: http)
     monkeypatch.setattr(fa, "_foundry", lambda: (None, model))
     fa._generate_task_preparation({"source": {"text": "One topic."}, "scope": "Outline only."})
-    arguments = model.responses.create.call_args.kwargs
+    arguments = model.chat.completions.create.call_args.kwargs
     assert arguments["model"] == "existing-small-model"
-    assert arguments["store"] is False and arguments["max_output_tokens"] == 1200
+    assert arguments["store"] is False and arguments["max_completion_tokens"] == 1200
     assert "tools" not in arguments
-    assert "<<<DATA_" in arguments["input"][1]["content"]
+    assert "<<<DATA_" in arguments["messages"][1]["content"]
     assert model.with_options.call_args.kwargs["max_retries"] == 0
     assert model.with_options.call_args.kwargs["timeout"] == 40
-    schema = arguments["text"]["format"]["schema"]
+    schema = arguments["response_format"]["json_schema"]["schema"]
     assert "maxItems" not in json.dumps(schema)
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == set(schema["properties"])
@@ -195,19 +200,59 @@ def test_preparation_request_rejection_is_content_free_and_not_retried(monkeypat
 
     model = Mock()
     model.with_options.return_value = model
-    model.responses.create.side_effect = BadRequestError(
+    model.chat.completions.create.side_effect = BadRequestError(
         "synthetic-private-upstream-message",
-        response=httpx.Response(400, request=httpx.Request("POST", "https://synthetic.example/responses")),
-        body={"code": "invalid_json_schema", "param": "text.format.schema", "message": "synthetic-private-upstream-message"},
+        response=httpx.Response(400, request=httpx.Request("POST", "https://synthetic.example/chat/completions")),
+        body={"code": "invalid_json_schema", "param": "response_format.json_schema.schema", "message": "synthetic-private-upstream-message"},
     )
     monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-small-model")
     monkeypatch.setattr(fa, "_http_client", Mock())
     monkeypatch.setattr(fa, "_foundry", lambda: (None, model))
     with pytest.raises(TaskError, match="task_preparation_request_rejected"):
         fa._generate_task_preparation({"source": {"text": "One topic."}, "scope": "Outline only."})
-    assert model.responses.create.call_count == 1
-    assert "status=400 code=invalid_json_schema parameter=text.format.schema" in caplog.text
+    assert model.chat.completions.create.call_count == 1
+    assert "status=400 code=invalid_json_schema parameter=response_format.json_schema.schema" in caplog.text
     assert "synthetic-private" not in caplog.text
+
+
+@pytest.mark.parametrize("finish_reason,refusal", [("stop", None), ("length", None), ("stop", "Refused.")])
+def test_preparation_actual_sdk_wire_and_incomplete_results(monkeypatch, finish_reason, refusal):
+    import httpx
+    from openai import OpenAI
+    from task_service import TaskError
+
+    output = {
+        "summary": "A synthetic draft.", "steps": ["Choose a heading."], "uncertainties": [],
+        "owner_next_action": "Review it.", "source_quote": "One topic.",
+    }
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={
+            "id": "synthetic-completion", "object": "chat.completion", "created": 1,
+            "model": "existing-small-model",
+            "choices": [{"index": 0, "finish_reason": finish_reason, "message": {
+                "role": "assistant", "content": json.dumps(output), "refusal": refusal,
+            }}],
+        })
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        with OpenAI(api_key="synthetic-not-a-credential", base_url="https://synthetic.example/openai/v1/", http_client=http) as model:
+            monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-small-model")
+            monkeypatch.setattr(fa, "_http_client", lambda: http)
+            monkeypatch.setattr(fa, "_foundry", lambda: (None, model))
+            if finish_reason == "stop" and refusal is None:
+                assert fa._generate_task_preparation({"source": {"text": "One topic."}, "scope": "Outline only."}) == output
+            else:
+                with pytest.raises(TaskError, match="task_preparation_invalid"):
+                    fa._generate_task_preparation({"source": {"text": "One topic."}, "scope": "Outline only."})
+    assert len(requests) == 1
+    assert requests[0].url.path == "/openai/v1/chat/completions"
+    body = json.loads(requests[0].content)
+    assert body["store"] is False and body["max_completion_tokens"] == 1200
+    assert body["response_format"]["json_schema"]["strict"] is True
+    assert "tools" not in body and "input" not in body
 
 
 def test_disabled_web_has_no_auth_or_service_side_effects():
