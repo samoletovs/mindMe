@@ -206,7 +206,7 @@ def test_rejected_preparation_retains_failed_receipt_and_cannot_replay():
     proposal = subject.prepare(prepare_payload(), TODAY)
     result = approve(subject, proposal)
     assert result["status"] == "failed"
-    assert result["result"] == {"status": "failed", "error": "task_preparation_rejected"}
+    assert result["result"] == {"status": "failed", "error": "task_preparation_request_rejected"}
     assert approve(subject, proposal)["result"] == result["result"]
     assert generate.call_count == 1
     assert subject.store.read()["task_workspace"]["budget"]["used"] == 1
@@ -239,6 +239,26 @@ def test_preparation_output_caps_remain_enforced_locally(field, count):
     proposal = subject.prepare(prepare_payload(), TODAY)
     assert approve(subject, proposal)["status"] == "failed"
     assert generate.call_count == 1
+
+
+def test_preparation_validation_records_safe_reason_without_output(caplog):
+    subject, _, _, generate, _, _ = service()
+    generate.return_value["source_quote"] = "synthetic-private-unmatched-quote"
+    proposal = subject.prepare(prepare_payload(), TODAY)
+    result = approve(subject, proposal)
+    assert result["result"] == {"status": "failed", "error": "task_preparation_evidence_invalid"}
+    assert "phase=validation code=task_preparation_evidence_invalid" in caplog.text
+    assert "synthetic-private" not in caplog.text
+
+
+def test_preparation_unrecognized_failure_never_exposes_exception_content(caplog):
+    subject, _, _, generate, _, _ = service()
+    generate.side_effect = TaskError("synthetic-private-failure-detail")
+    proposal = subject.prepare(prepare_payload(), TODAY)
+    result = approve(subject, proposal)
+    assert result["result"] == {"status": "failed", "error": "task_preparation_rejected"}
+    assert "phase=generation code=task_preparation_rejected" in caplog.text
+    assert "synthetic-private" not in caplog.text
 
 
 def test_private_preparation_has_real_model_path_only_after_approval_and_exact_evidence():

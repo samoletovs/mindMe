@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import re
 import secrets
 from collections.abc import Callable, Mapping
@@ -21,6 +22,7 @@ from task_sources import ATTENTION_DEADLINE_HORIZON_DAYS, TaskRepository, defini
 from task_state import AREAS, HEX24, HEX32, PROJECT, SHA, STAGES, workspace
 from telegram_format import escape, escaped_chunks, pack_html_blocks
 
+log = logging.getLogger(__name__)
 DEFINITION_LIMITS = {"title": 120, "outcome": 2000, "next_action": 500, "done_when": 2000}
 EDIT_FIELDS = {*DEFINITION_LIMITS, "area", "project", "stage", "execution", "review_on", "waiting_for"}
 QUESTIONS = {
@@ -192,20 +194,33 @@ class TaskService:
                 return original(record, reconcile)
             if reconcile:
                 return record.get("result") or {"status": "unknown", "error": "preparation_unconfirmed"}
+            phase = "source_check"
             try:
                 with execution_budget(45):
                     source = self._source(record["source_path"], record["source_revision"])
                     self._standing_recheck(record)
+                    phase = "generation"
                     raw = self.generate({
                         "source": {key: source[key] for key in ("path", "revision", "text")},
                         "scope": record["action"]["scope"], "limits": PREPARATION_LIMITS,
                     })
                     checkpoint()
+                    phase = "validation"
                     result = self._preparation_result(raw, source)
+                    phase = "source_recheck"
                     self._source(record["source_path"], record["source_revision"])
                     self._standing_recheck(record)
-            except TaskError:
-                return {"status": "failed", "error": "task_preparation_rejected"}
+            except TaskError as error:
+                code = str(error)
+                if code not in {
+                    "task_model_not_configured", "task_preparation_context_limit",
+                    "task_preparation_request_rejected", "task_preparation_invalid",
+                    "task_preparation_evidence_invalid", "task_text_not_permitted",
+                    "task_source_changed", "task_source_not_canonical", "task_standing_scope_changed",
+                }:
+                    code = "task_preparation_rejected"
+                log.warning("task preparation rejected phase=%s code=%s", phase, code)
+                return {"status": "failed", "error": code}
             return {
                 "status": "prepared", "preparation": result, "source_revision": source["revision"],
                 "limits": PREPARATION_LIMITS, "tools": ["existing_model"],

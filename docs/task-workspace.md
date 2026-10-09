@@ -315,6 +315,10 @@ upstream message or task input. Repeating an approval cannot reexecute a claimed
 preparation, including a failed one; another attempt needs a new reviewed proposal.
 Transport uncertainty remains uncertain and is never treated as a successful draft.
 Refused, truncated or missing completions are failed drafts, not successful output.
+The failed receipt retains an allowlisted reason code for request rejection,
+invalid output, unmatched evidence or source drift. Logs include only that code
+and the fixed source-check/generation/validation/source-recheck phase, never
+model output or arbitrary exception text. Unknown error text remains generic.
 
 Run `python -m pytest` for the complete synthetic suite. New `test_task_*` tests
 exercise actual MSAL flow construction/token exchange with generated signed
