@@ -263,6 +263,8 @@ fixed check code: `tenant`, `owner`, `provider`, `client` or `nonce`. The public
 response remains `owner_not_authorized`.
 Rejected browser sessions log only a fixed cookie, sealed-payload, session-claim
 or receipt check code; cookie values and private state are never logged.
+An unreadable sealed cookie also records its length and Boolean prefix,
+signature and lifetime checks, never its value, timestamp or decrypted payload.
 
 ## Configuration and release gate
 

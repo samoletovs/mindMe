@@ -245,7 +245,18 @@ def test_session_rejection_logs_only_fixed_diagnostic_codes(identity, cookie, ch
     caplog.set_level(logging.INFO, logger="task_auth")
     with pytest.raises(AuthError, match="authentication_required"):
         auth.authenticate(cookie)
+    suffix = " length=17 prefix=False signature=False lifetime=False" if check == "sealed_cookie" else ""
     assert [record.getMessage() for record in caplog.records if record.name == "task_auth"] == [
-        f"task auth session rejected check={check}",
+        f"task auth session rejected check={check}{suffix}",
     ]
+    assert "synthetic-private" not in caplog.text
+
+
+def test_expired_cookie_diagnostics_do_not_log_cookie_or_decrypted_payload(identity, caplog):
+    auth, _, _, _, _, _ = identity
+    value = auth.cipher.encrypt_at_time(b'{"sid":"synthetic-private"}', int(time.time()) - 3700).decode()
+    with pytest.raises(AuthError, match="authentication_required"):
+        auth.authenticate(SESSION_COOKIE + "=" + value)
+    assert "signature=True lifetime=False" in caplog.text
+    assert value not in caplog.text
     assert "synthetic-private" not in caplog.text

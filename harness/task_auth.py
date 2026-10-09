@@ -313,7 +313,18 @@ class TaskAuth:
         try:
             session = self._open(value, SESSION_SECONDS)
         except AuthError:
-            log.warning("task auth session rejected check=sealed_cookie")
+            signature_valid = False
+            lifetime_valid = False
+            try:
+                issued = self.cipher.extract_timestamp(value.encode("ascii"))
+                signature_valid = True
+                lifetime_valid = -60 <= int(time.time()) - issued <= SESSION_SECONDS
+            except (InvalidToken, ValueError, UnicodeError):
+                pass
+            log.warning(
+                "task auth session rejected check=sealed_cookie length=%d prefix=%s signature=%s lifetime=%s",
+                len(value), value.startswith("gAAAA"), signature_valid, lifetime_valid,
+            )
             raise
         if (
             type(session.get("exp")) is not int or session["exp"] <= self.clock()
