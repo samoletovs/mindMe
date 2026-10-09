@@ -200,6 +200,47 @@ def test_publication_unknown_remains_uncertain_with_same_publication_id():
     assert publish.call_args_list[0].args[1] == publish.call_args_list[1].args[1]
 
 
+def test_rejected_preparation_retains_failed_receipt_and_cannot_replay():
+    subject, _, _, generate, _, _ = service()
+    generate.side_effect = TaskError("task_preparation_request_rejected")
+    proposal = subject.prepare(prepare_payload(), TODAY)
+    result = approve(subject, proposal)
+    assert result["status"] == "failed"
+    assert result["result"] == {"status": "failed", "error": "task_preparation_rejected"}
+    assert approve(subject, proposal)["result"] == result["result"]
+    assert generate.call_count == 1
+    assert subject.store.read()["task_workspace"]["budget"]["used"] == 1
+    subject.reconcile(proposal["id"], TODAY)
+    assert generate.call_count == 1
+
+
+def test_concurrent_failed_preparation_cannot_be_claimed_again():
+    subject, _, _, generate, _, _ = service()
+    generate.side_effect = TaskError("task_preparation_request_rejected")
+    proposal = subject.prepare(prepare_payload(), TODAY)
+    original_revision = subject.loop.revision
+
+    def fail_concurrently(path):
+        subject.loop.revision = original_revision
+        assert approve(subject, proposal)["status"] == "failed"
+        return original_revision(path)
+
+    subject.loop.revision = fail_concurrently
+    with pytest.raises(TaskError, match="task_preparation_already_attempted"):
+        approve(subject, proposal)
+    assert generate.call_count == 1
+    assert subject.store.read()["task_workspace"]["budget"]["used"] == 1
+
+
+@pytest.mark.parametrize("field,count", [("steps", 6), ("uncertainties", 4)])
+def test_preparation_output_caps_remain_enforced_locally(field, count):
+    subject, _, _, generate, _, _ = service()
+    generate.return_value[field] = ["A synthetic item."] * count
+    proposal = subject.prepare(prepare_payload(), TODAY)
+    assert approve(subject, proposal)["status"] == "failed"
+    assert generate.call_count == 1
+
+
 def test_private_preparation_has_real_model_path_only_after_approval_and_exact_evidence():
     subject, _, execute, generate, _, _ = service()
     proposal = subject.prepare(prepare_payload(), TODAY)

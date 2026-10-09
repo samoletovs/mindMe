@@ -182,6 +182,32 @@ def test_preparation_host_uses_existing_model_no_tools_no_storage_or_retries(mon
     assert "<<<DATA_" in arguments["input"][1]["content"]
     assert model.with_options.call_args.kwargs["max_retries"] == 0
     assert model.with_options.call_args.kwargs["timeout"] == 40
+    schema = arguments["text"]["format"]["schema"]
+    assert "maxItems" not in json.dumps(schema)
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == set(schema["properties"])
+
+
+def test_preparation_request_rejection_is_content_free_and_not_retried(monkeypatch, caplog):
+    import httpx
+    from openai import BadRequestError
+    from task_service import TaskError
+
+    model = Mock()
+    model.with_options.return_value = model
+    model.responses.create.side_effect = BadRequestError(
+        "synthetic-private-upstream-message",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://synthetic.example/responses")),
+        body={"code": "invalid_json_schema", "param": "text.format.schema", "message": "synthetic-private-upstream-message"},
+    )
+    monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-small-model")
+    monkeypatch.setattr(fa, "_http_client", Mock())
+    monkeypatch.setattr(fa, "_foundry", lambda: (None, model))
+    with pytest.raises(TaskError, match="task_preparation_request_rejected"):
+        fa._generate_task_preparation({"source": {"text": "One topic."}, "scope": "Outline only."})
+    assert model.responses.create.call_count == 1
+    assert "status=400 code=invalid_json_schema parameter=text.format.schema" in caplog.text
+    assert "synthetic-private" not in caplog.text
 
 
 def test_disabled_web_has_no_auth_or_service_side_effects():

@@ -38,8 +38,8 @@ PREPARATION_SCHEMA: dict[str, Any] = {
     "type": "object", "additionalProperties": False,
     "properties": {
         "summary": {"type": "string"},
-        "steps": {"type": "array", "maxItems": 5, "items": {"type": "string"}},
-        "uncertainties": {"type": "array", "maxItems": 3, "items": {"type": "string"}},
+        "steps": {"type": "array", "items": {"type": "string"}},
+        "uncertainties": {"type": "array", "items": {"type": "string"}},
         "owner_next_action": {"type": "string"},
         "source_quote": {"type": "string"},
     },
@@ -423,6 +423,8 @@ class TaskService:
                 raise TaskError("task_budget_exhausted")
         if proposal["action"]["kind"] not in {"prepare_task", "research"}:
             return
+        if proposal["action"]["kind"] == "prepare_task" and proposal.get("action_id"):
+            raise TaskError("task_preparation_already_attempted")
         unreviewed = sum(
             1 for item in state["proposals"].values()
             if item.get("task_workspace") and item.get("kind") in {"prepare_task", "research"}

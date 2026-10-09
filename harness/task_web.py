@@ -50,6 +50,7 @@ ERROR_TEXT = {
     "task_source_not_canonical": "The task is not yet available on the canonical branch.",
     "task_definition_incomplete": "Resolve the definition and waiting gaps before selecting this stage.",
     "task_not_selected": "Select a fully defined, unblocked task as Ready before preparing work.",
+    "task_preparation_already_attempted": "This preparation was already attempted. Review its saved receipt; another attempt requires a new exact approval.",
     "task_review_capacity": "Review the existing preparation results before starting more optional work.",
     "task_budget_exhausted": "The configured preparation limit has been reached. No new work was started.",
     "task_clarification_limit": "Three answers is the limit for this file version. Keep unresolved work in Clarify.",
