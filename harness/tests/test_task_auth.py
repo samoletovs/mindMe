@@ -10,8 +10,7 @@ import jwt
 import pytest
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.asymmetric import rsa
-
-from task_auth import AuthConfig, AuthError, FLOW_COOKIE, SESSION_COOKIE, TaskAuth
+from task_auth import FLOW_COOKIE, SESSION_COOKIE, AuthConfig, AuthError, TaskAuth
 from test_briefing_state import FakeBlob, store_for
 
 
@@ -81,8 +80,13 @@ def test_actual_msal_code_flow_uses_pkce_without_graph_or_offline_scopes(identit
     assert all(request.url.host == "login.microsoftonline.com" for request in calls)
 
 
-def test_real_msal_callback_validates_signed_owner_and_keeps_tokens_out_of_cookies_and_store(identity):
+@pytest.mark.parametrize("provider", [
+    "live.com",
+    "https://sts.windows.net/9188040d-6c67-4c5b-b112-36a304b66dad/",
+])
+def test_real_msal_callback_validates_signed_owner_and_keeps_tokens_out_of_cookies_and_store(identity, provider):
     auth, _, claims, _, _, blob = identity
+    claims["idp"] = provider
     uri, flow_cookie = auth.login()
     query = parse_qs(urlsplit(uri).query)
     claims["nonce"] = query["nonce"][0]
@@ -101,6 +105,10 @@ def test_real_msal_callback_validates_signed_owner_and_keeps_tokens_out_of_cooki
         auth.authenticate(cookie_pair(result, SESSION_COOKIE))
 
 
+@pytest.mark.parametrize("provider", [
+    "live.com",
+    "https://sts.windows.net/9188040d-6c67-4c5b-b112-36a304b66dad/",
+])
 @pytest.mark.parametrize("changes", [
     {"oid": "44444444-4444-4444-8444-444444444444"},
     {"tid": "44444444-4444-4444-8444-444444444444"},
@@ -108,10 +116,50 @@ def test_real_msal_callback_validates_signed_owner_and_keeps_tokens_out_of_cooki
     {"azp": "44444444-4444-4444-8444-444444444444"},
     {"nonce": "other-nonce"},
 ])
-def test_authentication_is_not_owner_authorization(identity, changes):
+def test_authentication_is_not_owner_authorization(identity, changes, provider, caplog):
+    auth, _, claims, _, token, _ = identity
+    claims["idp"] = provider
+    signed = token(**changes)
+    with pytest.raises(AuthError, match="owner_not_authorized"):
+        auth._claims(signed, "synthetic-nonce")
+    check = {"oid": "owner", "tid": "tenant", "idp": "provider", "azp": "client", "nonce": "nonce"}[next(iter(changes))]
+    assert [record.getMessage() for record in caplog.records if record.name == "task_auth"] == [
+        f"task auth owner rejection check={check}",
+    ]
+    assert signed not in caplog.text
+    assert all(str(value) not in caplog.text for value in changes.values())
+
+
+@pytest.mark.parametrize("provider", [
+    None,
+    "",
+    [],
+    {"issuer": "live.com"},
+    "https://sts.windows.net/11111111-1111-4111-8111-111111111111/",
+    "http://sts.windows.net/9188040d-6c67-4c5b-b112-36a304b66dad/",
+    "https://sts.windows.net/9188040d-6c67-4c5b-b112-36a304b66dad/extra",
+    "https://sts.windows.net/9188040d-6c67-4c5b-b112-36a304b66dad/?next=live.com",
+    "https://sts.windows.net.attacker.example/9188040d-6c67-4c5b-b112-36a304b66dad/",
+])
+def test_missing_or_lookalike_personal_provider_is_not_authorized(identity, provider):
     auth, _, _, _, token, _ = identity
     with pytest.raises(AuthError, match="owner_not_authorized"):
-        auth._claims(token(**changes), "synthetic-nonce")
+        auth._claims(token(idp=provider), "synthetic-nonce")
+
+
+def test_absent_personal_provider_is_not_inferred_from_owner(identity):
+    auth, _, claims, _, token, _ = identity
+    claims.pop("idp")
+    with pytest.raises(AuthError, match="owner_not_authorized"):
+        auth._claims(token(), "synthetic-nonce")
+
+
+def test_non_ascii_nonce_is_refused_without_logging_claim_values(identity, caplog):
+    auth, _, _, _, token, _ = identity
+    with pytest.raises(AuthError, match="owner_not_authorized"):
+        auth._claims(token(nonce="synthetic-\u00e9"), "synthetic-nonce")
+    assert "check=nonce" in caplog.text
+    assert "synthetic-" not in caplog.text
 
 
 @pytest.mark.parametrize("changes", [

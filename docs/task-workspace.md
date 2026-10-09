@@ -63,7 +63,13 @@ The BFF uses the supported MSAL authorization-code flow with S256 PKCE. It selec
 one explicitly configured personal directory, never `common` or an inferred
 consumer subject. PyJWT separately checks the Microsoft signing key, RS256,
 issuer, audience, lifetime, and nonce. Authorization also requires the exact
-configured `tid`/`oid` tuple and the signed external identity provider `live.com`.
+configured `tid`/`oid` tuple and a signed Microsoft personal-account provider:
+exactly `live.com` or
+`https://sts.windows.net/9188040d-6c67-4c5b-b112-36a304b66dad/`.
+Microsoft documents both forms in the
+[ID-token claim reference](https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference).
+These equivalent providers normalize to `live.com` in the encrypted session;
+neither permits another tenant or owner.
 An authenticated work identity, another personal user, or a missing identity
 claim does not become the owner. There is no first-visitor enrollment, bearer
 header shortcut, local demo identity, or `X-MS-CLIENT-PRINCIPAL` fallback.
@@ -247,8 +253,10 @@ receipts, forty short-lived auth nonces and eight sessions, inside the existing
 1 MiB total ceiling. Clarification content expires after fourteen days; expired
 questions remain non-replayable rather than becoming a new capture. Capacity
 fails closed. Unresolved action receipts are never silently evicted.
-Source text, model output, task text, identity claims and credentials never go
-to logs or span attributes.
+Source text, model output, task text, identity claim values and credentials never
+go to logs or span attributes. A signed-token owner rejection logs only its
+fixed check code: `tenant`, `owner`, `provider`, `client` or `nonce`. The public
+response remains `owner_not_authorized`.
 
 ## Configuration and release gate
 
@@ -271,7 +279,8 @@ Existing `DIG_GITHUB_TOKEN`/`DIG_REPO`, `MEMEX_WEBHOOK_URL`, `MEMEX_ACTION_URL`,
 `TELEGRAM_ALLOWED_CHAT_ID`, `MINDME_BRIEFING_MODEL`, private storage and managed
 identity settings are reused. Never infer one Function route's key from another.
 The redirect URI is exactly `${MINDME_WEB_ORIGIN}/api/tasks/auth/callback`.
-Sign-in must produce the signed `idp: live.com` claim for the configured owner.
+Sign-in must produce one of the exact signed personal-provider `idp` values
+above for the configured owner. Email addresses are not authorization keys.
 
 No infrastructure or provisioning helper is part of this implementation.
 Registration, the two secrets, HTTPS-only host configuration, runtime settings,

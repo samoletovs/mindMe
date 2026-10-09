@@ -17,16 +17,20 @@ from urllib.parse import parse_qs, urlsplit
 import httpx
 import jwt
 import msal
-from cryptography.fernet import Fernet, InvalidToken
-
 from briefing_state import BriefingStore
+from cryptography.fernet import Fernet, InvalidToken
 from execution_budget import bounded_timeout
 from task_state import prune_auth, workspace
 
+log = logging.getLogger(__name__)
 FLOW_COOKIE = "__Host-mindme-flow"
 SESSION_COOKIE = "__Host-mindme-session"
 FLOW_SECONDS = 600
 SESSION_SECONDS = 3600
+_PERSONAL_PROVIDERS = (
+    "live.com",
+    "https://sts.windows.net/9188040d-6c67-4c5b-b112-36a304b66dad/",
+)
 _UUID = re.compile(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\Z")
 
 
@@ -235,13 +239,18 @@ class TaskAuth:
             raise AuthError("id_token_invalid") from None
         except httpx.HTTPError:
             raise AuthError("identity_provider_unavailable", 503) from None
-        if (
-            claims.get("tid") != self.config.tenant_id or claims.get("oid") != self.config.owner_id
-            or claims.get("idp") != "live.com" or claims.get("azp", self.config.client_id) != self.config.client_id
-            or not isinstance(claims.get("nonce"), str)
-            or not secrets.compare_digest(claims["nonce"], nonce)
-        ):
-            raise AuthError("owner_not_authorized", 403)
+        owner_checks = (
+            ("tenant", claims.get("tid") == self.config.tenant_id),
+            ("owner", claims.get("oid") == self.config.owner_id),
+            ("provider", claims.get("idp") in _PERSONAL_PROVIDERS),
+            ("client", claims.get("azp", self.config.client_id) == self.config.client_id),
+            ("nonce", isinstance(claims.get("nonce"), str)
+             and claims["nonce"].isascii() and secrets.compare_digest(claims["nonce"], nonce)),
+        )
+        for check, matches in owner_checks:
+            if not matches:
+                log.warning("task auth owner rejection check=%s", check)
+                raise AuthError("owner_not_authorized", 403)
         return claims
 
     def callback(self, cookie: str, response: dict[str, str]) -> str:
