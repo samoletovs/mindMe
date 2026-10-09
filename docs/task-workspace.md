@@ -104,11 +104,22 @@ across those routes.
 
 ## Routes
 
-All routes are below `/api/tasks`; platform-anonymous route declarations do not
-make authenticated task data public.
+`GET /` is a root-only, anonymous 302 redirect to the fixed relative `/api/tasks`
+path. It reads no configuration, sets no cookies and returns no task data.
+Non-root paths and other HTTP methods are not handled by that redirect. Task
+routes remain below `/api/tasks`; platform-anonymous declarations do not make
+authenticated task data public.
+
+The host HTTP `routePrefix` is empty so the root can be bound. Every existing HTTP
+route explicitly retains its `api/` prefix: health, Telegram, Function-key tools,
+task assets, sign-in/callback and task APIs keep their public URL, method and
+authentication contracts. The optional `{ignored:maxlength(0)?}` template uses
+the Functions host's ASP.NET route constraint to match only the empty root path;
+an empty template would instead default to the function name.
 
 | Route | Method | Result |
 |---|---|---|
+| `/` | GET | Fixed 302 redirect to `/api/tasks`, no cookies or data |
 | `/api/tasks` and `/assets/tasks.css`, `/assets/tasks.js` | GET | Static shell only |
 | `/auth/login` | GET | Microsoft code+PKCE redirect |
 | `/auth/callback` | POST | Bounded form-post callback; exact owner validation |

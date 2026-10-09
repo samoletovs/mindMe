@@ -7,6 +7,7 @@ mindMe. Replaces the long-poll `scripts/dev/telegram_bridge.py` in production.
 
 | Trigger | Name | Purpose |
 |---|---|---|
+| HTTP GET `/` | `task_site_root` | Root-only 302 redirect to `/api/tasks`; no configuration reads, cookies or task data. |
 | HTTP POST `/api/telegram_webhook` | `telegram_webhook` | Telegram update receiver. Verifies `X-Telegram-Bot-Api-Secret-Token`. Enforces allowlist. |
 | Timer `0 30 7 * * *` | `morning_briefing_timer` | Sends the daily briefing at 07:30 UTC. |
 | Timer `0 0 18 * * 0` | `weekly_review_timer` | Weekly-review nudge, Sunday 18:00 UTC. |
@@ -22,6 +23,10 @@ mindMe. Replaces the long-poll `scripts/dev/telegram_bridge.py` in production.
 All `/api/tools/*` routes require Function authentication through `x-functions-key`.
 The Foundry agent uses the `mindme-tools` project connection, not anonymous access.
 See [the coordinated authentication rollout](../docs/deploy.md).
+
+`host.json` uses an empty HTTP route prefix. Each existing HTTP decorator
+explicitly includes `api/`, preserving its public URL and auth/method contract.
+Only the new constrained root route sits outside `/api/`; it is not a catch-all.
 
 The [task workspace contract](../docs/task-workspace.md) documents task clarification,
 source-bound approval, receipt-bound publication, bounded preparation and verified

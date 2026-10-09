@@ -6,6 +6,7 @@ avoid cold-start per request.
 
 Endpoints
 ---------
+- GET   /                       redirect to /api/tasks
 - POST  /api/telegram_webhook    Telegram update receiver (replaces long-poll)
 - TIMER 0 30 7 * * *             morning_briefing_timer (07:30 UTC)
 - TIMER 0 0 18 * * 0             weekly_review_timer (Sun 18:00 UTC, review nudge)
@@ -2275,7 +2276,7 @@ def _compose_local_briefing() -> str:
 # --- Function: telegram_webhook --------------------------------------------
 
 @app.function_name(name="telegram_webhook")
-@app.route(route="telegram_webhook", methods=["POST"])
+@app.route(route="api/telegram_webhook", methods=["POST"])
 def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
     if not _verify_telegram_secret(req):
         log.warning("webhook rejected: bad secret")
@@ -2882,19 +2883,33 @@ def weekly_review_timer(timer: func.TimerRequest) -> None:
         raise RuntimeError("Weekly review could not be generated") from None
 
 
-# --- Function: reaper_poll_timer -------------------------------------------
+# --- Functions: task web entry points --------------------------------------
+
+
+@app.function_name(name="task_site_root")
+# An empty template defaults to the function name; this optional segment matches only /.
+@app.route(route="{ignored:maxlength(0)?}", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def task_site_root(req: func.HttpRequest) -> func.HttpResponse:
+    del req
+    return func.HttpResponse(
+        "", status_code=302, headers={"Location": "/api/tasks", "Cache-Control": "no-store"},
+    )
 
 
 @app.function_name(name="task_web_root")
-@app.route(route="tasks", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="api/tasks", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 async def task_web_root(req: func.HttpRequest) -> func.HttpResponse:
     return await asyncio.to_thread(_task_web().handle, req)
 
 
 @app.function_name(name="task_web_route")
-@app.route(route="tasks/{*path}", methods=["GET", "POST"], auth_level=func.AuthLevel.ANONYMOUS)
+@app.route(route="api/tasks/{*path}", methods=["GET", "POST"], auth_level=func.AuthLevel.ANONYMOUS)
 async def task_web_route(req: func.HttpRequest) -> func.HttpResponse:
     return await asyncio.to_thread(_task_web().handle, req, req.route_params.get("path", ""))
+
+
+# --- Function: reaper_poll_timer -------------------------------------------
+
 
 @app.function_name(name="reaper_poll_timer")
 @app.timer_trigger(
@@ -2945,7 +2960,7 @@ def capture_drain(msg: func.QueueMessage) -> None:
 # --- Function: health ------------------------------------------------------
 
 @app.function_name(name="health")
-@app.route(route="health", methods=["GET"])
+@app.route(route="api/health", methods=["GET"])
 def health(req: func.HttpRequest) -> func.HttpResponse:
     del req
     return func.HttpResponse(
@@ -2958,7 +2973,7 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
 # --- Foundry agent tools (HTTP endpoints) ----------------------------------
 
 @app.function_name(name="tool_briefing_context")
-@app.route(route="tools/briefing_context", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
+@app.route(route="api/tools/briefing_context", methods=["POST"], auth_level=func.AuthLevel.FUNCTION)
 def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_briefing_context().
 
@@ -3021,7 +3036,7 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.function_name(name="tool_weather")
-@app.route(route="tools/weather", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@app.route(route="api/tools/weather", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def tool_weather(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_weather(location)."""
     location = req.params.get("location") or _home_location()
@@ -3145,7 +3160,7 @@ def _vault_recent(kind: str, limit: int) -> list[dict]:
 
 
 @app.function_name(name="tool_vault_recent")
-@app.route(route="tools/vault_recent", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@app.route(route="api/tools/vault_recent", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def tool_vault_recent(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_vault_recent(kind, limit). Newest items from a
     mindVault folder (research/notes/ideas/wiki). Never reads .me."""
@@ -3172,7 +3187,7 @@ def tool_vault_recent(req: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.function_name(name="tool_vault_read")
-@app.route(route="tools/vault_read", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
+@app.route(route="api/tools/vault_read", methods=["GET"], auth_level=func.AuthLevel.FUNCTION)
 def tool_vault_read(req: func.HttpRequest) -> func.HttpResponse:
     """Foundry agent tool: get_vault_read(path). Markdown content of ONE
     allowlisted mindVault file. Never reads .me."""
