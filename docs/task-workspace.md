@@ -82,6 +82,12 @@ uses `form_post`, not a code-bearing query string. The one-hour session cookie
 is encrypted, `__Host-`, Secure, HttpOnly, and SameSite=Lax. Only hashed replay
 and session identifiers with expiry are saved privately. Logout revokes that
 session. Concurrent callback replay is rejected using the existing ETag store.
+Both encrypted cookies use unpadded base64url on the wire: the Functions Python
+binding converts `Set-Cookie` to an RPC cookie, and the ASP.NET host URI-escapes
+its value. Padding would otherwise become `%3D` in the browser. Reading also
+accepts the previous raw or URI-escaped padding, restoring canonical Fernet
+encoding before the same signature and lifetime checks. Existing valid sessions
+can recover without clearing the ledger, changing keys or creating new sessions.
 At the eight-session or forty-recent-sign-in bound, a verified owner receives
 an explicit 429 response instead of a generic service failure. Expired receipts
 are pruned before capacity checks; live sessions and replay receipts are not

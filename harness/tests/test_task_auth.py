@@ -2,16 +2,26 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from http.cookies import SimpleCookie
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
+import azure.functions as func
 import httpx
 import jwt
 import pytest
+from azure.functions.http import HttpResponseConverter
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.asymmetric import rsa
-from task_auth import FLOW_COOKIE, SESSION_COOKIE, AuthConfig, AuthError, TaskAuth
+from task_auth import (
+    FLOW_COOKIE,
+    SESSION_COOKIE,
+    AuthConfig,
+    AuthError,
+    TaskAuth,
+    cookie_header,
+)
 from task_state import CAPS, workspace
 from test_briefing_state import FakeBlob, store_for
 
@@ -65,9 +75,12 @@ def identity():
 
 
 def cookie_pair(header, name):
-    parsed = SimpleCookie()
-    parsed.load(header)
-    return name + "=" + parsed[name].value
+    """Mirror the Python binding and the ASP.NET host's URI-escaped RPC cookie."""
+    encoded = HttpResponseConverter.encode(
+        func.HttpResponse("", headers={"Set-Cookie": header}), expected_type=func.HttpResponse,
+    )
+    parsed = encoded.value["cookies"][0]
+    return name + "=" + quote(parsed[name].value, safe="-_.~")
 
 
 def test_actual_msal_code_flow_uses_pkce_without_graph_or_offline_scopes(identity):
@@ -95,6 +108,12 @@ def test_real_msal_callback_validates_signed_owner_and_keeps_tokens_out_of_cooki
     result = auth.callback(cookie_pair(flow_cookie, FLOW_COOKIE), {"state": query["state"][0], "code": "synthetic-code"})
     session = auth.authenticate(cookie_pair(result, SESSION_COOKIE))
     assert session["idp"] == "live.com"
+    parsed = SimpleCookie()
+    parsed.load(result)
+    unpadded = parsed[SESSION_COOKIE].value.rstrip("=")
+    padded = unpadded + "=" * (-len(unpadded) % 4)
+    for legacy in (padded, quote(padded, safe="-_.~"), quote(padded, safe="-_.~").replace("%3D", "%3d")):
+        assert auth.authenticate(SESSION_COOKIE + "=" + legacy)["sid"] == session["sid"]
     assert "SameSite=Lax" in result and "HttpOnly" in result and "Secure" in result
     assert "access_token" not in session and "id_token" not in session
     assert "synthetic-access-not-for-storage" not in json.dumps(blob.saved())
@@ -260,3 +279,38 @@ def test_expired_cookie_diagnostics_do_not_log_cookie_or_decrypted_payload(ident
     assert "signature=True lifetime=False" in caplog.text
     assert value not in caplog.text
     assert "synthetic-private" not in caplog.text
+
+
+def test_all_fernet_padding_shapes_roundtrip_through_functions_cookie_serialization(identity):
+    auth, _, _, _, _, _ = identity
+    padding_lengths = set()
+    for length in range(48):
+        payload = {"synthetic": "x" * length}
+        sealed = auth._seal(payload)
+        assert re.fullmatch(r"[A-Za-z0-9_-]+", sealed)
+        padding_lengths.add(-len(sealed) % 4)
+        for name in (FLOW_COOKIE, SESSION_COOKIE):
+            header = cookie_header(name, sealed, max_age=600, flow=name == FLOW_COOKIE)
+            transported = cookie_pair(header, name).split("=", 1)[1]
+            assert transported == sealed
+            assert auth._open(transported, 600) == payload
+    assert padding_lengths == {0, 1, 2}
+
+
+@pytest.mark.parametrize("suffix", ["===", "%253D", "%GG", "%2F", "%2B"])
+def test_malformed_cookie_wire_encoding_is_not_accepted(identity, suffix):
+    auth, _, _, _, _, _ = identity
+    value = auth._seal({"synthetic": True})
+    with pytest.raises(AuthError, match="authentication_required"):
+        auth._open(value + suffix, 600)
+
+
+def test_legacy_cookie_decoding_does_not_bypass_signature_or_expiry(identity):
+    auth, _, _, _, _, _ = identity
+    expired = auth.cipher.encrypt_at_time(b'{"synthetic":true}', int(time.time()) - 3700).decode()
+    current = auth._seal({"synthetic": True})
+    altered = current[:20] + ("B" if current[20] == "A" else "A") + current[21:]
+    for value in (expired, altered):
+        padded = value.rstrip("=") + "=" * (-len(value.rstrip("=")) % 4)
+        with pytest.raises(AuthError, match="authentication_required"):
+            auth._open(quote(padded, safe="-_.~"), 3600)

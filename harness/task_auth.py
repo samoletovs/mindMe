@@ -12,7 +12,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from http.cookies import CookieError, SimpleCookie
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 import jwt
@@ -137,6 +137,19 @@ def _cookie(header: str, name: str) -> str:
     return parsed[name].value
 
 
+def _cookie_ciphertext(value: str) -> bytes:
+    decoded = unquote(value, encoding="ascii", errors="strict")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", decoded):
+        raise ValueError("invalid_cookie_encoding")
+    unpadded = decoded.rstrip("=")
+    if len(unpadded) % 4 == 1:
+        raise ValueError("invalid_cookie_encoding")
+    padded = unpadded + "=" * (-len(unpadded) % 4)
+    if "=" in decoded and decoded != padded:
+        raise ValueError("invalid_cookie_encoding")
+    return padded.encode("ascii")
+
+
 class TaskAuth:
     def __init__(
         self, config: AuthConfig, *, store: BriefingStore, client: httpx.Client,
@@ -167,14 +180,14 @@ class TaskAuth:
         )
 
     def _seal(self, value: dict[str, Any]) -> str:
-        encoded = self.cipher.encrypt(json.dumps(value, separators=(",", ":")).encode()).decode("ascii")
+        encoded = self.cipher.encrypt(json.dumps(value, separators=(",", ":")).encode()).decode("ascii").rstrip("=")
         if len(encoded) > 3800:
             raise AuthError("auth_cookie_capacity", 503)
         return encoded
 
     def _open(self, value: str, ttl: int) -> dict[str, Any]:
         try:
-            result = json.loads(self.cipher.decrypt(value.encode("ascii"), ttl=ttl))
+            result = json.loads(self.cipher.decrypt(_cookie_ciphertext(value), ttl=ttl))
         except (InvalidToken, ValueError, UnicodeError):
             raise AuthError("authentication_required") from None
         if not isinstance(result, dict):
@@ -316,7 +329,7 @@ class TaskAuth:
             signature_valid = False
             lifetime_valid = False
             try:
-                issued = self.cipher.extract_timestamp(value.encode("ascii"))
+                issued = self.cipher.extract_timestamp(_cookie_ciphertext(value))
                 signature_valid = True
                 lifetime_valid = -60 <= int(time.time()) - issued <= SESSION_SECONDS
             except (InvalidToken, ValueError, UnicodeError):
