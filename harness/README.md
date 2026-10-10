@@ -7,12 +7,14 @@ mindMe. Replaces the long-poll `scripts/dev/telegram_bridge.py` in production.
 
 | Trigger | Name | Purpose |
 |---|---|---|
+| HTTP GET `/` | `task_site_root` | Root-only 302 redirect to `/api/tasks`; no configuration reads, cookies or task data. |
 | HTTP POST `/api/telegram_webhook` | `telegram_webhook` | Telegram update receiver. Verifies `X-Telegram-Bot-Api-Secret-Token`. Enforces allowlist. |
 | Timer `0 30 7 * * *` | `morning_briefing_timer` | Sends the daily briefing at 07:30 UTC. |
 | Timer `0 0 18 * * 0` | `weekly_review_timer` | Weekly-review nudge, Sunday 18:00 UTC. |
 | Timer `0 */30 * * * *` | `reaper_poll_timer` | Polls GitHub for finished Copilot-agent PRs in mindVault/familyVault and fires the existing reaper workflow via `workflow_dispatch`. Moves the reapers' idle polling off metered GitHub Actions minutes. See [github_reapers.py](github_reapers.py). |
 | Queue `capture-events` | `capture_drain` | Legacy, unsupported. Raises instead of consuming and discarding messages; Functions retries then retains them in the poison queue. Active captures go to memex. |
 | HTTP GET `/api/health` | `health` | Uptime probe. |
+| HTTP `/api/tasks` and `/api/tasks/*` | `task_web_root`, `task_web_route` | Default-off single-owner task shell and Microsoft-authenticated BFF. Data/actions independently enforce exact owner authorization and CSRF; existing tool/webhook auth is unchanged. |
 | HTTP POST `/api/tools/briefing_context?tier=core|extended|deep&include_meta=true|false` | `tool_briefing_context` | Foundry agent tool: returns the requested sanitized briefing view built in-process from `personal-os/` (`core` default). |
 | HTTP GET `/api/tools/weather?location=...` | `tool_weather` | Foundry agent tool: wttr.in passthrough. |
 | HTTP GET `/api/tools/vault_recent` | `tool_vault_recent` | List recent allowed mindVault files. |
@@ -21,6 +23,16 @@ mindMe. Replaces the long-poll `scripts/dev/telegram_bridge.py` in production.
 All `/api/tools/*` routes require Function authentication through `x-functions-key`.
 The Foundry agent uses the `mindme-tools` project connection, not anonymous access.
 See [the coordinated authentication rollout](../docs/deploy.md).
+
+`host.json` uses an empty HTTP route prefix. Each existing HTTP decorator
+explicitly includes `api/`, preserving its public URL and auth/method contract.
+Only the new constrained root route sits outside `/api/`; it is not a catch-all.
+
+The [task workspace contract](../docs/task-workspace.md) documents task clarification,
+source-bound approval, receipt-bound publication, bounded preparation and verified
+closure. Its static assets ship with this Function package; no Node build, new
+hosting service or local auth bypass is needed. An unconfigured sign-in is an
+explicit unavailable state, not synthetic live data.
 
 Failed memex forwarding returns HTTP 503 so Telegram can retry. Both messages
 and callback queries enforce the single-chat allowlist. A successful handoff

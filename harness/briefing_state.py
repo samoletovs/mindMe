@@ -27,7 +27,7 @@ RECORD_CAPS = {
     "proposals": 200, "messages": 400, "memories": 100,
     "fingerprints": 1000, "deliveries": 14,
 }
-_ROOT_KEYS = {"version", *RECORD_CAPS, "last_delivered", "knowledge"}
+_ROOT_KEYS = {"version", *RECORD_CAPS, "last_delivered", "knowledge", "task_workspace"}
 _PROPOSAL_KEYS = {
     "id", "kind", "text", "source_path", "source_revision", "source_digest",
     "status", "created_on", "expires_on", "message_ids", "action",
@@ -62,7 +62,7 @@ _SECRET = re.compile(
 )
 _TOMBSTONE_KEYS = {
     "id", "status", "invalidation_reason", "invalidated_on", "previous_status",
-    "action_id", "result", "activity",
+    "action_id", "result", "activity", "task_workspace", "kind", "reviewed", "acknowledged_unavailable",
 }
 T = TypeVar("T")
 
@@ -163,12 +163,23 @@ def _tombstone(record: dict[str, Any], today: date) -> dict[str, Any]:
         result["result"] = receipt
     if record.get("activity"):
         result["activity"] = copy.deepcopy(record["activity"])
+    if record.get("task_workspace"):
+        result["task_workspace"] = True
+        result["kind"] = record["kind"]
+        for key in ("reviewed", "acknowledged_unavailable"):
+            if key in record:
+                result[key] = record[key]
     return result
 
 
 def _validate_proposal(identifier: str, record: object) -> None:
     if not isinstance(record, dict) or record.get("id") != identifier:
         raise StateError("invalid_proposal")
+    if record.get("task_workspace"):
+        if any(key in record and type(record[key]) is not bool for key in ("reviewed", "acknowledged_unavailable")):
+            raise StateError("invalid_task_review_receipt")
+        if record.get("acknowledged_unavailable") is True and record.get("reviewed") is not True:
+            raise StateError("invalid_task_review_receipt")
     if "activity" in record:
         activity = record["activity"]
         if not isinstance(activity, list) or len(activity) > 32:
@@ -183,6 +194,13 @@ def _validate_proposal(identifier: str, record: object) -> None:
     if record.get("invalidation_reason") == "source_removed":
         required = {"id", "status", "invalidation_reason", "invalidated_on", "previous_status"}
         if not required <= record.keys() or not record.keys() <= _TOMBSTONE_KEYS:
+            raise StateError("invalid_source_tombstone")
+        if "task_workspace" in record and (
+            record["task_workspace"] is not True
+            or record.get("kind") not in {"capture_task", "refine_task", "edit_task", "close_task", "prepare_task", "research"}
+        ):
+            raise StateError("invalid_source_tombstone")
+        if ({"reviewed", "acknowledged_unavailable"} & record.keys()) and not record.get("task_workspace"):
             raise StateError("invalid_source_tombstone")
         if (
             not isinstance(record["status"], str) or not isinstance(record["previous_status"], str)
@@ -242,6 +260,15 @@ def _check_tombstones(before: dict[str, dict[str, Any]], after: dict[str, Any]) 
         for key in ("action_id", "previous_status", "invalidated_on"):
             if key in previous and current.get(key) != previous[key]:
                 raise StateError("source_receipt_immutable")
+        if previous.get("task_workspace"):
+            if any(previous.get(key) is True and current.get(key) is not True
+                   for key in ("reviewed", "acknowledged_unavailable")):
+                raise StateError("source_receipt_immutable")
+            if (
+                previous.get("reviewed") is not True and current.get("reviewed") is True
+                and current.get("acknowledged_unavailable") is not True
+            ):
+                raise StateError("source_receipt_immutable")
         if previous["status"] in {"completed", "done"}:
             if current["status"] != previous["status"]:
                 raise StateError("source_receipt_immutable")
@@ -256,8 +283,15 @@ def _check_tombstones(before: dict[str, dict[str, Any]], after: dict[str, Any]) 
 
 
 def _validate(state: object) -> None:
-    if not isinstance(state, dict) or set(state) not in (_ROOT_KEYS, _ROOT_KEYS - {"knowledge"}) or type(state["version"]) is not int:
+    if (
+        not isinstance(state, dict) or not _ROOT_KEYS - {"knowledge", "task_workspace"} <= state.keys()
+        or not state.keys() <= _ROOT_KEYS or type(state["version"]) is not int
+    ):
         raise StateError("invalid_state_schema")
+    if "task_workspace" in state:
+        from task_state import validate_workspace
+
+        validate_workspace(state["task_workspace"])
     if "knowledge" in state:
         from knowledge_state import validate_knowledge
 
@@ -497,6 +531,9 @@ def prune_state(state: dict[str, Any], *, inventory_paths: set[str], today: date
     expire implicitly. Source removal invalidates approval, not action history:
     completed/unresolved outcomes survive in non-replayable, source-less receipts.
     """
+    from task_state import prune_workspace
+
+    prune_workspace(state, inventory_paths, today)
     cutoff = (today - timedelta(days=35)).isoformat()
     for record in state["proposals"].values():
         if "activity" in record:
@@ -507,6 +544,11 @@ def prune_state(state: dict[str, Any], *, inventory_paths: set[str], today: date
     }
     for identifier, record in state["proposals"].items():
         path = record.get("source_path")
+        if (
+            record.get("task_workspace") and record.get("kind") == "close_task"
+            and record.get("status") == "completed" and (record.get("result") or {}).get("status") == "merged"
+        ):
+            path = record["result"].get("path", path)
         if path and path not in inventory_paths:
             state["proposals"][identifier] = _tombstone(record, today)
             removed.add(identifier)

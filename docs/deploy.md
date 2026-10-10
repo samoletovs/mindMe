@@ -1,5 +1,51 @@
 # Deploying the Function App
 
+## Personal task web and Telegram pilot
+
+The implementation and exact setting inventory are in
+[task-workspace.md](task-workspace.md). Both new flags default off. No new
+infrastructure, identity registration, secrets, host settings or live auth
+configuration were created by the local implementation. An unanswered approval
+gate is not approval.
+
+The release coordinator owns these ordered gates:
+
+1. Independently review mindMe and memex together, run full synthetic suites,
+   feed the real gateway's exported request fixtures through memex's validator,
+   run leak audits, and preserve/publish the reviewed code through checked PRs.
+2. Obtain explicit approval for the personal-directory confidential registration,
+   its exact existing-host callback, the two Key Vault secrets, HTTPS-only host
+   setting and runtime settings. Confirm exact signed owner `tid`/`oid` and
+   `idp: live.com`; do not infer a consumer subject from a CLI object ID.
+   No Graph permissions or `offline_access` are required.
+3. Deploy the compatible memex task-context, refinement, completion and
+   receipt-bound publication contract first. Keep its native checks and exact
+   manifest gate intact. Generic task writes must not silently gain merge authority.
+4. Explicitly publish the intended mindMe package to the existing host, initially
+   leaving `MINDME_TASKS_ENABLED=false` and `MINDME_WEB_ENABLED=false`. The current
+   `tests.yml` does not deploy. Include the checked-in `harness/web` static assets.
+5. At the approved configuration gate, set the documented runtime placeholders
+   securely, confirm resolved Key Vault references and HTTPS-only, then enable
+   only the authorized owner surface. The owner performs Microsoft sign-in and
+   consent; never fabricate a local auth success. Do not turn on global EasyAuth,
+   which would interfere with Telegram and Function-key tools.
+   Set the explicitly agreed IANA `MINDME_TASKS_TIMEZONE` before enabling Tasks.
+   Do not copy a personal device zone into source or silently default the owner
+   calendar to UTC. This setting does not change UTC auth, budget or expiry clocks.
+6. Only with explicit live-test authorization, verify a synthetic capture ->
+   exact proposal -> approval -> native-checked canonical publication ->
+   bounded preparation -> owner-verified closure cycle. Observe actual replay,
+   fresh-source and wrong-owner behavior without real personal tasks/messages.
+   Record deployed commits and the live result, not just a green test run.
+
+The incremental target remains EUR 10/month across the existing resources.
+Application counters and review-capacity limits bound new optional work, but do
+not replace checking combined Azure/GitHub usage. No new model or paid web host is
+required. A larger spend needs its separate justification/approval.
+
+Rollback disables the two new flags. Preserve the existing private ledger and
+writer receipts so uncertain operations cannot be replayed as new tasks.
+
 ## Telegram copy rollout
 
 Plain-English copy has three delivery surfaces; updating one does not update all:

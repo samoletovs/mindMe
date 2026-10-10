@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="referrer" content="no-referrer">
+  <title>Tasks - mindMe</title>
+  <link rel="stylesheet" href="/api/tasks/assets/tasks.css">
+  <script type="module" src="/api/tasks/assets/tasks.js"></script>
+</head>
+<body>
+  <!--
+  THESIS: A personal dispatch desk: see the next action and inspect its evidence,
+  not a wall of productivity metrics.
+  OWN-WORLD: Daylight white, cool neutral rails, dark green ink, restrained teal
+  selection, system typography and flat ruled task rows.
+  STORY: Capture a thought, choose work, review an exact proposal, verify a result.
+  FIRST VIEWPORT: Small left navigation, task ledger in the center, a working
+  detail pane alongside it. Capture stays in the header. Phones show one pane.
+  FORM: Grounded candidate 3, ledger plus detail, seed 77201f3f. Decision review
+  stays in the work stream; no decorative alternative controls or fake data.
+  -->
+  <a class="skip-link" href="#main">Skip to workspace</a>
+  <header class="app-header">
+    <a class="brand" href="/api/tasks" aria-label="mindMe tasks home">mind<span>Me</span><span class="brand-divider"></span><span class="brand-section">Tasks</span></a>
+    <div class="header-actions">
+      <span id="connection" class="connection">Checking sign-in</span>
+      <button id="refresh" class="quiet" type="button" hidden>Refresh</button>
+      <button id="capture-open" class="primary" type="button" hidden>+ Capture a task</button>
+      <button id="sign-out" class="quiet" type="button" hidden>Sign out</button>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1">
+    <section id="access" class="access-panel" aria-labelledby="access-title">
+      <div class="access-mark" aria-hidden="true">m</div>
+      <h1 id="access-title">Your work, with a clear next step.</h1>
+      <p id="access-message">Checking your personal workspace. No task data is stored in this browser.</p>
+      <div class="actions">
+        <a id="sign-in" class="button primary" href="/api/tasks/auth/login" hidden>Sign in with Microsoft</a>
+        <button id="access-retry" type="button" hidden>Try again</button>
+      </div>
+      <p class="fine-print">For the configured personal owner only. Your tasks stay in their existing vault; this is a view and an authorized way to work with them.</p>
+    </section>
+
+    <div id="workspace" class="workspace" hidden>
+      <nav class="navigation" aria-label="Workspace views">
+        <button type="button" data-view="needs" aria-current="page">Needs you <span id="needs-count"></span></button>
+        <button type="button" data-view="tasks">All tasks <span id="tasks-count"></span></button>
+        <button type="button" data-view="areas">Areas &amp; projects</button>
+        <button type="button" data-view="activity">Activity <span id="activity-count"></span></button>
+        <div class="nav-note"><strong>One source of truth.</strong><p>Proposals are not commitments. A submitted change is not yet saved to the canonical record.</p></div>
+      </nav>
+
+      <div class="work-content">
+        <div class="page-heading">
+          <div><h1 id="view-title">Needs you</h1><p id="view-description">Decisions, due follow-ups and the work you selected.</p></div>
+          <span id="snapshot" class="snapshot"></span>
+        </div>
+        <nav id="canonical-links" class="actions" aria-label="Canonical vault pages" hidden></nav>
+        <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+        <section id="uncertain" class="uncertain" role="alert" hidden>
+          <h2>This request has not been confirmed.</h2>
+          <p>It may already have reached the server. Keep this page open, inspect Activity, or recover this exact request. Do not create a replacement.</p>
+          <button id="recover-request" type="button">Recover the same request</button>
+        </section>
+        <div id="warnings" class="warnings"></div>
+
+        <section id="capture-section" class="capture-section" aria-labelledby="capture-title" hidden>
+          <div class="section-heading"><h2 id="capture-title">Get it out of your head</h2><button id="capture-cancel" class="quiet" type="button">Close capture</button></div>
+          <p>One rough request is enough. Missing details can stay in Clarify. Keep sensitive details in their private record.</p>
+          <form id="capture-form">
+            <label for="capture-text">What do you need to do?</label>
+            <textarea id="capture-text" name="text" rows="3" maxlength="2000" required placeholder="Describe the outcome or the question you want to resolve."></textarea>
+            <label for="capture-title-input">Title <span class="optional">optional</span></label>
+            <input id="capture-title-input" name="title" maxlength="120" placeholder="Leave blank to use the first line of your request">
+            <details><summary>Add the details you already know</summary><div id="capture-details" class="form-grid"></div></details>
+            <div class="form-footer"><p class="hint">First review the proposed record. Capturing it will not start research or an agent.</p><button class="primary" type="submit">Review capture</button></div>
+          </form>
+        </section>
+
+        <section id="proposal-section" aria-labelledby="proposal-heading" hidden>
+          <div class="section-heading"><h2 id="proposal-heading">Review before acting</h2><button id="proposal-close" class="quiet" type="button">Return to workspace</button></div>
+          <div id="proposal-preview"></div>
+        </section>
+
+        <section id="tasks-section" aria-labelledby="task-list-heading">
+          <div id="attention" class="attention"></div>
+          <div class="section-heading task-heading">
+            <h2 id="task-list-heading">Your open work</h2>
+            <div class="segmented" aria-label="Task layout">
+              <button id="layout-list" type="button" aria-pressed="true">List</button>
+              <button id="layout-board" type="button" aria-pressed="false">Board</button>
+            </div>
+          </div>
+          <div class="filters">
+            <label class="search-label" for="task-search">Search loaded tasks<input id="task-search" type="search" placeholder="Find an outcome or next action"></label>
+            <label for="stage-filter">Stage<select id="stage-filter"><option value="">All stages</option></select></label>
+            <label for="area-filter">Area<select id="area-filter"><option value="">All areas</option></select></label>
+          </div>
+          <div class="task-layout">
+            <div id="list-pane">
+              <div id="task-list" class="task-list" aria-live="polite"></div>
+              <div class="list-footer"><p id="page-status" class="hint"></p><button id="load-more" type="button" hidden>Load more tasks</button></div>
+            </div>
+            <aside id="inspector" class="inspector" aria-label="Selected task">
+              <div class="inspector-empty"><h2>A next step, not another list.</h2><p>Open a task to clarify its outcome, plan the next action, or review what AI can prepare.</p><p class="hint">Completion always needs evidence.</p></div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="areas-section" aria-labelledby="areas-title" hidden>
+          <h2 id="areas-title">Responsibilities and selected projects</h2>
+          <p>Areas are ongoing responsibilities. A project has an outcome; an inventory entry is not automatically an active commitment.</p>
+          <div id="area-list" class="area-list"></div>
+          <form id="projects-form" class="section-block">
+            <h3>Select projects for planning</h3>
+            <p class="hint">Choose up to eight existing projects. Changing this selection turns off standing AI permission until you review it again.</p>
+            <div id="project-options" class="check-list"></div>
+            <p id="project-page-status" class="hint"></p>
+            <div class="actions"><button id="projects-more" type="button" hidden>Load more projects</button><button type="submit">Save project selection</button><button id="projects-clear" type="button" class="danger-quiet">Clear project selection</button></div>
+          </form>
+          <form id="standing-form" class="section-block">
+            <h3>Let AI prepare, within clear limits</h3>
+            <p>Optionally authorize private draft preparation for up to three fully defined Ready tasks in your selected projects. Changes to their source invalidate that scope.</p>
+            <label class="checkbox"><input id="standing-enabled" type="checkbox"> Enable standing preparation for the tasks selected below</label>
+            <div id="standing-options" class="check-list"></div>
+            <p class="hint">This does not authorize public research, new commitments, messages, purchases, or verified completion.</p>
+            <div class="actions"><button type="submit">Save standing permission</button><button id="standing-stop" type="button" class="danger-quiet">Stop standing preparation</button></div>
+          </form>
+          <details class="section-block"><summary>Preparation limits and usage</summary><pre id="budget-details"></pre><p class="hint">These are operational limits, not a guarantee of a provider's bill. Unconfirmed work is never treated as a refund.</p></details>
+        </section>
+
+        <section id="activity-section" aria-labelledby="activity-title" hidden>
+          <h2 id="activity-title">Decisions and results</h2>
+          <p>Follow the same request from proposal to canonical record. A prepared draft is not a verified outcome.</p>
+          <div id="activity-list"></div>
+          <button id="history-more" type="button" hidden>Load more activity</button>
+        </section>
+      </div>
+    </div>
+  </main>
+  <footer class="app-footer">mindMe <span aria-hidden="true">/</span> Personal work, grounded in your vault.</footer>
+  <noscript><p class="notice">JavaScript is required for this workspace. No task action has been taken.</p></noscript>
+</body>
+</html>

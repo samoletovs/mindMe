@@ -8,6 +8,10 @@ azure-storage-blob==12.28.0
 azure-storage-queue==12.13.0
 openai==2.36.0
 httpx==0.28.1
+PyYAML==6.0.3
+msal==1.38.0
+PyJWT==2.13.0
+cryptography==50.0.0
 
 # Phase 2 tracing (2026-05-17, agentFlow Phase 1) — Application Insights via
 # OpenTelemetry. Reads APPLICATIONINSIGHTS_CONNECTION_STRING from app settings.
