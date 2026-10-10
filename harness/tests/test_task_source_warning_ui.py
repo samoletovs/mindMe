@@ -24,6 +24,7 @@ function node() {
     append(...children) { this.children.push(...children); },
     replaceChildren(...children) { this.children = children; },
     querySelector() { return null; },
+    reset() {},
   };
 }
 const nodes = new Map();
@@ -41,6 +42,24 @@ const tests = `
     excluded_count: 1, errors: [], project_excluded_count: 2, project_errors: [],
     project_next_offset: 4, project_candidate_count: 7, next_offset: 12,
   };
+  state.overview = structuredClone(current);
+  state.overview.canonical_links = {
+    dashboard: "https://github.com/example/mindVault/blob/" + "a".repeat(40) + "/home.md",
+    knowledge_index: "https://github.com/example/mindVault/blob/" + "a".repeat(40) + "/wiki/index.md",
+  };
+  renderCanonicalLinks();
+  assert.equal($("canonical-links").hidden, false);
+  assert.equal($("canonical-links").children[0].textContent, "Open vault dashboard");
+  assert.equal($("canonical-links").children[1].textContent, "Knowledge index");
+  assert.equal($("canonical-links").children[0].target, "_blank");
+  assert.equal($("canonical-links").children[0].rel, "noopener noreferrer");
+  assert.match($("canonical-links").children[2].textContent, /GitHub account/);
+  state.overview.canonical_links = { dashboard: "javascript:alert(1)", knowledge_index: "http://example.invalid" };
+  renderCanonicalLinks();
+  assert.equal($("canonical-links").hidden, true);
+  assert.equal($("canonical-links").children.length, 0);
+  clearData();
+  assert.equal($("canonical-links").hidden, true);
   state.overview = structuredClone(current);
   renderSourceWarnings();
   assert.match(warningText(), /1 task source candidate/);
@@ -98,7 +117,7 @@ const tests = `
 })()
 `;
 Promise.resolve(vm.runInNewContext(source.slice(0, boundary) + tests,
-  { document, assert, structuredClone, console })).catch((error) => {
+  { document, assert, structuredClone, console, URL, clearTimeout() {} })).catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });

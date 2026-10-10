@@ -355,6 +355,21 @@ function renderSourceWarnings() {
     for (const error of data.project_errors) $("warnings").append(element("p", sourceIssueMessage(error.code)));
   }
 }
+function renderCanonicalLinks() {
+  const target = $("canonical-links");
+  target.replaceChildren();
+  for (const [key, label] of [["dashboard", "Open vault dashboard"], ["knowledge_index", "Knowledge index"]]) {
+    const link = safeLink(label, state.overview?.canonical_links?.[key]);
+    if (link) {
+      link.className = "button";
+      target.append(link);
+    }
+  }
+  target.hidden = !target.children.length;
+  if (!target.hidden) {
+    target.append(element("p", "Opens canonical pages on GitHub; vault access requires your GitHub account.", "hint"));
+  }
+}
 async function loadOverview(appendPage = false) {
   if (state.loading) return;
   state.loading = true;
@@ -387,6 +402,7 @@ async function loadOverview(appendPage = false) {
     }
     state.items = [...new Map(items.map((task) => [task.path, task])).values()];
     state.overview = data;
+    renderCanonicalLinks();
     if (!appendPage && state.selected?.revision && !data.items.some((task) =>
       task.path === state.selected.path && task.revision === state.selected.revision
     )) closeDetail();
@@ -865,6 +881,7 @@ function clearData() {
   state.detailGeneration += 1;
   state.csrf = ""; state.items = []; state.overview = null; state.selected = null;
   state.proposal = null; state.clarification = null; state.unknown = null;
+  renderCanonicalLinks();
   for (const id of ["task-list", "inspector", "activity-list", "proposal-preview", "project-options",
     "standing-options", "area-list", "capture-details", "warnings", "budget-details", "snapshot", "attention"]) $(id).replaceChildren();
   $("capture-form").reset();

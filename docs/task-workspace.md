@@ -71,6 +71,15 @@ are not inferred from capture age, a model suggestion, or `execution: agent`.
 Deadline, review date, and dated focus stay separate. Yesterday's focus does not
 become today's focus.
 
+The authenticated overview also provides navigation to the existing canonical
+`home.md` dashboard and `wiki/index.md` knowledge index when those exact regular
+files exist in its pinned Git tree. URLs use the configured repository and
+canonical commit, not a hardcoded owner or a browser-selected destination.
+These are external GitHub links requiring the owner's vault access, not new
+in-app knowledge/dashboard views. No page content is fetched or copied into the
+task response. Links are cleared on sign-out or when a fresh snapshot has no
+matching regular-file navigation targets.
+
 The task reader, clarification service, Microsoft auth adapter, Telegram adapter,
 and web transport are respectively `task_sources.py`, `task_service.py`,
 `task_auth.py`, `task_telegram.py`, and `task_web.py`. They share

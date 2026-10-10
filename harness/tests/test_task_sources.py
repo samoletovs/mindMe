@@ -294,6 +294,28 @@ def test_direct_rechecks_still_reject_sources_excluded_from_catalog():
         subject.read_receipt_source(PATH)
 
 
+def test_canonical_navigation_uses_configured_repo_and_pinned_regular_tree_without_content_reads():
+    marker = "Synthetic dashboard text must not be embedded in task responses."
+    vault = Vault({PATH: source_text(), "home.md": marker, "wiki/index.md": marker})
+    result = repository(vault).page(today=TODAY)
+    assert result["canonical_links"] == {
+        "dashboard": f"https://github.com/{REPO}/blob/{HEAD}/home.md",
+        "knowledge_index": f"https://github.com/{REPO}/blob/{HEAD}/wiki/index.md",
+    }
+    assert len(vault.reads) == 1
+    assert vault.reads[0].url.path.endswith(PATH)
+    assert marker not in json.dumps(result)
+    assert "samoletovs" not in json.dumps(result["canonical_links"])
+
+
+def test_missing_or_symlinked_canonical_pages_do_not_get_fabricated_navigation():
+    vault = Vault({"home.md": "An external target is not a canonical regular page."})
+    vault.tree[0]["mode"] = "120000"
+    result = repository(vault).page(today=TODAY)
+    assert result["canonical_links"] == {}
+    assert vault.reads == []
+
+
 @pytest.mark.parametrize("path", ["tasks/done/test.md", "../tasks/test.md", "tasks/test.private.md", "work/test.md"])
 def test_reader_cannot_be_used_to_scan_arbitrary_or_closed_private_records(path):
     vault = Vault({PATH: source_text()})

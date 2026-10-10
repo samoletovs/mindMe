@@ -355,6 +355,11 @@ class TaskRepository:
             "projects": projects["items"], "project_next_offset": projects["next_offset"],
             "project_errors": projects["errors"], "project_excluded_count": projects["excluded_count"],
             "project_candidate_count": projects["candidate_count"],
+            "canonical_links": {
+                name: f"https://github.com/{self.repo}/blob/{head}/{path}"
+                for name, path in (("dashboard", "home.md"), ("knowledge_index", "wiki/index.md"))
+                if path in entries
+            },
             "areas": list(AREAS), "stages": list(STAGES),
         }
 
