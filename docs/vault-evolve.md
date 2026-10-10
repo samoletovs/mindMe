@@ -98,7 +98,7 @@ The existing `brief1|` proposal approvals and memex capture callbacks are unchan
 | `/evolve` | Show today's review and its recorded publication receipt |
 | `/evolve now` | Prepare/deliver today if not already completed |
 | `/evolve retry` | Explicitly retry an unconfirmed delivery; last message may repeat |
-| Useful / Already know / Not useful | Save feedback bound to the actual message/finding |
+| Useful / Already know / Not useful | Save feedback bound to the actual message/finding; the authenticated web inbox uses the same feedback service |
 | Reply with text or voice | Save at most 280 non-sensitive characters of scoped feedback |
 | Reply `why` | Show literal supporting quotations |
 | Reply `snooze YYYY-MM-DD` | Reconsider within the 13-day feedback horizon |
@@ -106,6 +106,16 @@ The existing `brief1|` proposal approvals and memex capture callbacks are unchan
 | `/evolve forget YYYY-MM-DD` | Remove that day's feedback, not a published artifact |
 
 Feedback expires with the 14-day review window and is not a new permanent profile.
+`evolve_feedback.py` owns that transport-independent persistence and evidence
+recheck. The web uses canonical review/finding IDs, not replayed Telegram
+callbacks, and includes the last feedback version in each mutation. Retrying the
+same choice is idempotent; a changed concurrent choice is not overwritten.
+For a canonical review with no retained delivery record, an explicit web feedback
+write may seed a `canonical`-phase receipt in the same private evolve state.
+It has no Telegram message IDs and is not described as delivered. The ordinary
+loop can later deliver that exact canonical review without model generation or
+republishing. Explicit web feedback constrains repetition even before Telegram
+delivery; merely opening a review does not.
 Deletion removes it from future model inputs; it is not retained in cached prompts.
 A changed/deleted or newly excluded source invalidates retained derived text on
 the next daily scan or relevant interactive read. Delivery retries recheck sources

@@ -64,7 +64,7 @@ def evidence_packet(context: dict[str, Any], previous: list[dict[str, Any]]) -> 
             if index < len(record.get("message_ids", []))
         }
         for finding in report.get("findings", []):
-            if finding["id"] not in delivered_findings:
+            if finding["id"] not in delivered_findings and finding["id"] not in record.get("feedback", {}):
                 continue
             cited = [manifest[item["source"]] for item in finding["evidence"]]
             if any(paths.get(source["path"]) != source["sha256"] for source in cited):
@@ -236,7 +236,9 @@ def telegram_parts(review: dict[str, Any], receipt: dict[str, Any], packet: dict
     location = (
         f"Review draft: {receipt['pr_url']}\n"
         + ("Merged into mindVault." if status == "merged" else "Submitted for review; not yet added to mindVault.")
-        if status in {"submitted", "merged"}
+        if status in {"submitted", "merged"} and receipt.get("pr_url")
+        else "Review is canonical in mindVault. Its proposals are not approved."
+        if status == "merged"
         else "Review saved privately. No new review request or work was created."
     )
     parts: list[dict[str, Any]] = [{

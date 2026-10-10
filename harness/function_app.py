@@ -80,6 +80,9 @@ from briefing_plan import PlanError, plan_schema
 from briefing_sources import SourceError, load_sources, load_topic_sources, read_knowledge_source, read_source_revision
 from briefing_state import BriefingStore, StateError
 from capture_links import normalize_message_links
+from dashboard_service import DashboardService
+from dashboard_sources import DashboardRepository
+from evolve_feedback import ReviewFeedback
 from evolve_loop import DailyEvolve, EVOLVE_STATE_BLOB
 from execution_budget import (
     BudgetExceeded, BudgetRequestsTransport, bounded_timeout, checkpoint, execution_budget,
@@ -661,6 +664,7 @@ def _task_service() -> TaskService:
         raise TaskError("task_limits_invalid") from None
     return TaskService(
         loop=loop, repository=repository, generate=_generate_task_preparation,
+        capture_reader=DashboardRepository(client, token=token, repo=repo).capture_source,
         publish=gateway.publish_task, enabled=_tasks_enabled, attention_timezone=owner_timezone, **limits,
     )
 
@@ -671,7 +675,22 @@ def _task_auth() -> TaskAuth:
 
 
 def _task_web() -> TaskWeb:
-    return TaskWeb(env=os.environ, auth=_task_auth, service=_task_service)
+    return TaskWeb(env=os.environ, auth=_task_auth, service=_task_service, dashboard=_dashboard_service)
+
+
+def _dashboard_service(tasks: TaskService, auth: TaskAuth) -> DashboardService:
+    repository = DashboardRepository(
+        _http_client(), token=os.environ.get("DIG_GITHUB_TOKEN", ""),
+        repo=os.environ.get("DIG_REPO", DIG_REPO_DEFAULT),
+    )
+    return DashboardService(
+        tasks=tasks, repository=repository, cipher=auth.cipher,
+        feedback_enabled=_daily_evolve_enabled,
+        feedback=lambda: ReviewFeedback(
+            store=BriefingStore(_os_container_client(), blob_name=EVOLVE_STATE_BLOB),
+            revision=repository.evidence_revision,
+        ),
+    )
 
 
 def _task_owner(message: dict, sender: dict | None = None) -> bool:

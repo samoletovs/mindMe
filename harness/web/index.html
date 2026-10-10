@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <meta name="referrer" content="no-referrer">
-  <title>Tasks - mindMe</title>
+  <title>Your vault - mindMe</title>
   <link rel="stylesheet" href="/api/tasks/assets/tasks.css">
   <script type="module" src="/api/tasks/assets/tasks.js"></script>
 </head>
@@ -15,15 +15,16 @@
   not a wall of productivity metrics.
   OWN-WORLD: Daylight white, cool neutral rails, dark green ink, restrained teal
   selection, system typography and flat ruled task rows.
-  STORY: Capture a thought, choose work, review an exact proposal, verify a result.
-  FIRST VIEWPORT: Small left navigation, task ledger in the center, a working
-  detail pane alongside it. Capture stays in the header. Phones show one pane.
-  FORM: Grounded candidate 3, ledger plus detail, seed 77201f3f. Decision review
-  stays in the work stream; no decorative alternative controls or fake data.
+  STORY: Check approved focus and due work; inspect a finding's evidence before
+  feedback or an explicit task preview. A review is never approval.
+  FIRST VIEWPORT: Existing left rail, dated focus and task attention, then changed
+  sources. Knowledge uses the incumbent ledger plus reader. Phones show one pane.
+  FORM: Constrained Operate/Read extension of ledger plus detail (seed 77201f3f).
+  Capture and exact approval stay in the work stream; no new visual world.
   -->
   <a class="skip-link" href="#main">Skip to workspace</a>
   <header class="app-header">
-    <a class="brand" href="/api/tasks" aria-label="mindMe tasks home">mind<span>Me</span><span class="brand-divider"></span><span class="brand-section">Tasks</span></a>
+    <a class="brand" href="/api/tasks" aria-label="mindMe vault home">mind<span>Me</span><span class="brand-divider"></span><span class="brand-section">Your vault</span></a>
     <div class="header-actions">
       <span id="connection" class="connection">Checking sign-in</span>
       <button id="refresh" class="quiet" type="button" hidden>Refresh</button>
@@ -36,7 +37,7 @@
     <section id="access" class="access-panel" aria-labelledby="access-title">
       <div class="access-mark" aria-hidden="true">m</div>
       <h1 id="access-title">Your work, with a clear next step.</h1>
-      <p id="access-message">Checking your personal workspace. No task data is stored in this browser.</p>
+      <p id="access-message">Checking your personal workspace. No private content is stored in this browser.</p>
       <div class="actions">
         <a id="sign-in" class="button primary" href="/api/tasks/auth/login" hidden>Sign in with Microsoft</a>
         <button id="access-retry" type="button" hidden>Try again</button>
@@ -46,8 +47,9 @@
 
     <div id="workspace" class="workspace" hidden>
       <nav class="navigation" aria-label="Workspace views">
-        <button type="button" data-view="needs" aria-current="page">Needs you <span id="needs-count"></span></button>
-        <button type="button" data-view="tasks">All tasks <span id="tasks-count"></span></button>
+        <button type="button" data-view="today" aria-current="page">Today</button>
+        <button type="button" data-view="tasks">Tasks <span id="tasks-count"></span></button>
+        <button type="button" data-view="knowledge">Knowledge</button>
         <button type="button" data-view="areas">Areas &amp; projects</button>
         <button type="button" data-view="activity">Activity <span id="activity-count"></span></button>
         <div class="nav-note"><strong>One source of truth.</strong><p>Proposals are not commitments. A submitted change is not yet saved to the canonical record.</p></div>
@@ -55,7 +57,7 @@
 
       <div class="work-content">
         <div class="page-heading">
-          <div><h1 id="view-title">Needs you</h1><p id="view-description">Decisions, due follow-ups and the work you selected.</p></div>
+          <div><h1 id="view-title">Today</h1><p id="view-description">Approved focus, current work and something worth revisiting.</p></div>
           <span id="snapshot" class="snapshot"></span>
         </div>
         <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
@@ -69,6 +71,7 @@
         <section id="capture-section" class="capture-section" aria-labelledby="capture-title" hidden>
           <div class="section-heading"><h2 id="capture-title">Get it out of your head</h2><button id="capture-cancel" class="quiet" type="button">Close capture</button></div>
           <p>One rough request is enough. Missing details can stay in Clarify. Keep sensitive details in their private record.</p>
+          <p id="capture-context" class="notice" hidden></p>
           <form id="capture-form">
             <label for="capture-text">What do you need to do?</label>
             <textarea id="capture-text" name="text" rows="3" maxlength="2000" required placeholder="Describe the outcome or the question you want to resolve."></textarea>
@@ -84,7 +87,31 @@
           <div id="proposal-preview"></div>
         </section>
 
-        <section id="tasks-section" aria-labelledby="task-list-heading">
+        <section id="today-section" aria-label="Today in your vault">
+          <div id="today-focus" class="focus-summary"></div>
+          <div class="today-columns">
+            <section aria-labelledby="today-work-title"><h2 id="today-work-title">Work to look at</h2><div id="today-work"></div></section>
+            <section aria-labelledby="today-new-title"><h2 id="today-new-title">Since your last recorded visit</h2><div id="today-new"></div></section>
+          </div>
+        </section>
+
+        <section id="knowledge-section" aria-labelledby="knowledge-title" hidden>
+          <div class="section-heading"><h2 id="knowledge-title">Inbox</h2><span class="hint">Findings first. Evidence one step away.</span></div>
+          <p class="hint">Canonical daily reviews and weekly digests. Their interpretations and possible next steps are not approved work.</p>
+          <div id="knowledge-status" role="status" aria-live="polite"></div>
+          <div class="knowledge-layout">
+            <div id="knowledge-list-pane"><div id="knowledge-list" class="knowledge-list"></div><button id="knowledge-more" type="button" hidden>Load earlier reviews</button></div>
+            <aside id="knowledge-reader" class="knowledge-reader inspector" aria-label="Evidence reader">
+              <div class="inspector-empty"><h2>Start with the evidence.</h2><p>Open a finding to see its original quotations. Useful is feedback, not permission to act.</p></div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="tasks-section" aria-labelledby="task-list-heading" hidden>
+          <div class="task-scope actions" aria-label="Task attention filter">
+            <button id="scope-needs" type="button" aria-pressed="false">Needs you <span id="needs-count"></span></button>
+            <button id="scope-all" type="button" aria-pressed="true">All tasks</button>
+          </div>
           <div id="attention" class="attention"></div>
           <div class="section-heading task-heading">
             <h2 id="task-list-heading">Your open work</h2>

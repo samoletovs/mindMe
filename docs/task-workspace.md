@@ -5,6 +5,11 @@ Telegram. It is not a public app, a second task database, or a new executor.
 The application and synthetic tests are local implementation evidence, not
 evidence of deployed sign-in or a completed personal task.
 
+The [vault dashboard extension](vault-dashboard.md) adds Today and Knowledge to
+this same shell. Tasks, Areas & projects, Activity, the owner BFF and all existing
+task routes remain in place. `/api/tasks#needs` opens task attention;
+`#tasks`, `#today`, `#knowledge`, `#areas` and `#activity` select the other views.
+
 ## One task truth
 
 Permitted canonical Markdown in `tasks/` remains the open-work inventory.
@@ -139,7 +144,7 @@ an empty template would instead default to the function name.
 | Route | Method | Result |
 |---|---|---|
 | `/` | GET | Fixed 302 redirect to `/api/tasks`, no cookies or data |
-| `/api/tasks` and `/assets/tasks.css`, `/assets/tasks.js` | GET | Static shell only |
+| `/api/tasks` and `/assets/tasks.css`, `/assets/tasks.js`, `/assets/dashboard.js` | GET | Static shell only |
 | `/auth/login` | GET | Microsoft code+PKCE redirect |
 | `/auth/callback` | POST | Bounded form-post callback; exact owner validation |
 | `/auth/logout` | POST | CSRF-protected session revocation |
@@ -155,6 +160,8 @@ an empty template would instead default to the function name.
 | `/api/clarify`, `/api/clarify-proposal` | POST | Bounded definition questions and a separate exact refinement proposal |
 | `/api/projects`, `/api/standing` | POST | Explicit active-project and narrowly scoped preparation authorization |
 | `/api/review-result` | POST | Owner reviews current output, or explicitly acknowledges an unavailable result's content-free notice; never completes a task |
+| `/api/dashboard/today`, `/api/dashboard/inbox` | GET | Bounded canonical dashboard projections; see the dashboard contract |
+| `/api/dashboard/read`, `/api/dashboard/visit`, `/api/dashboard/feedback`, `/api/dashboard/capture` | POST | Same owner/origin/CSRF boundary for evidence reads, private visit/feedback and source-bound capture previews |
 
 JSON fields are strict. Duplicate keys, invalid dates, unsupported fields,
 oversized payloads, stale revisions, and malformed identifiers are rejected.
@@ -208,6 +215,14 @@ successful submission just because the HTTP status was 202. Only verified
 canonical readback may report `merged`. Old proposal clicks, source changes,
 ambiguous publication and interrupted delivery never grant a fresh operation.
 Unknown sends are not automatically repeated.
+
+Dashboard capture proposals bind the selected canonical source/review blob as
+well as the exact action. The display adapter revalidates every daily finding's
+source hash and literal evidence, again before approval/execution/publication.
+The canonical path, blob revisions and quoted evidence are carried in the task
+definition's context, never accepted as browser-supplied provenance. Cached
+history follows the same source-aware projection; a changed or withheld source
+cannot expose a cached draft or approve an old capture.
 
 One source-aware projection checks eligibility and revision before every stored
 receipt response, including history, repeated proposal creation/approval,
@@ -287,6 +302,11 @@ It holds selected project revisions, standing scope, clarification fields,
 request receipts, work counters, and hashed expiring auth metadata.
 There are no canonical dates or task rows in it. Proposals/actions/results reuse
 the existing proposal collection.
+The optional `dashboard_visit` holds one canonical revision and server observation
+timestamp, with no titles, source inventory or content. The dashboard treats a
+baseline older than 35 days as expired. Explicit visit writes use a short-lived
+encrypted observation token and compare the previous marker inside the CAS
+update; an older tab cannot overwrite a newer marker.
 
 Caps are 100 clarifications, 300 question bindings, 300 non-content request
 receipts, forty short-lived auth nonces and eight sessions, inside the existing

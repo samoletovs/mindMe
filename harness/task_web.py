@@ -20,10 +20,13 @@ from briefing_loop import LoopError
 from briefing_plan import PlanError
 from briefing_sources import SourceError
 from briefing_state import StateError
+from dashboard_service import DashboardService
+from dashboard_sources import DashboardError
 from execution_budget import BudgetExceeded, execution_budget
 from knowledge_plan import KnowledgeError
 from task_auth import AuthError, TaskAuth
 from task_service import TaskError, TaskService
+from vault_evolve import EvolveError
 
 log = logging.getLogger(__name__)
 ASSETS = Path(__file__).parent / "web"
@@ -63,6 +66,21 @@ ERROR_TEXT = {
     "task_clock_invalid": "The task calendar is unavailable. No calendar date was assumed.",
     "task_result_acknowledgment_required": "This result is unavailable. Explicitly acknowledge its content-free notice to clear the review queue; no private content or task outcome is verified.",
     "task_result_available": "This result is available. Review its current output instead of acknowledging an unavailable-result notice.",
+    "dashboard_source_changed": "The source or its evidence changed. Refresh the inbox before reading or acting.",
+    "dashboard_source_unavailable": "That source is unavailable. No content or action is confirmed.",
+    "dashboard_withheld": "This content cannot be shown under the dashboard privacy rules.",
+    "dashboard_schema_invalid": "This report has an unsupported or invalid format. Its content was not displayed.",
+    "dashboard_read_limit": "The bounded source-read limit was reached. This is not a complete view.",
+    "dashboard_source_bounded": "This source exceeds the reader limit. Its content was not displayed.",
+    "dashboard_visit_conflict": "Another visit was recorded first. Refresh Today before updating the visit marker.",
+    "dashboard_visit_expired": "This observation expired. Refresh Today before recording a visit.",
+    "dashboard_feedback_disabled": "Daily review feedback is not enabled. No feedback was saved.",
+    "dashboard_capture_requires_source": "Open an original source before making a task from a digest.",
+    "dashboard_capture_bounded": "This evidence is too long for one task record. Choose an individual source instead.",
+    "review_feedback_conflict": "Feedback changed in another view or in Telegram. Reopen the finding before choosing again.",
+    "review_feedback_expired": "This review's fourteen-day feedback window has expired. No feedback was saved.",
+    "review_source_changed": "The review evidence changed. Refresh before giving feedback.",
+    "invalid_review_snooze": "Choose a future UTC date before this review's fourteen-day expiry.",
 }
 
 
@@ -98,8 +116,10 @@ def _body(req: func.HttpRequest) -> dict[str, Any]:
 class TaskWeb:
     def __init__(
         self, *, env: Mapping[str, str], auth: Callable[[], TaskAuth], service: Callable[[], TaskService],
+        dashboard: Callable[[TaskService, TaskAuth], DashboardService] | None = None,
     ) -> None:
         self.env, self.auth_factory, self.service_factory = env, auth, service
+        self.dashboard_factory = dashboard
 
     def handle(self, req: func.HttpRequest, path: str = "") -> func.HttpResponse:
         if self.env.get("MINDME_WEB_ENABLED", "").lower() != "true":
@@ -109,11 +129,14 @@ class TaskWeb:
                 return self._handle(req, path.strip("/"))
         except AuthError as error:
             return response({"error": str(error), "message": ERROR_TEXT.get(str(error), "Sign-in could not be verified. Try signing in again.")}, error.status)
-        except (TaskError, PlanError, KnowledgeError) as error:
+        except (TaskError, PlanError, KnowledgeError, DashboardError, EvolveError) as error:
             code = str(error)
             status = (
                 503 if code in {"task_timezone_not_configured", "task_timezone_invalid", "task_clock_invalid"}
-                else 409 if code in {"task_source_changed", "task_request_conflict", "task_source_not_canonical"}
+                else 409 if code in {
+                    "task_source_changed", "task_request_conflict", "task_source_not_canonical",
+                    "dashboard_source_changed", "dashboard_visit_conflict", "review_feedback_conflict", "review_source_changed",
+                }
                 else 422
             )
             return response({"error": code if code in ERROR_TEXT else "task_request_rejected",
@@ -127,13 +150,14 @@ class TaskWeb:
 
     def _handle(self, req: func.HttpRequest, path: str) -> func.HttpResponse:
         method = req.method.upper()
-        if path in {"", "assets/tasks.css", "assets/tasks.js"}:
+        if path in {"", "assets/tasks.css", "assets/tasks.js", "assets/dashboard.js"}:
             if method != "GET":
                 return response({"error": "method_not_allowed"}, 405)
             filename, mime = {
                 "": ("index.html", "text/html"),
                 "assets/tasks.css": ("tasks.css", "text/css"),
                 "assets/tasks.js": ("tasks.js", "text/javascript"),
+                "assets/dashboard.js": ("dashboard.js", "text/javascript"),
             }[path]
             return func.HttpResponse((ASSETS / filename).read_bytes(), mimetype=mime, headers=SECURITY_HEADERS)
         auth = self.auth_factory()
@@ -170,6 +194,27 @@ class TaskWeb:
             return response({"error": "tasks_not_configured", "message": "Task integration is not enabled. No task data was loaded."}, 503)
         service = self.service_factory()
         today = datetime.now(timezone.utc).date()
+        if path.startswith("api/dashboard/") and self.dashboard_factory is not None:
+            dashboard = self.dashboard_factory(service, auth)
+            if method == "GET" and path in {"api/dashboard/today", "api/dashboard/inbox"}:
+                try:
+                    offset = int(req.params.get("offset", "0"))
+                except ValueError:
+                    raise DashboardError("dashboard_request_invalid") from None
+                return response(dashboard.today(offset, today) if path.endswith("/today") else dashboard.inbox(offset, today))
+            if method != "POST":
+                return response({"error": "method_not_allowed"}, 405)
+            payload = _body(req)
+            if path == "api/dashboard/visit":
+                return response(dashboard.visit(payload))
+            operations = {
+                "api/dashboard/read": dashboard.read,
+                "api/dashboard/feedback": dashboard.feedback,
+                "api/dashboard/capture": dashboard.capture,
+            }
+            if path in operations:
+                return response(operations[path](payload, today))
+            return response({"error": "route_not_found"}, 404)
         if method == "GET":
             if path == "api/overview":
                 try:

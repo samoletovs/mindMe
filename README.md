@@ -43,6 +43,14 @@ owner allowlist. It is not enabled merely by checking out or merging this code.
 App registration, secrets, HTTPS-only host configuration and deployment require
 the separate release gate; there is no production demo-account fallback.
 
+The [hosted vault dashboard first release](docs/vault-dashboard.md) extends this
+same surface with Today and a Knowledge inbox. It displays eligible approved
+focus, existing task attention, changed captures/research, daily review findings
+and weekly digests with an authenticated evidence reader. Review feedback reuses
+Telegram's private state; making a task still needs an exact preview and explicit
+approval. This is application behavior, not evidence that the planned
+`vault.naurolabs.com` origin or domain cutover is deployed.
+
 ### Telegram voice
 
 The reader is busy, technically capable and reading on a phone. English is not
