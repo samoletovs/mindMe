@@ -319,6 +319,42 @@ function render() {
   if (state.view === "areas") renderAreas();
   if (state.view === "activity") renderActivity();
 }
+function sourceIssueMessage(code) {
+  return {
+    task_metadata_missing: "A task has no supported metadata block. Its dates could not be assessed.",
+    task_metadata_invalid: "A source has invalid or conflicting metadata. Correct the source before relying on its dates.",
+    task_definition_invalid: "A task has an invalid definition field. Its attention status is unknown.",
+    task_date_invalid: "A task has an invalid date. Correct the saved date before relying on this view.",
+    task_title_missing: "A task has no supported title. Its definition could not be assessed.",
+    task_review_date_ambiguous: "A task has conflicting review dates. Reconcile them in the source.",
+    task_source_too_large: "A source exceeded the bounded reader's size limit and was not assessed.",
+    task_source_policy_unresolved: "A source's scope or privacy metadata is ambiguous. It remains unavailable until clarified.",
+    task_source_unavailable: "A source could not be read or verified. Refresh to retry its current version.",
+  }[code] || "A source could not be assessed. Its absence is not evidence that no work is due.";
+}
+function renderSourceWarnings() {
+  const data = state.overview;
+  $("warnings").replaceChildren();
+  if (!data) return;
+  if (data.excluded_count > 0) {
+    $("warnings").append(element("p", `${data.excluded_count} task source candidate(s) in this assessed window are outside the permitted scope/privacy policy. They remain excluded, not failed reads.`));
+  }
+  if (data.project_excluded_count > 0) {
+    $("warnings").append(element("p", `${data.project_excluded_count} checked project source candidate(s) are outside the permitted scope/privacy policy. Their content is not shown.`));
+  }
+  if (data.attention_complete === false) {
+    const assessed = data.attention?.assessed_count;
+    $("warnings").append(element("p", `${Number.isInteger(assessed) ? `${assessed} permitted task definitions assessed in this bounded window. ` : ""}Attention coverage is incomplete; unchecked or unresolved sources remain.`));
+  }
+  if (data.errors?.length) {
+    $("warnings").append(element("p", `${data.errors.length} task source issue(s) need attention. Unavailable sources are not treated as empty or complete.`));
+    for (const error of data.errors) $("warnings").append(element("p", sourceIssueMessage(error.code)));
+  }
+  if (data.project_errors?.length) {
+    $("warnings").append(element("p", `${data.project_errors.length} project source issue(s) remain. The permitted inventory is incomplete; refresh to retry.`));
+    for (const error of data.project_errors) $("warnings").append(element("p", sourceIssueMessage(error.code)));
+  }
+}
 async function loadOverview(appendPage = false) {
   if (state.loading) return;
   state.loading = true;
@@ -345,8 +381,9 @@ async function loadOverview(appendPage = false) {
     }
     const items = appendPage ? [...state.items, ...data.items] : data.items;
     if (appendPage && state.overview?.canonical_revision === data.canonical_revision) {
-      data.projects = state.overview.projects;
-      data.project_next_offset = state.overview.project_next_offset;
+      for (const key of ["projects", "project_next_offset", "project_errors", "project_excluded_count", "project_candidate_count"]) {
+        data[key] = state.overview[key];
+      }
     }
     state.items = [...new Map(items.map((task) => [task.path, task])).values()];
     state.overview = data;
@@ -366,16 +403,7 @@ async function loadOverview(appendPage = false) {
       const option = element("option", text); option.value = value; $("area-filter").append(option);
     }
     $("area-filter").value = area;
-    $("warnings").replaceChildren();
-    if (data.attention_complete === false) {
-      const assessed = data.attention?.assessed_count;
-      $("warnings").append(element("p", `${Number.isInteger(assessed) ? `${assessed} candidate records assessed in this bounded window. ` : ""}Attention coverage is incomplete; more sources or source errors remain.`));
-    }
-    if (data.errors?.length) {
-      $("warnings").append(element("p", `${data.errors.length} source issue${data.errors.length === 1 ? "" : "s"} reported. Unavailable sources are not treated as empty or complete.`));
-      for (const error of data.errors) $("warnings").append(element("p", error.code || "Source unavailable"));
-    }
-    if (data.project_errors?.length) $("warnings").append(element("p", "Some project sources could not be loaded. The inventory is incomplete."));
+    renderSourceWarnings();
     renderCaptureFields();
     render();
   } catch (error) {
@@ -397,9 +425,15 @@ async function loadProjects() {
     if (state.overview.canonical_revision && data.canonical_revision !== state.overview.canonical_revision) {
       throw new Error("The canonical source changed while paging. Refresh before changing project selection.");
     }
+    if (state.overview.project_next_offset !== offset) {
+      throw new Error("The project page changed while loading. Refresh before continuing the inventory.");
+    }
     state.overview.projects = [...new Map([...state.overview.projects, ...data.items].map((project) => [project.id, project])).values()];
     state.overview.project_next_offset = data.next_offset;
-    if (data.errors?.length) showNotice("Some project sources could not be read. This is a partial inventory.", "pending");
+    state.overview.project_errors = [...(state.overview.project_errors || []), ...(data.errors || [])];
+    state.overview.project_excluded_count = (state.overview.project_excluded_count || 0) + (data.excluded_count || 0);
+    state.overview.project_candidate_count = data.candidate_count;
+    renderSourceWarnings();
     renderAreas();
     const select = $("capture-details").querySelector("[name='project']");
     if (select) {
@@ -803,7 +837,7 @@ function renderAreas() {
     $("project-options").append(label);
   }
   const unseen = Object.keys(data.active_projects || {}).filter((id) => !data.projects.some((project) => project.id === id));
-  $("project-page-status").textContent = `${data.projects.length} permitted projects loaded.${unseen.length ? ` ${unseen.length} existing selection(s) outside this page will be retained. Load more to review them, or explicitly clear the selection.` : ""}`;
+  $("project-page-status").textContent = `${data.projects.length} permitted projects loaded.${data.project_excluded_count ? ` ${data.project_excluded_count} checked candidates excluded by scope/privacy policy.` : ""}${data.project_next_offset !== null && data.project_next_offset !== undefined ? " More candidates remain; load more to inspect permitted projects." : ""}${unseen.length ? ` ${unseen.length} existing selection(s) outside this page will be retained. Load more to review them, or explicitly clear the selection.` : ""}`;
   $("projects-more").hidden = data.project_next_offset === null || data.project_next_offset === undefined;
   $("standing-enabled").checked = Boolean(data.standing?.enabled);
   $("standing-options").replaceChildren();

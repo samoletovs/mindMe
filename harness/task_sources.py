@@ -13,7 +13,7 @@ import yaml
 from briefing_plan import fingerprint
 from briefing_sources import (
     MAX_FILE_BYTES, SourceError, _MISSING, _SENSITIVE_CONTENT, _canonical_head,
-    _canonical_inventory, _content, _excluded_metadata, _headers, _json, _kind, _metadata,
+    _canonical_inventory, _content, _excluded_metadata, _headers, _json, _kind, _metadata, _metadata_pair,
 )
 from task_state import AREAS, PROJECT, STAGES
 
@@ -26,6 +26,10 @@ _PLACEHOLDER = re.compile(r"(?:\{\{.*\}\}|<[^>]+>|tbd|todo|unknown|\?)\Z", re.I)
 
 class _TaskLoader(yaml.SafeLoader):
     pass
+
+
+class _SourceExcluded(SourceError):
+    """A proven policy exclusion, not an unavailable permitted source."""
 
 
 def _mapping(loader: _TaskLoader, node: yaml.MappingNode) -> dict[str, Any]:
@@ -69,6 +73,57 @@ def _permitted(raw: str) -> bool:
         if key in {"scope", "routed_to"} and value not in {"", "personal", "mindme", "mindvault"}:
             return False
     return True
+
+
+def _require_permitted(raw: str) -> None:
+    if _permitted(raw):
+        return
+    if _SENSITIVE_CONTENT.search(raw):
+        raise _SourceExcluded("task_source_not_permitted")
+    for line in raw.splitlines():
+        pair = _metadata_pair(line)
+        if pair is None:
+            continue
+        key, value = pair[0], pair[1].casefold()
+        if key not in {
+            "private", "sensitive", "confidential", "ignored", "generated", "derived", "work",
+            "classification", "sensitivity", "visibility", "level", "route", "routing", "vault",
+            "destination", "owner", "ownership", "scope", "routed_to",
+        }:
+            continue
+        try:
+            declaration = yaml.load(line.strip().removeprefix("- "), Loader=_TaskLoader)
+        except (yaml.YAMLError, SourceError, RecursionError, TypeError):
+            continue
+        if not isinstance(declaration, dict) or len(declaration) != 1:
+            continue
+        declared_key, declared_value = next(iter(declaration.items()))
+        if declared_key.casefold().replace("-", "_") != key:
+            continue
+        if type(declared_value) not in {str, bool, int}:
+            continue
+        value = str(declared_value).casefold().strip()
+        if key in {"private", "sensitive", "confidential", "ignored", "generated", "derived", "work"}:
+            if value in {"true", "yes", "1"}:
+                raise _SourceExcluded("task_source_not_permitted")
+        elif key in {"classification", "sensitivity", "visibility", "level"}:
+            if value in {"private", "sensitive", "confidential", "secret", "restricted"}:
+                raise _SourceExcluded("task_source_not_permitted")
+        elif key in {"route", "routing", "vault", "destination", "owner", "ownership", "scope", "routed_to"}:
+            if re.fullmatch(r"[a-z][a-z0-9_-]*", value) and (
+                _excluded_metadata([(key, value)])
+                or (key in {"scope", "routed_to"} and value not in {"personal", "mindme", "mindvault"})
+            ):
+                raise _SourceExcluded("task_source_not_permitted")
+    raise SourceError("task_source_policy_unresolved")
+
+
+def _source_error_code(error: SourceError) -> str:
+    code = str(error)
+    return code if code in {
+        "task_metadata_missing", "task_metadata_invalid", "task_definition_invalid", "task_date_invalid",
+        "task_title_missing", "task_review_date_ambiguous", "task_source_too_large", "task_source_policy_unresolved",
+    } else "task_source_unavailable"
 
 
 def definition_gaps(task: dict[str, Any]) -> list[str]:
@@ -121,8 +176,7 @@ def _attention_priority(task: dict[str, Any]) -> tuple[int, str, str]:
 def parse_task(raw: str, path: str) -> dict[str, Any]:
     if len(raw) > MAX_TASK_CHARS:
         raise SourceError("task_source_too_large")
-    if not _permitted(raw):
-        raise SourceError("task_source_not_permitted")
+    _require_permitted(raw)
     block = re.match(r"\ufeff?---[ \t]*\r?\n(.*?)\r?\n---(?:\r?\n|$)", raw, re.S)
     if not block:
         details = re.match(r"\ufeff?# [^\n]+\n\s*(<details>.*?</details>)", raw, re.S)
@@ -215,8 +269,8 @@ class TaskRepository:
         if task_path(path):
             record = parse_task(raw, path)
         else:
-            if path != "tasks/README.md" and not _permitted(raw):
-                raise SourceError("task_source_not_permitted")
+            if path != "tasks/README.md":
+                _require_permitted(raw)
             record = {"path": path, "title": path.split("/")[-2], "kind": "task_contract" if path == "tasks/README.md" else "project"}
         return {
             **record, "revision": entry["sha"], "canonical_revision": head,
@@ -253,16 +307,15 @@ class TaskRepository:
         start = offset // MAX_ATTENTION_READS * MAX_ATTENTION_READS
         candidates = paths[start:start + MAX_ATTENTION_READS]
         assessed, errors = [], []
+        excluded_count = 0
         for path in candidates:
             try:
                 task = self._record(path, head, entries[path])
+            except _SourceExcluded:
+                excluded_count += 1
+                continue
             except SourceError as exc:
-                code = str(exc) if str(exc) in {
-                    "task_source_not_permitted", "task_metadata_missing", "task_metadata_invalid",
-                    "task_definition_invalid", "task_date_invalid", "task_title_missing",
-                    "task_review_date_ambiguous", "task_source_too_large",
-                } else "task_source_unavailable"
-                errors.append({"code": code})
+                errors.append({"code": _source_error_code(exc)})
                 continue
             task.pop("text")
             task["attention_reasons"] = attention_reasons(task, today)
@@ -278,22 +331,30 @@ class TaskRepository:
         if not attention_complete:
             warnings.append(
                 "Attention assessment is incomplete. Tasks outside this assessed window, or with unreadable "
-                "metadata, may still have due dates. An empty Needs-you view does not mean nothing is due."
+                "metadata, may still have due dates in the permitted scope. "
+                "An empty Needs-you view does not mean nothing is due."
+            )
+        if excluded_count:
+            warnings.append(
+                f"{excluded_count} task source candidates were excluded by the existing scope/privacy policy. "
+                "They are outside the permitted task view, not failed reads."
             )
         projects = self._projects(head, entries, 0, 4)
         return {
             "items": items, "offset": offset, "next_offset": next_offset,
-            "candidate_count": len(paths), "errors": errors, "canonical_revision": head,
-            "complete": not errors and offset == 0 and len(paths) <= PAGE_SIZE,
+            "candidate_count": len(paths), "excluded_count": excluded_count, "errors": errors, "canonical_revision": head,
+            "complete": attention_complete and offset == 0 and len(assessed) <= PAGE_SIZE,
             "attention_complete": attention_complete,
             "attention": {
                 "status": "complete" if attention_complete else "incomplete",
                 "assessed_from": start, "attempted_count": len(candidates), "assessed_count": len(assessed),
+                "excluded_count": excluded_count, "unavailable_count": len(errors), "scope": "permitted",
                 "candidate_count": len(paths), "next_cursor": next_cursor,
             },
             "warnings": warnings,
             "projects": projects["items"], "project_next_offset": projects["next_offset"],
-            "project_errors": projects["errors"],
+            "project_errors": projects["errors"], "project_excluded_count": projects["excluded_count"],
+            "project_candidate_count": projects["candidate_count"],
             "areas": list(AREAS), "stages": list(STAGES),
         }
 
@@ -302,17 +363,20 @@ class TaskRepository:
             path for path in entries if _kind(path) == "project" and PROJECT.fullmatch(path.split("/")[1])
         )
         items, errors = [], []
+        excluded_count = 0
         for path in paths[offset:offset + limit]:
             try:
                 record = self._record(path, head, entries[path])
+            except _SourceExcluded:
+                excluded_count += 1
+                continue
             except SourceError as error:
-                if str(error) not in {"task_source_not_permitted", "task_source_too_large"}:
-                    raise
-                errors.append({"code": str(error)})
+                errors.append({"code": _source_error_code(error)})
                 continue
             items.append({"id": path.split("/")[1], "revision": record["revision"], "assessment": "inventory_only"})
         return {
             "items": items, "next_offset": offset + limit if offset + limit < len(paths) else None,
+            "excluded_count": excluded_count, "candidate_count": len(paths),
             "errors": errors, "canonical_revision": head,
         }
 

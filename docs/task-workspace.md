@@ -17,8 +17,11 @@ and the same seven-day deadline horizon for both ordering and eligibility;
 capture age is not urgency. A new due task cannot be hidden behind
 twenty old undated tasks merely because the first twelve filenames are older.
 A display page is not the whole backlog.
-Malformed or excluded records produce explicit coverage limitations; unavailable
-GitHub data is not an empty task list.
+Malformed or unavailable records produce explicit coverage limitations; unavailable
+GitHub data is not an empty task list. Positive scope/privacy exclusions are
+reported separately: an explicitly routed/private source or a source matching
+the existing sensitive-content filter is outside this permitted view, not a
+failed read. Excluded contents and filenames are never returned.
 
 `attention_complete` is distinct from display pagination. Above the 96-source
 assessment bound, or with unassessable metadata, it is false and the warning says
@@ -29,6 +32,22 @@ cursor as `offset` assesses the next window; ordinary `next_offset` visits its
 twelve-task pages first. No cross-request task index, extra model call or new
 database is introduced. Canonical/source eligibility checks still precede every
 display and action.
+
+`attention.scope` is `permitted`. Its `excluded_count` counts known policy
+exclusions in the assessed window, while `unavailable_count` counts unresolved
+read, schema or policy errors. A complete assessment means all permitted
+candidates were accounted for, not that excluded private/routed work was assessed.
+Ambiguous metadata, unsupported policy syntax, malformed dates, source revision
+mismatches, size limits and network failures remain explicit errors and keep
+coverage incomplete. The existing admission filters are unchanged.
+
+Project pages make the same distinction using `excluded_count` and `errors`;
+the overview exposes `project_excluded_count`, `project_candidate_count` and
+`project_errors`. One project read failure does not discard independently
+verified task data. Pagination preserves accumulated project exclusions and
+unresolved errors across task-page appends; a fresh overview retries the source
+snapshot. Known exclusions are described as out of scope, not an unavailable
+project inventory, and unread pages still have a continuation control.
 
 `MINDME_TASKS_TIMEZONE` is a required, validated IANA setting, not an inferred
 browser or device zone. Missing/invalid configuration returns 503, without an

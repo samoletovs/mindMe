@@ -376,10 +376,12 @@ def test_first_authenticated_overview_surfaces_new_due_tasks_before_twenty_old_u
     assert all(task["canonical_revision"] == HEAD for task in overview["items"])
     assert all(item.url.params["ref"] == HEAD for item in vault.reads)
     assert len(vault.reads) == len(files) <= MAX_ATTENTION_READS
-    assert overview["attention_complete"] is not excluded
+    assert overview["attention_complete"] is True
     assert overview["attention"]["attempted_count"] == len(files)
     assert overview["attention"]["assessed_count"] == len(files) - (2 if excluded else 0)
-    assert ("does not mean nothing is due" in " ".join(overview["warnings"])) is excluded
+    assert overview["excluded_count"] == (2 if excluded else 0)
+    assert overview["errors"] == []
+    assert "does not mean nothing is due" not in " ".join(overview["warnings"])
     assert subject.repository.read(old_focus)["focus_on"] == (TODAY - timedelta(days=1)).isoformat()
     execute.assert_not_called()
     generate.assert_not_called()
