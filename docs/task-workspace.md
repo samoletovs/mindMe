@@ -350,6 +350,24 @@ invalid output, unmatched evidence or source drift. Logs include only that code
 and the fixed source-check/generation/validation/source-recheck phase, never
 model output or arbitrary exception text. Unknown error text remains generic.
 
+For preparation evidence, the host reuses the knowledge quote-candidate selector
+on the already permitted canonical source. Metadata is excluded and every offered
+quote must remain an exact substring of the original text. The strict response
+schema offers at most twelve exact strings, at most 1,600 quote characters total,
+as the `source_quote` enum; the model selects evidence instead of regenerating it.
+No quote is synthesized, fuzzy-matched or replaced after generation. The existing
+500-character local quote bound and exact canonical membership check still reject
+nonconforming output, even if a provider fails to honor the enum.
+
+No safe citable candidate means a failed preparation before constructing a model
+client. The complete serialized provider request, including prompts, nonce fences,
+context and the quote-bearing schema, must fit the existing 9,000-character
+input bound. Candidate selection adds no source read, model call or retry, and
+failed requests do not refund an existing reservation or rewrite historical
+receipts. These generation constraints address the observed exact-evidence
+rejection category, not a claim about unretained model output; real acceptance
+still requires an explicitly approved, in-budget trial.
+
 Local preparation validation translates only the shared text validator's known
 `invalid_text` and `unsafe_text` failures into the existing safe failed-receipt
 codes. Empty, oversized, wrongly typed or secret-shaped model strings remain

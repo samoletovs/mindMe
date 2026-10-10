@@ -14,10 +14,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from briefing_loop import BriefingLoop
 from briefing_plan import PlanError, fingerprint, safe_text
-from briefing_sources import SourceError, _SENSITIVE_CONTENT
+from briefing_sources import SourceError, _SENSITIVE_CONTENT, _metadata
 from briefing_state import StateError, _safe_receipt, record_transition
 from execution_budget import checkpoint, execution_budget
-from knowledge_plan import public_knowledge_question
+from knowledge_plan import _quote_candidates, public_knowledge_question
 from task_sources import ATTENTION_DEADLINE_HORIZON_DAYS, TaskRepository, definition_gaps, task_path
 from task_state import AREAS, HEX24, HEX32, PROJECT, SHA, STAGES, workspace
 from telegram_format import escape, escaped_chunks, pack_html_blocks
@@ -47,6 +47,8 @@ PREPARATION_SCHEMA: dict[str, Any] = {
     },
     "required": ["summary", "steps", "uncertainties", "owner_next_action", "source_quote"],
 }
+MAX_PREPARATION_QUOTES = 12
+MAX_PREPARATION_QUOTE_CHARS = 1600
 
 
 class TaskError(RuntimeError):
@@ -81,6 +83,43 @@ def _text(value: object, limit: int, *, paragraph: bool = True) -> str:
     ):
         raise TaskError("task_text_not_permitted")
     return result
+
+
+def preparation_schema(context: dict[str, Any]) -> dict[str, Any]:
+    source = context.get("source")
+    if not isinstance(source, dict) or not isinstance(source.get("text"), str):
+        raise TaskError("task_preparation_evidence_invalid")
+    text = source["text"]
+    if len(text) > PREPARATION_LIMITS["input_chars"]:
+        raise TaskError("task_preparation_context_limit")
+    if _SENSITIVE_CONTENT.search(text):
+        raise TaskError("task_text_not_permitted")
+    quotes = []
+    remaining = MAX_PREPARATION_QUOTE_CHARS
+    for candidate in _quote_candidates(_metadata(text)[0]):
+        if candidate not in text or len(candidate) > remaining:
+            continue
+        try:
+            exact = _text(candidate, 500, paragraph=False)
+        except TaskError as error:
+            if str(error) != "task_text_not_permitted":
+                raise
+            continue
+        except PlanError as error:
+            if error.code not in {"invalid_text", "unsafe_text"}:
+                raise
+            continue
+        if exact != candidate:
+            continue
+        quotes.append(candidate)
+        remaining -= len(candidate)
+        if len(quotes) == MAX_PREPARATION_QUOTES:
+            break
+    if not quotes:
+        raise TaskError("task_preparation_evidence_invalid")
+    schema = copy.deepcopy(PREPARATION_SCHEMA)
+    schema["properties"]["source_quote"]["enum"] = quotes
+    return schema
 
 
 def _date(value: object) -> str:
