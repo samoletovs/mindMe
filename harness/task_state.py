@@ -20,7 +20,7 @@ AREAS = (
 PROJECT = re.compile(r"\d{4}-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 CAPS = {"clarifications": 100, "bindings": 300, "requests": 300, "auth_nonces": 40, "auth_sessions": 8}
 REQUEST_RETENTION_DAYS = 35
-UNRESOLVED_PROPOSAL_STATUSES = {"executing", "running", "uncertain", "unknown", "in_progress"}
+UNRESOLVED_PROPOSAL_STATUSES = {"executing", "running", "submitted", "uncertain", "unknown", "in_progress"}
 
 
 def empty_workspace() -> dict[str, Any]:

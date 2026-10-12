@@ -45,6 +45,9 @@ _PROPOSAL_STATUSES = {
 _RECEIPT_STATUSES = _PROPOSAL_STATUSES | {"merged", "conflict"}
 _UNEXECUTED_STATUSES = {"pending", "accepted", "approved", "snoozed"}
 _TOMBSTONE_STATUSES = _PROPOSAL_STATUSES - _UNEXECUTED_STATUSES
+_ACTIVE_TASK_STATUSES = _UNEXECUTED_STATUSES | {
+    "executing", "running", "submitted", "uncertain", "unknown", "in_progress",
+}
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _RECEIPT_URL = re.compile(
     r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[1-9]\d*\Z"
@@ -557,8 +560,9 @@ def prune_state(state: dict[str, Any], *, inventory_paths: set[str], today: date
     """Prune only against a complete pinned inventory, never a bounded read list.
 
     Pending proposals expire on ``expires_on``. Unresolved action receipts never
-    expire implicitly. Source removal invalidates approval, not action history:
-    completed/unresolved outcomes survive in non-replayable, source-less receipts.
+    expire implicitly. Source removal invalidates approval, not action history.
+    Terminal task receipts are retained for 35 days, then reclaimed with their
+    bindings so a long-lived workspace cannot permanently exhaust its capacity.
     """
     from task_state import prune_workspace
 
@@ -571,7 +575,9 @@ def prune_state(state: dict[str, Any], *, inventory_paths: set[str], today: date
         key for key, record in state["proposals"].items()
         if record.get("invalidation_reason") == "source_removed"
     }
-    for identifier, record in state["proposals"].items():
+    deleted: set[str] = set()
+    for identifier, record in list(state["proposals"].items()):
+        retained_on = record.get("created_on") or record.get("invalidated_on")
         path = record.get("source_path")
         if (
             record.get("task_workspace") and record.get("kind") == "close_task"
@@ -580,9 +586,20 @@ def prune_state(state: dict[str, Any], *, inventory_paths: set[str], today: date
             path = record["result"].get("path", path)
         if path and path not in inventory_paths:
             state["proposals"][identifier] = _tombstone(record, today)
+            record = state["proposals"][identifier]
             removed.add(identifier)
         elif record["status"] == "pending" and is_expired(record["expires_on"], today):
             record["status"] = "expired"
+        if (
+            record.get("task_workspace") and isinstance(retained_on, str) and retained_on <= cutoff
+            and record["status"] not in _ACTIVE_TASK_STATUSES
+        ):
+            del state["proposals"][identifier]
+            removed.add(identifier)
+            deleted.add(identifier)
+    for message_id, proposal_id in list(state["messages"].items()):
+        if proposal_id in deleted:
+            del state["messages"][message_id]
     for identifier, record in list(state["memories"].items()):
         if (
             record["source_path"] not in inventory_paths

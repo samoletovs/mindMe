@@ -558,24 +558,42 @@ def test_changed_source_invalidates_draft_history_and_removes_approval_surface()
     assert subject.store.read()["proposals"][proposal["id"]]["status"] == "invalidated"
 
 
-def test_pruning_reclaims_request_capacity_for_a_new_mutation():
+def test_pruning_reclaims_real_task_proposal_capacity_for_a_new_mutation():
     subject, repository, *_ = service()
+    for index in range(200):
+        subject.refine({
+            **refine_payload(next_action=f"Write synthetic heading {index}."),
+            "request_id": f"{index:032x}",
+        }, TODAY)
+    assert len(subject.store.read()["proposals"]) == 200
+    assert len(workspace(subject.store.read())["requests"]) == 200
 
-    def fill(state):
-        workspace(state)["requests"] = {
-            f"{index:064x}": {
-                "digest": "d" * 64, "status": "recorded", "created_on": "2026-08-01",
-            }
-            for index in range(300)
-        }
-
-    subject.store.update(fill)
+    future = TODAY + timedelta(days=36)
     subject.store.update(
-        lambda state: prune_state(state, inventory_paths=set(repository.records), today=TODAY),
+        lambda state: prune_state(state, inventory_paths=set(repository.records), today=future),
     )
-    proposal = subject.refine({**refine_payload(), "request_id": "f" * 32}, TODAY)
+    proposal = subject.refine({
+        **refine_payload(next_action="Write a post-retention heading."),
+        "request_id": "f" * 32,
+    }, future)
+    state = subject.store.read()
     assert proposal["status"] == "pending"
+    assert len(state["proposals"]) == 1
+    assert len(workspace(state)["requests"]) == 1
+
+
+def test_pruning_preserves_submitted_request_conflict_protection():
+    subject, repository, *_ = service()
+    proposal = subject.refine(refine_payload(), TODAY)
+    assert approve(subject, proposal)["status"] == "submitted"
+
+    future = TODAY + timedelta(days=36)
+    subject.store.update(
+        lambda state: prune_state(state, inventory_paths=set(repository.records), today=future),
+    )
     assert len(workspace(subject.store.read())["requests"]) == 1
+    with pytest.raises(TaskError, match="task_request_conflict"):
+        subject.refine(refine_payload(next_action="A conflicting late retry."), future)
 
 
 def test_pruning_preserves_claimed_and_unresolved_request_receipts():
