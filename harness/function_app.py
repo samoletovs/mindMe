@@ -667,7 +667,8 @@ def _task_service() -> TaskService:
         raise TaskError("task_limits_invalid") from None
     return TaskService(
         loop=loop, repository=repository, generate=_generate_task_preparation,
-        publish=gateway.publish_task, enabled=_tasks_enabled, attention_timezone=owner_timezone, **limits,
+        publish=gateway.publish_task, resume_closure=gateway.continue_closure,
+        enabled=_tasks_enabled, attention_timezone=owner_timezone, **limits,
     )
 
 

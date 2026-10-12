@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from briefing_plan import public_research_question, safe_text
+from closure_scan import CONTINUATION, SCAN_ERRORS, confirmed_scan, is_closure, scan_pending, unknown_scan
 
 GITHUB_API = "https://api.github.com"
 _ACTION_ID = re.compile(r"^[a-f0-9]{24,64}$")
@@ -46,19 +47,28 @@ class ActionGateway:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
-    def __call__(self, proposal: dict[str, Any], reconcile: bool = False) -> dict[str, Any]:
+    def __call__(
+        self, proposal: dict[str, Any], reconcile: bool = False, *, closure_continuation: str | None = None,
+    ) -> dict[str, Any]:
         if proposal.get("task_workspace") and (self.task_enabled is None or not self.task_enabled()):
             raise ActionError("task_workspace_not_authorized")
         identifier = proposal.get("action_id", "")
         if not _ACTION_ID.fullmatch(identifier):
             raise ActionError("invalid_action_identifier")
         action = proposal["action"]
+        if closure_continuation is not None and (
+            reconcile or not is_closure(proposal) or not isinstance(closure_continuation, str)
+            or not CONTINUATION.fullmatch(closure_continuation)
+        ):
+            raise ActionError("invalid_closure_continuation")
         if action["kind"] == "research":
             if reconcile:
                 return self._research_status(proposal)
             return self._research_start(proposal)
         if action["kind"] not in {"create_task", "update_task", "refine_task"}:
             raise ActionError("unsupported_action")
+        if reconcile and scan_pending(proposal):
+            return proposal.get("result") or unknown_scan()
         if reconcile and proposal.get("task_workspace"):
             publication_id = proposal.get("publication_action_id")
             if not isinstance(publication_id, str):
@@ -88,10 +98,19 @@ class ActionGateway:
             payload[field] = action[field]
             if "completion" in action:
                 payload["completion"] = action["completion"]
+        if closure_continuation is not None:
+            payload["closure_continuation"] = closure_continuation
         if len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 8192:
             raise ActionError("task_payload_capacity")
         try:
             response = self.client.post(self.memex_url, json=payload, follow_redirects=False)
+            if is_closure(proposal):
+                if response.status_code in {409, 503}:
+                    return self._closure_receipt(response, identifier)
+                if response.status_code == 202:
+                    receipt = response.json()
+                    if isinstance(receipt, dict) and receipt.get("status") == "in_progress":
+                        return self._closure_receipt(response, identifier)
             if response.status_code >= 500:
                 return {"status": "unknown", "error": "task_service_unavailable"}
             if response.status_code not in {200, 201, 202, 409}:
@@ -106,6 +125,10 @@ class ActionGateway:
                 raise ActionError("invalid_task_receipt")
             if result.get("pr_url") and not self._repo_url(result["pr_url"], "pull"):
                 raise ActionError("invalid_result_link")
+            if is_closure(proposal) and result.keys() & {
+                "closure_continuation", "phase", "resumable", "scan_pass", "scan_pass_limit",
+            }:
+                raise ActionError("invalid_closure_receipt")
             if proposal.get("task_workspace") and (
                 result["status"] == "merged"
                 or (result["status"] == "submitted" and (
@@ -121,9 +144,56 @@ class ActionGateway:
         except (httpx.HTTPError, ValueError):
             return {"status": "unknown", "error": "task_result_unconfirmed"}
 
+    def continue_closure(self, proposal: dict[str, Any], token: str | None) -> dict[str, Any]:
+        if (
+            not is_closure(proposal) or proposal.get("closure_scan_protocol") != 1
+            or not proposal.get("approved_on") or not proposal.get("action_id")
+        ):
+            raise ActionError("task_closure_not_authorized")
+        return self(proposal, closure_continuation=token)
+
+    @staticmethod
+    def _closure_receipt(response: httpx.Response, identifier: str) -> dict[str, Any]:
+        if len(response.content) > 8192:
+            raise ActionError("invalid_closure_receipt")
+
+        def unique_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ActionError("invalid_closure_receipt")
+                value[key] = item
+            return value
+
+        result = json.loads(response.content, object_pairs_hook=unique_fields)
+        if (
+            not isinstance(result, dict) or type(result.get("version")) is not int or result["version"] != 1
+            or result.get("action_id") != identifier
+        ):
+            raise ActionError("invalid_closure_receipt")
+        if response.status_code == 202:
+            if not confirmed_scan(result):
+                raise ActionError("invalid_closure_receipt")
+            return result
+        if (
+            set(result) != {"version", "action_id", "status", "path", "error"} or result.get("path") != ""
+            or not isinstance(result.get("error"), str)
+        ):
+            raise ActionError("invalid_closure_receipt")
+        if response.status_code == 503 and result["status"] == "in_progress":
+            return unknown_scan(result["error"])
+        if response.status_code == 409 and result["status"] == "conflict":
+            return {
+                "version": 1, "action_id": identifier, "status": "conflict", "path": "",
+                "error": result["error"] if result["error"] in SCAN_ERRORS else "task_closure_conflict",
+            }
+        raise ActionError("invalid_closure_receipt")
+
     def publish_task(self, proposal: dict[str, Any], publication_id: str) -> dict[str, Any]:
         if not proposal.get("task_workspace") or self.task_enabled is None or not self.task_enabled():
             raise ActionError("task_workspace_not_authorized")
+        if scan_pending(proposal):
+            raise ActionError("task_closure_scan_not_submitted")
         target = proposal.get("action_id")
         if (
             not isinstance(target, str) or not _ACTION_ID.fullmatch(target)

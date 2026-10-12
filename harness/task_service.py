@@ -16,6 +16,7 @@ from briefing_loop import BriefingLoop
 from briefing_plan import PlanError, fingerprint, safe_text
 from briefing_sources import SourceError, _SENSITIVE_CONTENT, _metadata
 from briefing_state import StateError, _safe_receipt, record_transition
+from closure_scan import CONTINUATION, confirmed_scan, is_closure, scan_pending, unknown_scan
 from execution_budget import checkpoint, execution_budget
 from knowledge_plan import _quote_candidates, public_knowledge_question
 from task_sources import ATTENTION_DEADLINE_HORIZON_DAYS, TaskRepository, definition_gaps, task_path
@@ -187,6 +188,8 @@ def _receipt_fields(record: dict[str, Any]) -> dict[str, Any]:
             "action", "created_on", "expires_on", "activity", "result", "approved_on",
             "approval_digest", "reviewed", "acknowledged_unavailable", "publish_result",
             "task_workspace",
+            "closure_scan_protocol",
+            "publication_action_id",
         ) if key in record
     }
 
@@ -198,6 +201,7 @@ class TaskService:
         attention_timezone: ZoneInfo,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         publish: Callable[[dict[str, Any], str], dict[str, Any]] | None = None,
+        resume_closure: Callable[[dict[str, Any], str | None], dict[str, Any]] | None = None,
         enabled: Callable[[], bool] = lambda: True,
         daily_limit: int = 3, monthly_limit: int = 40, review_capacity: int = 3,
     ) -> None:
@@ -213,6 +217,7 @@ class TaskService:
         self.attention_timezone, self.clock = attention_timezone, clock
         self.generate = generate
         self.publish_action = publish
+        self.resume_closure_action = resume_closure
         self.enabled = enabled
         self.daily_limit, self.monthly_limit, self.review_capacity = daily_limit, monthly_limit, review_capacity
         original = loop.execute
@@ -311,7 +316,7 @@ class TaskService:
         request_id = _identifier(request_id)
         request_key = fingerprint(["task-request", request_id])
         digest = fingerprint([source["path"], source["revision"], action, kind])
-        identifier = fingerprint([digest, request_id if kind == "capture_task" else "source-bound"])[:24]
+        identifier = fingerprint([digest, request_id if kind in {"capture_task", "close_task"} else "source-bound"])[:24]
         record = {
             "id": identifier, "kind": kind, "text": (
                 "Prepare one source-bound draft for review." if kind == "prepare_task"
@@ -325,6 +330,8 @@ class TaskService:
             "expires_on": (today + timedelta(days=14)).isoformat(), "message_ids": [],
             "action": action, "task_workspace": True, "approval_digest": digest,
         }
+        if kind == "close_task":
+            record["closure_scan_protocol"] = 1
         if len(json.dumps(action, ensure_ascii=False).encode("utf-8")) > 6800:
             raise TaskError("task_action_too_large")
 
@@ -461,6 +468,10 @@ class TaskService:
         self._require_enabled()
         if fingerprint([proposal["source_path"], proposal["source_revision"], proposal["action"], proposal["kind"]]) != proposal["approval_digest"]:
             raise TaskError("task_approval_changed")
+        if proposal.get("closure_scan_protocol") == 1:
+            if not is_closure(proposal):
+                raise TaskError("task_closure_not_authorized")
+            proposal["closure_last_token"] = None
         standing = proposal.get("standing_authorization")
         if standing:
             data = workspace(state)
@@ -546,6 +557,8 @@ class TaskService:
         if not isinstance(identifier, str) or not HEX24.fullmatch(identifier) or self.publish_action is None:
             raise TaskError("task_publication_unavailable")
         existing = self.store.read()["proposals"].get(identifier)
+        if existing and scan_pending(existing):
+            return self._project_receipt(existing, today)
         if existing and existing.get("task_workspace") and (
             existing.get("status") == "completed" or existing.get("invalidation_reason") == "source_removed"
         ):
@@ -575,7 +588,9 @@ class TaskService:
             if current["status"] == "completed":
                 return copy.deepcopy(current)
             current["publish_result"] = result
-            if result["status"] == "merged":
+            if result["status"] == "merged" or (
+                result["status"] == "submitted" and not (current.get("result") or {}).get("pr_url")
+            ):
                 current["result"] = {
                     **(current.get("result") or {}), **result, "action_id": current["action_id"],
                 }
@@ -594,12 +609,127 @@ class TaskService:
         record = self.store.read()["proposals"].get(identifier)
         if not record or not record.get("task_workspace"):
             raise TaskError("task_proposal_invalid")
+        if scan_pending(record):
+            return self._project_receipt(record, today)
         if record.get("status") == "completed" or record.get("invalidation_reason") == "source_removed":
             return self._project_receipt(record, today)
         if record.get("kind") != "research" and record.get("action_id") and record["kind"] != "prepare_task":
             return self.publish(identifier, today)
         self.loop.reconcile(today, proposal_id=identifier)
         return self._project_receipt(self.store.read()["proposals"][identifier], today)
+
+    def continue_closure(self, payload: dict[str, Any], today: date) -> dict[str, Any]:
+        if (
+            set(payload) != {"proposal_id", "request_id", "closure_continuation"}
+            or not isinstance(payload["closure_continuation"], str)
+            or not CONTINUATION.fullmatch(payload["closure_continuation"])
+        ):
+            raise TaskError("task_closure_continuation_invalid")
+        return self._closure_step(payload, today, recover=False)
+
+    def recover_closure(self, payload: dict[str, Any], today: date) -> dict[str, Any]:
+        if set(payload) != {"proposal_id", "request_id"}:
+            raise TaskError("task_request_invalid")
+        return self._closure_step(payload, today, recover=True)
+
+    def _closure_step(self, payload: dict[str, Any], today: date, *, recover: bool) -> dict[str, Any]:
+        self._require_enabled()
+        identifier = payload["proposal_id"]
+        request_id = _identifier(payload["request_id"])
+        if not isinstance(identifier, str) or not HEX24.fullmatch(identifier):
+            raise TaskError("task_proposal_invalid")
+        if self.resume_closure_action is None:
+            raise TaskError("task_closure_continuation_unavailable")
+        request_key = fingerprint(["closure-step", request_id])
+        digest = fingerprint([identifier, "recover" if recover else "continue", payload.get("closure_continuation")])
+        state = self.store.read()
+        original = state["proposals"].get(identifier)
+        if not original or original.get("closure_scan_protocol") != 1 or not original.get("task_workspace"):
+            raise TaskError("task_closure_not_authorized")
+        previous = workspace(state)["requests"].get(request_key)
+        if previous:
+            if previous["digest"] != digest:
+                raise TaskError("task_request_conflict")
+            return self._project_receipt(original, today)
+        if original.get("status") in {"completed", "failed", "invalidated"} or original.get("invalidation_reason"):
+            return self._project_receipt(original, today)
+        if recover and confirmed_scan(original.get("result")):
+            return self._project_receipt(original, today)
+        if not scan_pending(original) or not original.get("approved_on") or not original.get("action_id"):
+            raise TaskError("task_closure_not_authorized")
+        self._source(original["source_path"], original["source_revision"])
+
+        def claim(current: dict[str, Any]) -> dict[str, Any] | None:
+            self._require_enabled()
+            requests = workspace(current)["requests"]
+            previous = requests.get(request_key)
+            if previous:
+                if previous["digest"] != digest:
+                    raise TaskError("task_request_conflict")
+                return None
+            item = current["proposals"][identifier]
+            if (
+                not scan_pending(item) or item["status"] not in {"executing", "uncertain"}
+                or not item.get("approved_on") or not item.get("action_id")
+                or item.get("action") != original.get("action")
+                or item.get("source_revision") != original.get("source_revision")
+                or fingerprint([item["source_path"], item["source_revision"], item["action"], item["kind"]])
+                != item.get("approval_digest")
+            ):
+                raise TaskError("task_closure_not_authorized")
+            if recover:
+                if confirmed_scan(item.get("result")):
+                    return None
+                token = item.get("closure_last_token")
+                if token is not None and (not isinstance(token, str) or not CONTINUATION.fullmatch(token)):
+                    raise TaskError("task_closure_continuation_invalid")
+            else:
+                receipt = item.get("result")
+                if (
+                    not confirmed_scan(receipt) or receipt["action_id"] != item["action_id"]
+                    or receipt["closure_continuation"] != payload["closure_continuation"]
+                ):
+                    raise TaskError("task_closure_checkpoint_changed")
+                token = receipt["closure_continuation"]
+            requests[request_key] = {
+                "digest": digest, "status": "claimed", "proposal_id": identifier, "created_on": today.isoformat(),
+            }
+            item["closure_last_token"] = token
+            item["closure_request_id"] = request_id
+            item["result"] = unknown_scan()
+            record_transition(item, "executing", today)
+            return copy.deepcopy(item)
+
+        claimed = self.store.update(claim)
+        if claimed is None:
+            return self._project_receipt(self.store.read()["proposals"][identifier], today)
+        result = self.resume_closure_action(claimed, claimed["closure_last_token"])
+        status = result.get("status") if isinstance(result, dict) else None
+        if not isinstance(status, str) or status not in {"submitted", "conflict", "failed", "in_progress", "unknown"}:
+            raise TaskError("task_closure_receipt_invalid")
+        if status == "in_progress" and (
+            not confirmed_scan(result) or result["action_id"] != claimed["action_id"]
+        ):
+            raise TaskError("task_closure_receipt_invalid")
+
+        def save(current: dict[str, Any]) -> dict[str, Any]:
+            item = current["proposals"][identifier]
+            workspace(current)["requests"][request_key]["status"] = "recorded"
+            if item.get("closure_request_id") != request_id or item.get("invalidation_reason"):
+                return copy.deepcopy(item)
+            if item["status"] not in {"executing", "uncertain"}:
+                return copy.deepcopy(item)
+            item["result"] = result
+            record_transition(item, {
+                "submitted": "submitted", "conflict": "invalidated", "failed": "failed",
+                "in_progress": "executing", "unknown": "uncertain",
+            }[status], today)
+            return copy.deepcopy(item)
+
+        saved = self.store.update(save)
+        if saved["status"] == "submitted":
+            return self.publish(identifier, today)
+        return self._project_receipt(saved, today)
 
     def overview(self, offset: int, today: date) -> dict[str, Any]:
         calendar_date = self.owner_date()
