@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from briefing_plan import public_research_question, safe_text
-from closure_scan import CONTINUATION, SCAN_ERRORS, confirmed_scan, is_closure, scan_pending, unknown_scan
+from closure_scan import CONFLICT_ERRORS, CONTINUATION, confirmed_scan, is_closure, scan_pending, unknown_scan
 
 GITHUB_API = "https://api.github.com"
 _ACTION_ID = re.compile(r"^[a-f0-9]{24,64}$")
@@ -185,7 +185,7 @@ class ActionGateway:
         if response.status_code == 409 and result["status"] == "conflict":
             return {
                 "version": 1, "action_id": identifier, "status": "conflict", "path": "",
-                "error": result["error"] if result["error"] in SCAN_ERRORS else "task_closure_conflict",
+                "error": result["error"] if result["error"] in CONFLICT_ERRORS else "task_closure_conflict",
             }
         raise ActionError("invalid_closure_receipt")
 

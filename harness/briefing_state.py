@@ -18,6 +18,7 @@ from azure.core.exceptions import (
 )
 from azure.storage.blob import ContainerClient
 
+from closure_scan import CONFLICT_ERRORS
 from execution_budget import checkpoint, sdk_timeouts
 
 STATE_BLOB = "system/mindme/briefing-state-v1.json"
@@ -143,6 +144,11 @@ def _safe_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
         elif key in {"issue_number", "pr_number"} and type(value) is int and value > 0:
             kept[key] = value
         elif key in {"issue_url", "pr_url"} and isinstance(value, str) and _RECEIPT_URL.fullmatch(value):
+            kept[key] = value
+        elif (
+            key == "error" and receipt.get("status") == "conflict"
+            and isinstance(value, str) and value in CONFLICT_ERRORS
+        ):
             kept[key] = value
     return kept
 

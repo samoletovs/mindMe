@@ -20,6 +20,24 @@ from test_task_service import PATH, REVISION, TODAY, approve, service
 from test_task_web import app, data, logged_in, request
 
 CLOSED_PATH = PATH.replace("tasks/", "tasks/done/", 1)
+KNOWN_CONFLICT_CODES = (
+    "source_changed", "task_closure_source_changed", "source_closed",
+    "task_linked_path", "task_source_invalid", "task_source_not_allowed",
+    "task_links_require_repair", "task_publication_proof_missing", "task_context_limit",
+    "task_closure_inventory_changed", "task_closure_inventory_invalid", "task_closure_inventory_limit",
+    "task_closure_continuation_invalid", "task_closure_scan_exhausted", "destination_exists", "action_id_reused",
+    "task_closure_scan_unconfirmed", "task_closure_checkpoint_unavailable", "receipt_unavailable",
+    "remote_outcome_unknown",
+)
+NEW_CONFLICT_CODES = (
+    "source_closed", "task_linked_path", "task_source_invalid", "task_source_not_allowed",
+    "task_publication_proof_missing", "task_context_limit",
+)
+UNKNOWN_CONFLICT_CODES = (
+    "unrecognized_closure_error", "__proto__",
+    "task_source_not_allowed: tasks/private/synthetic.md; token=not-a-credential",
+    "<script>synthetic upstream body</script>",
+)
 
 
 def closure_payload(request_id="c" * 32):
@@ -352,6 +370,7 @@ def test_timer_recovers_unknown_publication_to_confirmed_merge_without_another_s
 
 @pytest.mark.parametrize("code", [
     "task_closure_source_changed", "task_closure_inventory_changed", "task_closure_scan_exhausted",
+    *NEW_CONFLICT_CODES,
 ])
 def test_terminal_writer_conflict_stays_terminal_and_needs_new_owner_approval(code):
     subject, writer, *_ = system()
@@ -365,6 +384,107 @@ def test_terminal_writer_conflict_stays_terminal_and_needs_new_owner_approval(co
     fresh = subject.close(closure_payload("d" * 32), TODAY)
     assert fresh["id"] != first["id"] and fresh["status"] == "pending"
     assert subject.store.read()["proposals"][first["id"]] == saved
+
+
+@pytest.mark.parametrize("code", [*KNOWN_CONFLICT_CODES, "task_closure_conflict", *UNKNOWN_CONFLICT_CODES])
+def test_closure_conflict_codes_survive_real_gateway_save_and_current_projection(code, caplog):
+    subject, writer, _, generate, _, _ = system()
+    writer.conflict = code
+    proposal = subject.close(closure_payload(), TODAY)
+    failed = approve(subject, proposal)
+    expected_code = code if code in KNOWN_CONFLICT_CODES else "task_closure_conflict"
+    expected = {
+        "version": 1, "action_id": writer.approved["action_id"], "status": "conflict",
+        "path": "", "error": expected_code,
+    }
+    saved = copy.deepcopy(subject.store.read()["proposals"][proposal["id"]])
+    assert failed["status"] == saved["status"] == "invalidated"
+    assert failed["result"] == saved["result"] == expected
+    assert failed["source_status"] == "current"
+    assert subject.history(0, TODAY)["items"][0]["result"] == expected
+    for key in ("action", "source_revision", "approval_digest"):
+        assert saved[key] == proposal[key]
+    assert writer.pass_count == writer.materializations == writer.publications == 0
+    generate.assert_not_called()
+    if code in UNKNOWN_CONFLICT_CODES:
+        assert code not in json.dumps(saved)
+        assert code not in json.dumps(failed)
+        assert code not in caplog.text
+
+    subject.loop.reconcile(TODAY)
+    assert subject.reconcile(proposal["id"], TODAY)["result"] == expected
+    assert approve(subject, proposal)["result"] == expected
+    recovered = subject.recover_closure({"proposal_id": proposal["id"], "request_id": "1" * 32}, TODAY)
+    assert recovered["result"] == expected
+    assert subject.store.read()["proposals"][proposal["id"]] == saved
+    assert len(writer.requests) == 1
+
+
+@pytest.mark.parametrize("code", [*KNOWN_CONFLICT_CODES, "task_closure_conflict", *UNKNOWN_CONFLICT_CODES])
+def test_closure_receipt_text_does_not_infer_source_change_from_other_conflicts(code):
+    subject, writer, *_ = system()
+    writer.conflict = code
+    record = approve(subject, subject.close(closure_payload(), TODAY))
+    text = subject.loop._receipt_text(record)
+    if code in {"source_changed", "task_closure_source_changed"}:
+        assert "source changed" in text.lower()
+    else:
+        assert "source changed" not in text.lower()
+        assert "closure" in text.lower() and "blocked" in text.lower()
+    assert "fresh proposal" in text.lower()
+    if code in UNKNOWN_CONFLICT_CODES:
+        assert code not in text
+
+
+@pytest.mark.parametrize("code", [*KNOWN_CONFLICT_CODES, "task_closure_conflict", UNKNOWN_CONFLICT_CODES[-1]])
+def test_safe_conflict_code_remains_inspectable_without_source_content(code):
+    subject, writer, repository, *_ = system()
+    writer.conflict = code
+    failed = approve(subject, subject.close(closure_payload(), TODAY))
+    expected_code = code if code in KNOWN_CONFLICT_CODES else "task_closure_conflict"
+    saved = copy.deepcopy(subject.store.read()["proposals"][failed["id"]])
+    repository.records[PATH]["revision"] = "e" * 40
+    projected = subject.history(0, TODAY)["items"][0]
+    assert projected["source_status"] == "changed_or_removed"
+    assert projected["result"] == {
+        "status": "conflict", "action_id": saved["action_id"], "error": expected_code,
+    }
+    assert not projected.keys() & {"action", "source_path", "source_revision", "approval_digest"}
+    assert not projected["result"].keys() & {"path", "closure_continuation", "resumable"}
+    assert subject.store.read()["proposals"][failed["id"]] == saved
+    subject.store.update(lambda state: prune_state(state, inventory_paths=set(), today=TODAY))
+    tombstone = subject.store.read()["proposals"][failed["id"]]
+    assert tombstone["status"] == "invalidated"
+    assert tombstone["result"] == projected["result"]
+    assert not tombstone.keys() & {"action", "source_path", "source_revision", "approval_digest"}
+    assert len(writer.requests) == 1
+
+
+@pytest.mark.parametrize("change", [
+    {"version": True}, {"action_id": "b" * 32}, {"status": "failed"}, {"status": "submitted"},
+    {"path": "tasks/private/synthetic.md"}, {"error": ["task_source_not_allowed"]},
+    {"detail": "synthetic upstream body"}, {"closure_continuation": "1" * 32}, {"resumable": True},
+])
+def test_known_conflict_code_cannot_relax_real_gateway_envelope_validation(change, caplog):
+    receipt = {
+        "version": 1, "action_id": "a" * 32, "status": "conflict", "path": "",
+        "error": "task_source_not_allowed", **change,
+    }
+    subject, _, _, _, _, gateway = system(lambda _: httpx.Response(409, json=receipt))
+    proposal = {**subject.close(closure_payload(), TODAY), "action_id": "a" * 32}
+    with pytest.raises(ActionError, match="invalid_closure_receipt"):
+        gateway(proposal)
+    assert "synthetic upstream body" not in caplog.text
+    assert "tasks/private/synthetic.md" not in caplog.text
+
+
+@pytest.mark.parametrize("code", NEW_CONFLICT_CODES)
+def test_new_conflict_codes_do_not_expand_unknown_503_receipts(code):
+    subject, _, _, _, _, gateway = system(lambda _: httpx.Response(503, json={
+        "version": 1, "action_id": "a" * 32, "status": "in_progress", "path": "", "error": code,
+    }))
+    proposal = {**subject.close(closure_payload(), TODAY), "action_id": "a" * 32}
+    assert gateway(proposal) == {"status": "unknown", "error": "task_closure_scan_unconfirmed"}
 
 
 def test_unapproved_forged_disabled_and_source_changed_steps_never_reach_writer():
