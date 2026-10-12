@@ -640,6 +640,29 @@ def test_pruning_removes_expired_clarification_and_its_message_binding():
     assert data["bindings"] == {}
 
 
+def test_new_source_tombstone_gets_its_own_retention_window():
+    subject, _, *_ = service()
+    proposal = subject.refine(refine_payload(), TODAY)
+    subject.store.update(lambda state: state["messages"].update({"99": proposal["id"]}))
+
+    removed_on = TODAY + timedelta(days=36)
+    subject.store.update(
+        lambda state: prune_state(state, inventory_paths=set(), today=removed_on),
+    )
+    state = subject.store.read()
+    assert state["proposals"][proposal["id"]]["invalidated_on"] == removed_on.isoformat()
+    assert state["messages"]["99"] == proposal["id"]
+
+    after_retention = removed_on + timedelta(days=36)
+    subject.store.update(
+        lambda state: prune_state(state, inventory_paths=set(), today=after_retention),
+        allow_tombstone_prune=True,
+    )
+    state = subject.store.read()
+    assert proposal["id"] not in state["proposals"]
+    assert "99" not in state["messages"]
+
+
 def test_removed_source_keeps_content_free_task_receipt_visible_after_pruning():
     subject, _, _, _, _, _ = service()
     proposal = subject.refine(refine_payload(), TODAY)

@@ -30,7 +30,7 @@ class MemoryStore:
     def read(self):
         return copy.deepcopy(self.state)
 
-    def update(self, mutate):
+    def update(self, mutate, *, allow_tombstone_prune=False):
         next_state = self.read()
         result = mutate(next_state)
         if self.fail:

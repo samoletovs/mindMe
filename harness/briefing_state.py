@@ -284,10 +284,14 @@ def _validate_proposal(identifier: str, record: object) -> None:
         raise StateError("invalid_action_identifier")
 
 
-def _check_tombstones(before: dict[str, dict[str, Any]], after: dict[str, Any]) -> None:
+def _check_tombstones(
+    before: dict[str, dict[str, Any]], after: dict[str, Any], *, allow_prune: bool = False,
+) -> None:
     for identifier, previous in before.items():
-        current = after.get(identifier, {})
-        if current.get("invalidation_reason") != "source_removed":
+        current = after.get(identifier)
+        if current is None and allow_prune:
+            continue
+        if not isinstance(current, dict) or current.get("invalidation_reason") != "source_removed":
             raise StateError("source_tombstone_immutable")
         for key in ("action_id", "previous_status", "invalidated_on"):
             if key in previous and current.get(key) != previous[key]:
@@ -471,7 +475,9 @@ class BriefingStore:
         state, _ = self._load()
         return state
 
-    def update(self, mutate: Callable[[dict[str, Any]], T]) -> T:
+    def update(
+        self, mutate: Callable[[dict[str, Any]], T], *, allow_tombstone_prune: bool = False,
+    ) -> T:
         for _ in range(MAX_CAS_ATTEMPTS):
             checkpoint()
             state, etag = self._load()
@@ -481,7 +487,9 @@ class BriefingStore:
             }
             result = mutate(state)
             payload = _encode(state)
-            _check_tombstones(removed, state["proposals"])
+            _check_tombstones(
+                removed, state["proposals"], allow_prune=allow_tombstone_prune,
+            )
             try:
                 if etag is None:
                     self._blob.upload_blob(
@@ -587,6 +595,7 @@ def prune_state(state: dict[str, Any], *, inventory_paths: set[str], today: date
         if path and path not in inventory_paths:
             state["proposals"][identifier] = _tombstone(record, today)
             record = state["proposals"][identifier]
+            retained_on = record["invalidated_on"]
             removed.add(identifier)
         elif record["status"] == "pending" and is_expired(record["expires_on"], today):
             record["status"] = "expired"

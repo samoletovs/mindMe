@@ -109,7 +109,7 @@ class BriefingLoop:
                     if item.get("scan_cursor") not in paths:
                         item.pop("scan_cursor", None)
 
-            self.store.update(prune)
+            self.store.update(prune, allow_tombstone_prune=True)
         return context
 
     def details(self, today: date, sections: list[str]) -> str:
