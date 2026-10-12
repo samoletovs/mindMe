@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from briefing_state import StateError
@@ -19,6 +19,8 @@ AREAS = (
 )
 PROJECT = re.compile(r"\d{4}-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 CAPS = {"clarifications": 100, "bindings": 300, "requests": 300, "auth_nonces": 40, "auth_sessions": 8}
+REQUEST_RETENTION_DAYS = 35
+UNRESOLVED_PROPOSAL_STATUSES = {"executing", "running", "uncertain", "unknown", "in_progress"}
 
 
 def empty_workspace() -> dict[str, Any]:
@@ -146,11 +148,25 @@ def prune_workspace(state: dict[str, Any], paths: set[str], today: date) -> None
     for path in list(data["standing"]["sources"]):
         if path not in paths:
             del data["standing"]["sources"][path]
-    for identifier, record in data["clarifications"].items():
-        if record["source_path"] not in paths or record["expires_on"] <= today.isoformat():
-            record["changes"] = {}
-            record["field"] = None
-            record["question_token"] = None
-            record["expired"] = True
-            if record["source_path"] not in paths:
-                record["source_path"] = ""
+    stale_clarifications = {
+        identifier for identifier, record in data["clarifications"].items()
+        if record["source_path"] not in paths or record["expires_on"] <= today.isoformat()
+    }
+    for key, binding in list(data["bindings"].items()):
+        if binding["clarification_id"] in stale_clarifications:
+            del data["bindings"][key]
+    for identifier in stale_clarifications:
+        del data["clarifications"][identifier]
+
+    cutoff = today - timedelta(days=REQUEST_RETENTION_DAYS)
+    proposals = state.get("proposals", {})
+    for key, record in list(data["requests"].items()):
+        if record.get("status") != "recorded":
+            continue
+        try:
+            created_on = date.fromisoformat(record["created_on"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        proposal = proposals.get(record.get("proposal_id"), {})
+        if created_on <= cutoff and proposal.get("status") not in UNRESOLVED_PROPOSAL_STATUSES:
+            del data["requests"][key]

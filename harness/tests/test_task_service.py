@@ -558,6 +558,70 @@ def test_changed_source_invalidates_draft_history_and_removes_approval_surface()
     assert subject.store.read()["proposals"][proposal["id"]]["status"] == "invalidated"
 
 
+def test_pruning_reclaims_request_capacity_for_a_new_mutation():
+    subject, repository, *_ = service()
+
+    def fill(state):
+        workspace(state)["requests"] = {
+            f"{index:064x}": {
+                "digest": "d" * 64, "status": "recorded", "created_on": "2026-08-01",
+            }
+            for index in range(300)
+        }
+
+    subject.store.update(fill)
+    subject.store.update(
+        lambda state: prune_state(state, inventory_paths=set(repository.records), today=TODAY),
+    )
+    proposal = subject.refine({**refine_payload(), "request_id": "f" * 32}, TODAY)
+    assert proposal["status"] == "pending"
+    assert len(workspace(subject.store.read())["requests"]) == 1
+
+
+def test_pruning_preserves_claimed_and_unresolved_request_receipts():
+    subject, repository, *_ = service()
+    proposal = subject.refine(refine_payload(), TODAY)
+
+    def age_records(state):
+        requests = workspace(state)["requests"]
+        linked = next(record for record in requests.values() if record.get("proposal_id") == proposal["id"])
+        linked["created_on"] = "2026-08-01"
+        state["proposals"][proposal["id"]]["status"] = "uncertain"
+        requests["e" * 64] = {
+            "digest": "e" * 64, "status": "claimed", "created_on": "2026-08-01",
+        }
+
+    subject.store.update(age_records)
+    subject.store.update(
+        lambda state: prune_state(state, inventory_paths=set(repository.records), today=TODAY),
+    )
+    requests = workspace(subject.store.read())["requests"]
+    assert len(requests) == 2
+
+
+def test_pruning_removes_expired_clarification_and_its_message_binding():
+    subject, repository, *_ = service()
+    identifier = "a" * 24
+
+    def fill(state):
+        data = workspace(state)
+        data["clarifications"][identifier] = {
+            "source_path": PATH, "source_revision": REVISION, "turns": 0,
+            "changes": {}, "field": "outcome", "expires_on": TODAY.isoformat(),
+        }
+        data["bindings"]["1"] = {
+            "clarification_id": identifier, "field": "outcome", "turn": 0,
+        }
+
+    subject.store.update(fill)
+    subject.store.update(
+        lambda state: prune_state(state, inventory_paths=set(repository.records), today=TODAY),
+    )
+    data = workspace(subject.store.read())
+    assert data["clarifications"] == {}
+    assert data["bindings"] == {}
+
+
 def test_removed_source_keeps_content_free_task_receipt_visible_after_pruning():
     subject, _, _, _, _, _ = service()
     proposal = subject.refine(refine_payload(), TODAY)
