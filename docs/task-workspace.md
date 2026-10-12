@@ -359,6 +359,35 @@ ignore-policy and final canonical fences. The final rollout must integrate the
 matching writer contract before enabling live continuation; offline adapter
 tests are not real-task closure evidence.
 
+### Closure conflict diagnostics
+
+A validated HTTP 409 closure receipt retains only a finite known error code,
+never an upstream message, reference path, body or token. Besides the existing
+scan codes, the caller preserves these writer validation/service refusals:
+
+| Code | Meaning |
+| --- | --- |
+| `source_closed` | The source is already done, closed or cancelled; this is not revision drift or proof this request closed it. |
+| `task_linked_path` | A required path is linked or has a non-regular directory ancestor. |
+| `task_source_invalid` | A required reference has invalid text or metadata. |
+| `task_source_not_allowed` | A required reference fails privacy or source-safety rules; it is not skipped. |
+| `task_publication_proof_missing` | Required closure proof is missing or incomplete. |
+| `task_context_limit` | A bounded reading or finalization limit blocks closure. |
+
+Only `source_changed` and `task_closure_source_changed` identify source/revision
+change. Inventory changes, inventory limits, invalid references, privacy refusals,
+link/proof problems and other conflicts have distinct fixed UI copy. Unknown
+codes remain `task_closure_conflict`, displayed as **Closure conflict**, not
+**Source changed**. Telegram also avoids inferring source drift from other
+closure conflicts. Content-free conflict codes survive source redaction and
+tombstoning; source/action content and continuation authority do not return.
+
+This does not relax receipt validation, expand HTTP 503 uncertainty diagnostics,
+change terminal receipts into resumable work, or permit automatic retries.
+A new attempt still requires a fresh source-bound proposal and owner approval.
+Older generic receipts cannot be reconstructed. Better diagnostics do not
+identify their underlying cause or establish a successful real-task closure.
+
 Reading, signing in, an external outcome and human verification cannot be inferred
 from a generated draft or a merged research report. Knowledge stays in the task's
 Learning record first. Wiki promotion still needs the owning vault's recurrence

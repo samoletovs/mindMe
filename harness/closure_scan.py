@@ -18,6 +18,11 @@ SCAN_ERRORS = frozenset({
     "task_closure_continuation_invalid", "receipt_unavailable", "remote_outcome_unknown",
     "source_changed", "task_links_require_repair", "destination_exists", "action_id_reused",
 })
+# These fixed 409 diagnostics do not expand the uncertain 503 receipt contract.
+CONFLICT_ERRORS = SCAN_ERRORS | frozenset({
+    "source_closed", "task_linked_path", "task_source_invalid", "task_source_not_allowed",
+    "task_publication_proof_missing", "task_context_limit", "task_closure_conflict",
+})
 
 
 def is_closure(record: dict[str, Any]) -> bool:

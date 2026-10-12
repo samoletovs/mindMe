@@ -575,6 +575,16 @@ class BriefingLoop:
             if proposal.get("kind") == "prepare_task":
                 return "Preparation is ready to review in Tasks. It is a draft, not verified task completion."
             return "I verified the approved result. This does not verify any other real-world task outcome."
+        if proposal.get("task_workspace") and proposal.get("kind") == "close_task" and status == "invalidated":
+            publication = proposal.get("publish_result") or {}
+            conflict = publication if publication.get("status") == "conflict" else (proposal.get("result") or {})
+            if conflict.get("status") == "conflict":
+                if conflict.get("error") in {"source_changed", "task_closure_source_changed"}:
+                    return "The source changed; this closure requires a fresh proposal and approval."
+                return (
+                    "The closure was blocked. Open Tasks to inspect the saved conflict; no completed closure is confirmed. "
+                    "Any new attempt needs a fresh proposal and approval."
+                )
         label = {
             "accepted": "Next action selected and saved. The task remains open; reply done only when completed.",
             "submitted": "Approved work submitted for review. Completion is not yet confirmed.",

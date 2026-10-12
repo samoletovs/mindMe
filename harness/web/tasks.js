@@ -9,6 +9,71 @@ const LABELS = {
   uncertain: "Not confirmed", completed: "Verified operation", invalidated: "Source changed",
   failed: "Not completed", declined: "Declined", expired: "Expired", merged: "Canonical",
 };
+const CLOSURE_CONFLICTS = {
+  source_changed: {
+    label: "Source changed", text: "The approved source or pinned revision changed. This closure was not completed.",
+  },
+  task_closure_source_changed: {
+    label: "Source changed", text: "The approved source or pinned revision changed. This closure was not completed.",
+  },
+  source_closed: {
+    label: "Source already closed", text: "The source is already done, closed or cancelled. This receipt does not confirm that this request closed it.",
+  },
+  task_linked_path: {
+    label: "Reference blocked", text: "A required path is linked or is not a regular directory. The safety check blocked closure.",
+  },
+  task_source_invalid: {
+    label: "Reference invalid", text: "A required reference has invalid text or metadata. The closure was not completed.",
+  },
+  task_source_not_allowed: {
+    label: "Privacy refusal", text: "A required reference is not permitted by privacy or source-safety rules. It was not skipped; closure was blocked.",
+  },
+  task_links_require_repair: {
+    label: "Link repair required", text: "Required links could not be safely repaired. The closure was not completed.",
+  },
+  task_publication_proof_missing: {
+    label: "Proof incomplete", text: "Required closure proof is missing or incomplete. No completed closure is confirmed.",
+  },
+  task_context_limit: {
+    label: "Context limit", text: "A bounded reading or finalization limit blocked closure. The closure was not completed.",
+  },
+  task_closure_inventory_changed: {
+    label: "Inventory changed", text: "The pinned reference inventory or ignore rules changed. The closure was not completed.",
+  },
+  task_closure_inventory_invalid: {
+    label: "Inventory invalid", text: "The required reference inventory could not be validated. The closure was not completed.",
+  },
+  task_closure_inventory_limit: {
+    label: "Inventory limit", text: "The required reference inventory exceeds the allowed limit. The closure was not completed.",
+  },
+  task_closure_continuation_invalid: {
+    label: "Checkpoint conflict", text: "The continuation did not match this approved closure request. No completed closure is confirmed.",
+  },
+  task_closure_scan_exhausted: {
+    label: "Closure check limit", text: "The bounded closure checks are exhausted. The closure was not completed.",
+  },
+  destination_exists: {
+    label: "Destination exists", text: "The closed-task destination already exists. This request did not overwrite it.",
+  },
+  action_id_reused: {
+    label: "Request conflict", text: "This operation ID already belongs to a different approved request. No new closure is confirmed.",
+  },
+  task_closure_scan_unconfirmed: {
+    label: "Closure unconfirmed", text: "The closure outcome could not be confirmed. No completed closure is confirmed.",
+  },
+  task_closure_checkpoint_unavailable: {
+    label: "Closure unconfirmed", text: "The saved closure checkpoint could not be confirmed. No completed closure is confirmed.",
+  },
+  receipt_unavailable: {
+    label: "Closure unconfirmed", text: "The saved closure receipt could not be confirmed. No completed closure is confirmed.",
+  },
+  remote_outcome_unknown: {
+    label: "Closure unconfirmed", text: "The closure outcome could not be confirmed. No completed closure is confirmed.",
+  },
+  task_closure_conflict: {
+    label: "Closure conflict", text: "The saved receipt does not identify a specific supported reason. No completed closure is confirmed.",
+  },
+};
 const $ = (id) => document.getElementById(id);
 const state = {
   csrf: "", view: "today", layout: "list", items: [], overview: null, selected: null,
@@ -38,9 +103,9 @@ function button(text, action, className = "") {
   node.addEventListener("click", action);
   return node;
 }
-function statusBadge(value) {
+function statusBadge(value, label) {
   const key = typeof value === "string" ? value : "unknown";
-  return element("span", LABELS[key] || key.replaceAll("_", " "), `status ${STAGES.includes(key) || Object.hasOwn(LABELS, key) ? key : ""}`);
+  return element("span", label || LABELS[key] || key.replaceAll("_", " "), `status ${STAGES.includes(key) || Object.hasOwn(LABELS, key) ? key : ""}`);
 }
 function prettyId(value) {
   return String(value || "").replace(/^\d{4}-/, "").replaceAll("-", " ");
@@ -766,7 +831,17 @@ function confirmedClosureScan(record) {
     && Number.isInteger(result.scan_pass) && result.scan_pass >= 1 && result.scan_pass <= 6
     && result.scan_pass_limit === 6;
 }
+function closureConflictCode(value) {
+  return typeof value === "string" && Object.hasOwn(CLOSURE_CONFLICTS, value) ? value : "task_closure_conflict";
+}
+function closureConflict(record) {
+  if (record.kind !== "close_task" || record.status !== "invalidated") return null;
+  const result = record.publish_result?.status === "conflict" ? record.publish_result : record.result;
+  return result?.status === "conflict" ? CLOSURE_CONFLICTS[closureConflictCode(result.error)] : null;
+}
 function proposalStatusText(record) {
+  const conflict = closureConflict(record);
+  if (conflict) return `${conflict.text} Any new attempt needs a fresh proposal and approval.`;
   if (confirmedClosureScan(record)) {
     return `Closure check checkpoint confirmed (${record.result.scan_pass} of 6 scan passes recorded). The task is still open; no closure has been submitted. Continue only when you want the next bounded step.`;
   }
@@ -787,8 +862,10 @@ function proposalStatusText(record) {
 function renderProposal(record) {
   const article = element("article", null, "proposal");
   const contentAvailable = record.action && (!record.source_status || record.source_status === "current");
-  append(article, statusBadge(record.status), element("h3", proposalTitle(record)), element("p",
+  const conflict = closureConflict(record);
+  append(article, statusBadge(record.status, conflict?.label), element("h3", proposalTitle(record)), element("p",
     contentAvailable ? proposalStatusText(record) : (record.text || "Historical receipt only. Source content is unavailable and cannot authorize a new action.")));
+  if (conflict && !contentAvailable) article.append(element("p", proposalStatusText(record)));
   const source = element("p", null, "source");
   append(source, element("span", `${record.created_on || ""}${record.expires_on ? ` / expires ${record.expires_on}` : ""} `), safeLink("Source", record.source_url));
   article.append(source);
@@ -815,10 +892,17 @@ function renderProposal(record) {
     article.append(result);
   }
   if (record.result || record.publish_result) {
-    const receipt = (value) => contentAvailable ? value : (value ? {
-      status: value.status, action_id: value.action_id, target_action_id: value.target_action_id,
-      canonical_revision: value.canonical_revision, error: value.error, pr_url: value.pr_url,
-    } : undefined);
+    const receipt = (value) => {
+      if (!value) return undefined;
+      const projected = contentAvailable ? { ...value } : {
+        status: value.status, action_id: value.action_id, target_action_id: value.target_action_id,
+        canonical_revision: value.canonical_revision, error: value.error, pr_url: value.pr_url,
+      };
+      if (record.kind === "close_task" && projected.status === "conflict") {
+        projected.error = closureConflictCode(projected.error);
+      }
+      return projected;
+    };
     const details = element("details");
     append(details, element("summary", "Operation and publication receipts"),
       element("pre", JSON.stringify({ result: receipt(record.result), publication: receipt(record.publish_result) }, null, 2)));
