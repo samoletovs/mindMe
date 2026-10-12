@@ -13,16 +13,24 @@ import pytest
 def test_warning_and_project_pagination_semantics_use_actual_ui_code():
     script = r"""
 const fs = require("node:fs");
+const path = require("node:path");
 const vm = require("node:vm");
 const assert = require("node:assert/strict");
-const source = fs.readFileSync(process.argv[2], "utf8");
-const boundary = source.indexOf("\nfor (const stage of STAGES)");
-assert.ok(boundary > 0);
+const source = fs.readFileSync(process.argv[2], "utf8").replace(
+  'import { Dashboard } from "./dashboard.js";', ""
+).replace(/\nstart\(\);\s*$/, "\n");
+const dashboardSource = fs.readFileSync(path.join(path.dirname(process.argv[2]), "dashboard.js"), "utf8")
+  .replace("export class Dashboard", "class Dashboard");
+assert.ok(!source.endsWith("\nstart();\n"));
 function node() {
   return {
     textContent: "", children: [], disabled: false, hidden: false, value: "", dataset: {},
     append(...children) { this.children.push(...children); },
     replaceChildren(...children) { this.children = children; },
+    get firstElementChild() { return this.children[0]; },
+    addEventListener() {},
+    setAttribute(name, value) { this[name] = value; },
+    classList: { remove() {}, add() {} },
     querySelector() { return null; },
     reset() {},
   };
@@ -31,6 +39,8 @@ const nodes = new Map();
 const document = {
   getElementById(id) { if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id); },
   createElement() { return node(); },
+  querySelectorAll() { return []; },
+  addEventListener() {},
 };
 const tests = `
 (async () => {
@@ -58,13 +68,39 @@ const tests = `
   renderCanonicalLinks();
   assert.equal($("canonical-links").hidden, true);
   assert.equal($("canonical-links").children.length, 0);
+  state.captureSource = { id: "a".repeat(64), revision: "b".repeat(40), finding: "F1" };
+  $("capture-context").textContent = "Synthetic source context";
+  dashboard.today = { items: [{ title: "Synthetic source" }] };
   clearData();
   assert.equal($("canonical-links").hidden, true);
+  assert.equal(state.captureSource, null);
+  assert.equal($("capture-context").textContent, "");
+  assert.equal($("capture-context").hidden, true);
+  assert.equal(dashboard.today, null);
   state.overview = structuredClone(current);
   renderSourceWarnings();
   assert.match(warningText(), /1 task source candidate/);
   assert.match(warningText(), /2 checked project source candidate/);
   assert.doesNotMatch(warningText(), /coverage is incomplete|source issue\\(s\\)|inventory is incomplete/);
+
+  const textTree = (item) => [item.textContent, ...item.children.map(textTree)].join("\\n");
+  state.overview.next_offset = null;
+  state.items = [
+    { path: "tasks/selected.md", title: "Server-selected synthetic task", stage: "ready",
+      next_action: "Keep the server calendar.", attention_eligible: true, attention_reasons: ["review_due"] },
+    { path: "tasks/not-selected.md", title: "Unselected synthetic task", stage: "backlog",
+      deadline: "1900-01-01", attention_eligible: false, attention_reasons: [] },
+    { path: "tasks/waiting.md", title: "Waiting synthetic task", stage: "waiting",
+      waiting_for: "A synthetic dependency.", attention_eligible: false, attention_reasons: [] },
+  ];
+  dashboard.renderToday();
+  const todayText = textTree($("today-work"));
+  assert.match(todayText, /Server-selected synthetic task/);
+  assert.doesNotMatch(todayText, /Unselected synthetic task/);
+  assert.match(todayText, /Waiting, not automatically due/);
+  assert.match(todayText, /Task day 2026-10-10 \\/ UTC/);
+  assert.doesNotMatch(todayText, /More tasks or source issues remain/);
+  state.items = [];
 
   state.overview.attention_complete = false;
   state.overview.errors = [{ code: "task_source_policy_unresolved" }];
@@ -116,8 +152,9 @@ const tests = `
   assert.doesNotMatch(warningText(), /inventory is incomplete/);
 })()
 `;
-Promise.resolve(vm.runInNewContext(source.slice(0, boundary) + tests,
-  { document, assert, structuredClone, console, URL, clearTimeout() {} })).catch((error) => {
+const bundledDashboard = "const Dashboard = (() => {\n" + dashboardSource + "\nreturn Dashboard;\n})();\n";
+Promise.resolve(vm.runInNewContext(bundledDashboard + source + tests,
+  { document, window: { addEventListener() {} }, assert, structuredClone, console, URL, clearTimeout() {} })).catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });

@@ -1,4 +1,4 @@
-# Personal task workspace
+# Personal vault workspace
 
 <!-- impeccable:product-schema 1 -->
 
@@ -19,6 +19,11 @@ area, project and task records; memex publishes authorized changes; mindMe provi
 coordination, proposals and bounded AI preparation. The web interface uses these same
 services, not another task database.
 
+The approved dashboard extension brings Today and a Knowledge inbox into that
+workspace. It reads only eligible canonical mindVault material, not a laptop
+filesystem or a work/private vault. Daily review findings lead to original
+evidence; weekly digests remain dated historical drafts.
+
 ## Capabilities and constraints
 
 - Keep original requests, outcomes, next actions, dates and completion criteria clear.
@@ -31,6 +36,14 @@ services, not another task database.
 - Only the configured personal owner can access task data; no work-account integration.
 - No browser persistence of task data or credentials, and no third-party frontend services.
 - New sign-in configuration and deployment remain subject to their explicit release gates.
+- Today separates approved/expired focus from a draft North Star and uses the task
+  service's attention calendar. A bounded, explicitly recorded visit is not proof
+  that a source was read.
+- Review feedback shares Telegram's private fourteen-day receipt; it never
+  authorizes work. Making a task still means capture, preview, explicit approval
+  and separately verified publication.
+- The first release does not include a full library, ideas triage, new research UI
+  or curation. Refreshing does not call a model or start a job.
 
 ## Voice and accessibility
 

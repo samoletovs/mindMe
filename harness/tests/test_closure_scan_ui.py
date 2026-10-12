@@ -13,16 +13,22 @@ import pytest
 def test_explicit_closure_controls_and_same_request_recovery():
     script = r"""
 const fs = require("node:fs");
+const path = require("node:path");
 const vm = require("node:vm");
 const assert = require("node:assert/strict");
-const source = fs.readFileSync(process.argv[2], "utf8");
-const boundary = source.indexOf("\nfor (const stage of STAGES)");
-assert.ok(boundary > 0);
+const source = fs.readFileSync(process.argv[2], "utf8").replace(
+  'import { Dashboard } from "./dashboard.js";', ""
+).replace(/\nstart\(\);\s*$/, "\n");
+const dashboardSource = fs.readFileSync(path.join(path.dirname(process.argv[2]), "dashboard.js"), "utf8")
+  .replace("export class Dashboard", "class Dashboard");
+assert.ok(!source.endsWith("\nstart();\n"));
 function node() {
   return {
     textContent: "", children: [], disabled: false, hidden: false, value: "", dataset: {}, events: {},
     append(...children) { this.children.push(...children); },
     replaceChildren(...children) { this.children = children; },
+    get firstElementChild() { return this.children[0]; },
+    classList: { remove() {}, add() {} },
     addEventListener(name, callback) { this.events[name] = callback; },
     querySelector() { return null; },
     scrollIntoView() {},
@@ -34,6 +40,7 @@ const document = {
   getElementById(id) { if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id); },
   createElement() { return node(); },
   querySelectorAll() { return []; },
+  addEventListener() {},
 };
 const tests = `
 (async () => {
@@ -113,8 +120,9 @@ const tests = `
   assert.ok(!flat(rendered).some((part) => part.textContent.includes(firstToken)));
 })()
 `;
-Promise.resolve(vm.runInNewContext(source.slice(0, boundary) + tests, {
-  document, assert, structuredClone, console, URL, clearTimeout() {},
+const bundledDashboard = "const Dashboard = (() => {\n" + dashboardSource + "\nreturn Dashboard;\n})();\n";
+Promise.resolve(vm.runInNewContext(bundledDashboard + source + tests, {
+  document, window: { addEventListener() {} }, assert, structuredClone, console, URL, clearTimeout() {},
   crypto: { randomUUID() { return "01234567-89ab-cdef-0123-456789abcdef"; } },
 })).catch((error) => { console.error(error); process.exitCode = 1; });
 """
