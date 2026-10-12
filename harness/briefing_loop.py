@@ -26,6 +26,7 @@ from briefing_state import (
     BriefingStore, StateError, is_expired, parse_reply, prune_state,
     record_transition, trim_deliveries,
 )
+from closure_scan import confirmed_scan, is_closure, scan_pending
 from execution_budget import checkpoint
 from telegram_format import TelegramHTMLReply
 from weekly_plan import render_weekly_proposal
@@ -53,6 +54,7 @@ class BriefingLoop:
         extras: Callable[[list[str]], dict[str, Any]],
         send_html: Callable[[str, list[list[dict[str, str]]] | None], int] | None = None,
         knowledge_revision: Callable[[str], str | None] | None = None,
+        before_claim: Callable[[dict[str, Any], dict[str, Any], date], None] | None = None,
     ) -> None:
         self.store = store
         self.sources = sources
@@ -64,6 +66,8 @@ class BriefingLoop:
         self.knowledge_revision = knowledge_revision or revision
         self.execute = execute
         self.extras = extras
+        self.before_claim = before_claim
+        self.capture_revision: Callable[[str], str | None] | None = None
 
     def context(
         self, today: date, sections: list[str], *, previous: dict[str, str] | None = None,
@@ -113,24 +117,38 @@ class BriefingLoop:
         context["warnings"] = model_input(context, [])["warnings"]
         return render_briefing_details(context, today)
 
-    def reconcile(self, today: date | None = None) -> None:
+    def reconcile(self, today: date | None = None, *, proposal_id: str | None = None) -> None:
         today = today or date.today()
         pending = [
             copy.deepcopy(record) for record in self.store.read()["proposals"].values()
             if record.get("status") in {"submitted", "uncertain", "executing"}
             and record.get("invalidation_reason") != "source_removed"
+            and (not record.get("task_workspace") or self.before_claim is not None)
+            and (proposal_id is None or record["id"] == proposal_id)
+            and not scan_pending(record)
         ][:10]
         for record in pending:
             result = self.execute(record, True)
             status = result.get("status")
-            if status not in {"submitted", "merged", "conflict", "failed", "in_progress", "unknown"}:
+            if status not in {"submitted", "merged", "prepared", "conflict", "failed", "in_progress", "unknown"}:
                 raise LoopError("invalid_action_receipt")
 
             def save(state: dict[str, Any]) -> None:
                 current = state["proposals"].get(record["id"])
                 if current and current.get("status") in {"submitted", "uncertain", "executing"}:
-                    current["result"] = result
-                    if status == "merged":
+                    closure_publication = (
+                        current.get("closure_scan_protocol") == 1 and is_closure(current)
+                        and bool(current.get("publication_action_id"))
+                    )
+                    if closure_publication:
+                        current["publish_result"] = result
+                        if status == "merged" or (status == "submitted" and not (current.get("result") or {}).get("pr_url")):
+                            current["result"] = {
+                                **(current.get("result") or {}), **result, "action_id": current["action_id"],
+                            }
+                    else:
+                        current["result"] = result
+                    if status in {"merged", "prepared"}:
                         record_transition(current, "snoozed" if current.get("requested_snooze") else "completed", today)
                     elif status == "conflict":
                         record_transition(current, "invalidated", today)
@@ -139,6 +157,8 @@ class BriefingLoop:
                     elif status == "failed":
                         record_transition(current, "failed", today)
                     elif status == "unknown":
+                        record_transition(current, "uncertain", today)
+                    elif status == "in_progress" and closure_publication:
                         record_transition(current, "uncertain", today)
 
             self.store.update(save)
@@ -331,6 +351,15 @@ class BriefingLoop:
         proposal = state["proposals"].get(proposal_id)
         if not proposal or not proposal.get("source_path"):
             return "That proposal is unavailable or its source was removed. Request a new briefing."
+        if proposal.get("task_workspace"):
+            if self.before_claim is None:
+                return "Task actions are unavailable through this handler. No action was started."
+            if intent not in {"approve", "decline", "explain"}:
+                return "Use approve or decline on this exact task action. To change it, prepare a new source-bound action in Tasks."
+            if intent == "explain":
+                return "The exact action is on the original card. Approval never grants permission for other work."
+            if proposal.get("action_id"):
+                return self._receipt_text(proposal)
         task_snooze = intent == "snooze" and proposal["kind"] in {"review_task", "update_task"}
         if intent == "unknown":
             return decision.get("clarification") or (
@@ -386,6 +415,10 @@ class BriefingLoop:
             if is_expired(proposal["expires_on"], today):
                 return "That proposal expired. Request a fresh proposal before acting."
             revision_reader = self.knowledge_revision if proposal.get("knowledge_sources") else self.revision
+            if proposal.get("dashboard_source"):
+                if self.capture_revision is None:
+                    return "Source-bound capture is unavailable through this handler. No action was started."
+                revision_reader = self.capture_revision
             if revision_reader(proposal["source_path"]) != proposal["source_revision"]:
                 self.store.update(lambda current: current["proposals"][proposal_id].update(status="invalidated"))
                 return "The source changed or was removed. The old approval cannot be used; request a fresh proposal."
@@ -473,6 +506,10 @@ class BriefingLoop:
             item = current["proposals"][proposal_id]
             if item["status"] not in {"pending", "accepted", "snoozed", "failed"}:
                 return None
+            if item.get("task_workspace") and self.before_claim is None:
+                raise LoopError("task_approval_requires_task_service")
+            if self.before_claim is not None:
+                self.before_claim(current, item, today)
             if intent == "approve" and item["kind"] == "review_task":
                 record_transition(item, "accepted", today)
                 return None
@@ -497,14 +534,19 @@ class BriefingLoop:
             return self._receipt_text(self.store.read()["proposals"][proposal_id])
         result = self.execute(claimed, False)
         status = result.get("status")
-        if status not in {"merged", "submitted", "failed", "conflict", "in_progress", "unknown"}:
+        if status not in {"merged", "prepared", "submitted", "failed", "conflict", "in_progress", "unknown"}:
             raise LoopError("invalid_action_receipt")
 
         def save_result(current: dict[str, Any]) -> None:
             item = current["proposals"][proposal_id]
+            if claimed.get("closure_scan_protocol") == 1 and (
+                item.get("closure_request_id") or item.get("invalidation_reason")
+            ):
+                return
             item["result"] = result
             next_status = {
                 "merged": "snoozed" if item.get("requested_snooze") else "completed",
+                "prepared": "completed",
                 "submitted": "submitted", "conflict": "invalidated",
                 "failed": "failed", "in_progress": "executing", "unknown": "uncertain",
             }[status]
@@ -516,6 +558,23 @@ class BriefingLoop:
     @staticmethod
     def _receipt_text(proposal: dict[str, Any]) -> str:
         status = proposal.get("status")
+        if proposal.get("source_status") in {"unavailable", "changed_or_removed"}:
+            return "The receipt is retained, but its source is no longer current or available. Open a fresh task before acting."
+        if scan_pending(proposal) and status in {"executing", "uncertain"}:
+            result = proposal.get("result")
+            if confirmed_scan(result):
+                return (
+                    "The closure check has a saved checkpoint. The task is still open; nothing was submitted or closed. "
+                    "Open Tasks to explicitly continue one bounded check."
+                )
+            return (
+                "The closure check is not confirmed. The task is not confirmed closed. "
+                "Open Tasks to check the saved progress of this same request; do not create a replacement."
+            )
+        if proposal.get("task_workspace") and status == "completed":
+            if proposal.get("kind") == "prepare_task":
+                return "Preparation is ready to review in Tasks. It is a draft, not verified task completion."
+            return "I verified the approved result. This does not verify any other real-world task outcome."
         label = {
             "accepted": "Next action selected and saved. The task remains open; reply done only when completed.",
             "submitted": "Approved work submitted for review. Completion is not yet confirmed.",

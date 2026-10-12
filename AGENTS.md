@@ -176,6 +176,74 @@ SDK telemetry regression alongside any tracing changes.
 - Not a template. Don't generalize.
 - Not multi-user. Don't add user tables.
 - Not a chatbot platform. Don't add session management beyond what Foundry provides.
-- Not a productivity SaaS. Don't add a web UI.
+- Not a productivity SaaS. The explicitly approved personal-task pilot and its
+  first-release Today/Knowledge dashboard share one web surface: one configured
+  personal Microsoft owner, the existing Functions host, safe canonical
+  mindVault material, canonical task Markdown, and the existing approval ledger.
+  Do not generalize it into a public app or add another task database.
+
+The dashboard's generated daily reviews and weekly digests are display-only;
+`dashboard_sources.py` must not loosen generation eligibility. Every displayed
+field and reference is subject to privacy checks. Evidence reads resolve
+server-owned IDs in pinned regular-file trees; no arbitrary URL reader.
+Feedback uses `evolve_feedback.py` and the same private fourteen-day evolve state
+as Telegram, not browser callback replay. `dashboard_visit` is one content-free
+CAS-protected marker, not a reading history. See `docs/vault-dashboard.md`.
 
 If a feature request doesn't fit, push back. The success criterion is "does this make my mornings calmer?" — nothing else.
+
+## Personal task pilot boundaries
+
+`MINDME_TASKS_ENABLED` and `MINDME_WEB_ENABLED` default off. See
+[the runtime contract](docs/task-workspace.md) for the exact settings and routes.
+Never use a fake development identity, first-visitor owner enrollment, a work
+tenant, forwarded identity headers, or browser-held OAuth tokens. Missing auth
+configuration must fail closed. The BFF uses MSAL code+PKCE, form-post callback,
+signed ID-token validation and exact configured personal-directory owner checks.
+Do not enable app-wide EasyAuth over the existing Telegram/Function-key routes.
+
+`task1|clarify|...` is context, not approval. Resolve the actual enrolled DM owner
+and confirmed bot message at memex, then re-read the canonical task blob. Keep
+the three-answer cap and exact asked-field binding. Source drift, stale questions
+and unknown publication/delivery cannot become a fresh operation or generic
+capture. New task proposals use the existing `brief1|` approval binding.
+An issued question token must be checked in the same CAS update as its answer,
+not only before it. Disabling Tasks must block its existing cards in legacy
+callback/reply paths too. All cached receipt responses use the shared current-
+source projection; completed tombstones stay content-free with immutable
+completion/operation proof.
+Preserve validated non-content review/acknowledgment flags through source removal.
+Only explicit owner acknowledgment of an unavailable completed result may release
+its review slot; never infer reading or task verification, restore private content,
+or rewrite immutable completion/operation proof.
+Assess date metadata before task display pagination, never select the first
+twelve capture filenames and then look for due work. The bounded canonical
+assessment reports incomplete attention and its cursor when it cannot cover the
+full permitted task inventory; an empty partial view is not evidence nothing is due.
+Task attention requires configured IANA `MINDME_TASKS_TIMEZONE`. Rank and expose
+per-item eligibility/reasons from the same server-derived owner day and seven-day
+deadline horizon, not a separate browser clock. Future reviews suppress discretionary
+attention, never hard deadlines. Budget, auth and approval-expiry clocks remain UTC;
+the owner's attested `verified_on` date uses the owner calendar separately.
+
+Task APIs prepare exact source-version-bound changes. The separate writer-owned
+`publish_task` uses a distinct stable operation ID and the approved
+`target_action_id`; never accept a browser-selected PR, repository or branch.
+Native checks and the exact writer manifest govern publication. Ready is owner
+selection, not inferred from a complete form or `execution: agent`.
+Resumable closure checks use the same approved mutation/action ID and only a
+writer-issued `closure_continuation` token. Advance one step only on explicit
+owner continuation; recovery reuses the last-sent token, never auto-selects the
+next checkpoint. Ordinary refresh, repeated approval and timer reconciliation
+must not continue scans. A checkpoint is not submitted/saved/closed. Preserve
+old conflicts; source/inventory drift needs new source-bound approval. See the
+bounded six-pass and unchanged per-call limits in the task runtime contract.
+
+Private preparation is bounded, uses the existing model with `store=False`, and
+cannot execute consequential actions. Standing scope is explicit and revision-
+bound, on existing timers only; stop when its source/project changes, work limits
+or review capacity are reached. A draft/report is not verified task completion.
+Closure requires owner-checked acceptance plus result/evidence/verification date;
+learning stays in the closed canonical task before any separately reviewed wiki
+promotion. Operational receipts remain in the existing private state, not a
+second task store. Never log task content, auth tokens/codes, or identity claims.
