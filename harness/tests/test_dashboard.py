@@ -394,6 +394,34 @@ def test_last_visit_is_single_bounded_private_marker_and_cas_safe():
     _encode(subject.tasks.store.read())
 
 
+def test_task_closure_preview_preserves_dashboard_state_without_extra_authority():
+    from test_task_service import PATH, REVISION
+
+    subject, vault, feedback, execute, generate, publish = dashboard()
+    subject.visit({"token": subject.today(0, TODAY)["visit_token"]})
+    saved_visit = copy.deepcopy(workspace(subject.tasks.store.read())["dashboard_visit"])
+    subject.feedback(feedback_payload(vault), TODAY)
+    saved_feedback = copy.deepcopy(feedback.store.read()["deliveries"][DAY]["feedback"])
+    preview = subject.tasks.close({
+        "request_id": "7" * 32, "path": PATH, "revision": REVISION,
+        "checked_done_when": True,
+        "completion": {
+            "result": "The synthetic outline has one heading.",
+            "evidence": "The owner checked the agreed synthetic topic.",
+            "verification": "owner", "verified_on": DAY,
+        },
+    }, TODAY)
+    assert preview["status"] == "pending" and preview["kind"] == "close_task"
+    assert preview["source_revision"] == REVISION
+    assert "dashboard_source" not in subject.tasks.store.read()["proposals"][preview["id"]]
+    assert workspace(subject.tasks.store.read())["dashboard_visit"] == saved_visit
+    assert feedback.store.read()["deliveries"][DAY]["feedback"] == saved_feedback
+    assert workspace(subject.tasks.store.read())["budget"]["used"] == 0
+    execute.assert_not_called()
+    generate.assert_not_called()
+    publish.assert_not_called()
+
+
 def test_expired_visit_has_explicit_fresh_baseline_not_false_new_changes():
     subject, *_ = dashboard()
     subject.tasks.store.update(lambda state: workspace(state).update(

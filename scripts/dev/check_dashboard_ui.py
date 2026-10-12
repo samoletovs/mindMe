@@ -106,6 +106,11 @@ def check(artifacts: Path) -> None:
                                 "attention": {"calendar_date": "2026-10-08", "timezone": "UTC", "deadline_horizon_days": 7},
                                 "standing": {"enabled": False, "sources": {}}, "active_projects": {},
                                 "limits": {"daily": 3}, "budget": {}, "errors": [],
+                                "excluded_count": 1, "project_excluded_count": 1,
+                                "canonical_links": {
+                                    "dashboard": "https://github.com/example/mindVault/blob/" + "e" * 40 + "/home.md",
+                                    "knowledge_index": "https://github.com/example/mindVault/blob/" + "e" * 40 + "/wiki/index.md",
+                                },
                             }
                         elif operation == "task":
                             body = TASK
@@ -168,6 +173,10 @@ def check(artifacts: Path) -> None:
                     }""")
                     page.get_by_text("Expired window", exact=True).wait_for()
                     assert page.get_by_text("The North Star is a draft, not approved focus.", exact=True).is_visible()
+                    links = page.locator("#canonical-links")
+                    assert links.get_by_role("link", name="Open vault dashboard").get_attribute("target") == "_blank"
+                    assert links.get_by_role("link", name="Knowledge index").get_attribute("href").endswith("/wiki/index.md")
+                    assert "excluded, not failed reads" in page.locator("#warnings").inner_text()
                     assert page.locator("html").evaluate("(node) => node.scrollWidth <= innerWidth") is True
                     page.screenshot(path=str(artifacts / f"today-{width}.png"), full_page=True)
                     page.get_by_role("button", name="Knowledge", exact=True).click()
@@ -208,6 +217,8 @@ def check(artifacts: Path) -> None:
                     page.get_by_role("button", name="Refresh", exact=True).click()
                     page.get_by_role("link", name="Sign in with Microsoft", exact=True).wait_for()
                     assert QUOTE not in page.locator("body").inner_text()
+                    assert page.locator("#canonical-links").is_hidden()
+                    assert page.locator("#canonical-links a").count() == 0
                     assert page.evaluate("localStorage.length + sessionStorage.length") == 0
                     assert not errors, errors
                     checks.append(f"{width}x{height}: Today, evidence in one interaction, source in two, feedback-only, preview/confirm, task compatibility, stale denial, session clearing, no overflow")

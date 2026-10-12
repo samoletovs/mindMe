@@ -171,7 +171,7 @@ def test_preparation_host_uses_existing_model_no_tools_no_storage_or_retries(mon
     model.with_options.return_value = model
     content = json.dumps({
         "summary": "A synthetic draft.", "steps": [], "uncertainties": [],
-        "owner_next_action": "Review it.", "source_quote": "One topic.",
+        "owner_next_action": "Review it.", "source_quote": "One topic only.",
     })
     model.chat.completions.create.return_value.choices = [
         SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content=content, refusal=None)),
@@ -179,7 +179,7 @@ def test_preparation_host_uses_existing_model_no_tools_no_storage_or_retries(mon
     monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-small-model")
     monkeypatch.setattr(fa, "_http_client", lambda: http)
     monkeypatch.setattr(fa, "_foundry", lambda: (None, model))
-    fa._generate_task_preparation({"source": {"text": "One topic."}, "scope": "Outline only."})
+    fa._generate_task_preparation({"source": {"text": "One topic only."}, "scope": "Outline only."})
     arguments = model.chat.completions.create.call_args.kwargs
     assert arguments["model"] == "existing-small-model"
     assert arguments["store"] is False and arguments["max_completion_tokens"] == 1200
@@ -209,7 +209,7 @@ def test_preparation_request_rejection_is_content_free_and_not_retried(monkeypat
     monkeypatch.setattr(fa, "_http_client", Mock())
     monkeypatch.setattr(fa, "_foundry", lambda: (None, model))
     with pytest.raises(TaskError, match="task_preparation_request_rejected"):
-        fa._generate_task_preparation({"source": {"text": "One topic."}, "scope": "Outline only."})
+        fa._generate_task_preparation({"source": {"text": "One topic only."}, "scope": "Outline only."})
     assert model.chat.completions.create.call_count == 1
     assert "status=400 code=invalid_json_schema parameter=response_format.json_schema.schema" in caplog.text
     assert "synthetic-private" not in caplog.text
@@ -223,7 +223,7 @@ def test_preparation_actual_sdk_wire_and_incomplete_results(monkeypatch, finish_
 
     output = {
         "summary": "A synthetic draft.", "steps": ["Choose a heading."], "uncertainties": [],
-        "owner_next_action": "Review it.", "source_quote": "One topic.",
+        "owner_next_action": "Review it.", "source_quote": "One topic only.",
     }
     requests = []
 
@@ -243,10 +243,10 @@ def test_preparation_actual_sdk_wire_and_incomplete_results(monkeypatch, finish_
             monkeypatch.setattr(fa, "_http_client", lambda: http)
             monkeypatch.setattr(fa, "_foundry", lambda: (None, model))
             if finish_reason == "stop" and refusal is None:
-                assert fa._generate_task_preparation({"source": {"text": "One topic."}, "scope": "Outline only."}) == output
+                assert fa._generate_task_preparation({"source": {"text": "One topic only."}, "scope": "Outline only."}) == output
             else:
                 with pytest.raises(TaskError, match="task_preparation_invalid"):
-                    fa._generate_task_preparation({"source": {"text": "One topic."}, "scope": "Outline only."})
+                    fa._generate_task_preparation({"source": {"text": "One topic only."}, "scope": "Outline only."})
     assert len(requests) == 1
     assert requests[0].url.path == "/openai/v1/chat/completions"
     body = json.loads(requests[0].content)
@@ -261,3 +261,40 @@ def test_disabled_web_has_no_auth_or_service_side_effects():
     assert web.handle(request("api/session"), "api/session").status_code == 404
     auth.assert_not_called()
     factory.assert_not_called()
+
+
+def test_preparation_schema_offers_exact_canonical_quotes_not_free_text(monkeypatch):
+    from types import SimpleNamespace
+
+    source = '# Synthetic\n\nA "quoted" constraint stays exact.\r\nKeep the \\ character unchanged.\r\n'
+    output = {
+        "summary": "A synthetic draft.", "steps": [], "uncertainties": [],
+        "owner_next_action": "Review the draft.", "source_quote": 'A "quoted" constraint stays exact.',
+    }
+    model = Mock()
+    model.with_options.return_value = model
+    model.chat.completions.create.return_value.choices = [
+        SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content=json.dumps(output), refusal=None)),
+    ]
+    monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-small-model")
+    monkeypatch.setattr(fa, "_foundry", lambda: (None, model))
+    monkeypatch.setattr(fa, "_http_client", Mock())
+    assert fa._generate_task_preparation({"source": {"text": source}, "scope": "Draft only."}) == output
+    schema = model.chat.completions.create.call_args.kwargs["response_format"]["json_schema"]["schema"]
+    quotes = schema["properties"]["source_quote"]["enum"]
+    assert output["source_quote"] in quotes
+    assert "Keep the \\ character unchanged." in quotes
+    assert 1 <= len(quotes) <= 12
+    assert all(12 <= len(quote) <= 500 and quote in source for quote in quotes)
+    assert sum(map(len, quotes)) <= 1600
+
+
+def test_preparation_without_citable_source_fails_before_model_client(monkeypatch):
+    from task_service import TaskError
+
+    model = Mock(side_effect=AssertionError("No model client without canonical evidence"))
+    monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-small-model")
+    monkeypatch.setattr(fa, "_foundry", model)
+    with pytest.raises(TaskError, match="task_preparation_evidence_invalid"):
+        fa._generate_task_preparation({"source": {"text": "# Header only\nTiny."}, "scope": "Draft only."})
+    model.assert_not_called()

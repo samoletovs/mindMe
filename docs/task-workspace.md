@@ -22,8 +22,11 @@ and the same seven-day deadline horizon for both ordering and eligibility;
 capture age is not urgency. A new due task cannot be hidden behind
 twenty old undated tasks merely because the first twelve filenames are older.
 A display page is not the whole backlog.
-Malformed or excluded records produce explicit coverage limitations; unavailable
-GitHub data is not an empty task list.
+Malformed or unavailable records produce explicit coverage limitations; unavailable
+GitHub data is not an empty task list. Positive scope/privacy exclusions are
+reported separately: an explicitly routed/private source or a source matching
+the existing sensitive-content filter is outside this permitted view, not a
+failed read. Excluded contents and filenames are never returned.
 
 `attention_complete` is distinct from display pagination. Above the 96-source
 assessment bound, or with unassessable metadata, it is false and the warning says
@@ -34,6 +37,22 @@ cursor as `offset` assesses the next window; ordinary `next_offset` visits its
 twelve-task pages first. No cross-request task index, extra model call or new
 database is introduced. Canonical/source eligibility checks still precede every
 display and action.
+
+`attention.scope` is `permitted`. Its `excluded_count` counts known policy
+exclusions in the assessed window, while `unavailable_count` counts unresolved
+read, schema or policy errors. A complete assessment means all permitted
+candidates were accounted for, not that excluded private/routed work was assessed.
+Ambiguous metadata, unsupported policy syntax, malformed dates, source revision
+mismatches, size limits and network failures remain explicit errors and keep
+coverage incomplete. The existing admission filters are unchanged.
+
+Project pages make the same distinction using `excluded_count` and `errors`;
+the overview exposes `project_excluded_count`, `project_candidate_count` and
+`project_errors`. One project read failure does not discard independently
+verified task data. Pagination preserves accumulated project exclusions and
+unresolved errors across task-page appends; a fresh overview retries the source
+snapshot. Known exclusions are described as out of scope, not an unavailable
+project inventory, and unread pages still have a continuation control.
 
 `MINDME_TASKS_TIMEZONE` is a required, validated IANA setting, not an inferred
 browser or device zone. Missing/invalid configuration returns 503, without an
@@ -56,6 +75,15 @@ remain untriaged; filled fields prove structure only. Ready/Doing/Waiting/Verify
 are not inferred from capture age, a model suggestion, or `execution: agent`.
 Deadline, review date, and dated focus stay separate. Yesterday's focus does not
 become today's focus.
+
+The authenticated overview also provides navigation to the existing canonical
+`home.md` dashboard and `wiki/index.md` knowledge index when those exact regular
+files exist in its pinned Git tree. URLs use the configured repository and
+canonical commit, not a hardcoded owner or a browser-selected destination.
+These are external GitHub links requiring the owner's vault access, not new
+in-app knowledge/dashboard views. No page content is fetched or copied into the
+task response. Links are cleared on sign-out or when a fresh snapshot has no
+matching regular-file navigation targets.
 
 The task reader, clarification service, Microsoft auth adapter, Telegram adapter,
 and web transport are respectively `task_sources.py`, `task_service.py`,
@@ -350,6 +378,34 @@ The failed receipt retains an allowlisted reason code for request rejection,
 invalid output, unmatched evidence or source drift. Logs include only that code
 and the fixed source-check/generation/validation/source-recheck phase, never
 model output or arbitrary exception text. Unknown error text remains generic.
+
+For preparation evidence, the host reuses the knowledge quote-candidate selector
+on the already permitted canonical source. Metadata is excluded and every offered
+quote must remain an exact substring of the original text. The strict response
+schema offers at most twelve exact strings, at most 1,600 quote characters total,
+as the `source_quote` enum; the model selects evidence instead of regenerating it.
+No quote is synthesized, fuzzy-matched or replaced after generation. The existing
+500-character local quote bound and exact canonical membership check still reject
+nonconforming output, even if a provider fails to honor the enum.
+
+No safe citable candidate means a failed preparation before constructing a model
+client. The complete serialized provider request, including prompts, nonce fences,
+context and the quote-bearing schema, must fit the existing 9,000-character
+input bound. Candidate selection adds no source read, model call or retry, and
+failed requests do not refund an existing reservation or rewrite historical
+receipts. These generation constraints address the observed exact-evidence
+rejection category, not a claim about unretained model output; real acceptance
+still requires an explicitly approved, in-budget trial.
+
+Local preparation validation translates only the shared text validator's known
+`invalid_text` and `unsafe_text` failures into the existing safe failed-receipt
+codes. Empty, oversized, wrongly typed or secret-shaped model strings remain
+rejected; exact source quotation and all output limits are unchanged. These
+definite local rejections no longer leave a preparation stuck as executing.
+Charges remain reserved and replay cannot call the model again. Unrelated
+validation exceptions are not swallowed, and historical receipts are not rewritten.
+This fixes an offline-reproduced error-boundary defect; it does not reconstruct
+the cause of older generic failure receipts or establish live AI acceptance.
 
 Run `python -m pytest` for the complete synthetic suite. New `test_task_*` tests
 exercise actual MSAL flow construction/token exchange with generated signed
