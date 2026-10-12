@@ -671,7 +671,8 @@ def _task_service() -> TaskService:
     return TaskService(
         loop=loop, repository=repository, generate=_generate_task_preparation,
         capture_reader=DashboardRepository(client, token=token, repo=repo).capture_source,
-        publish=gateway.publish_task, enabled=_tasks_enabled, attention_timezone=owner_timezone, **limits,
+        publish=gateway.publish_task, resume_closure=gateway.continue_closure,
+        enabled=_tasks_enabled, attention_timezone=owner_timezone, **limits,
     )
 
 

@@ -26,6 +26,7 @@ from briefing_state import (
     BriefingStore, StateError, is_expired, parse_reply, prune_state,
     record_transition, trim_deliveries,
 )
+from closure_scan import confirmed_scan, is_closure, scan_pending
 from execution_budget import checkpoint
 from telegram_format import TelegramHTMLReply
 from weekly_plan import render_weekly_proposal
@@ -124,6 +125,7 @@ class BriefingLoop:
             and record.get("invalidation_reason") != "source_removed"
             and (not record.get("task_workspace") or self.before_claim is not None)
             and (proposal_id is None or record["id"] == proposal_id)
+            and not scan_pending(record)
         ][:10]
         for record in pending:
             result = self.execute(record, True)
@@ -134,7 +136,18 @@ class BriefingLoop:
             def save(state: dict[str, Any]) -> None:
                 current = state["proposals"].get(record["id"])
                 if current and current.get("status") in {"submitted", "uncertain", "executing"}:
-                    current["result"] = result
+                    closure_publication = (
+                        current.get("closure_scan_protocol") == 1 and is_closure(current)
+                        and bool(current.get("publication_action_id"))
+                    )
+                    if closure_publication:
+                        current["publish_result"] = result
+                        if status == "merged" or (status == "submitted" and not (current.get("result") or {}).get("pr_url")):
+                            current["result"] = {
+                                **(current.get("result") or {}), **result, "action_id": current["action_id"],
+                            }
+                    else:
+                        current["result"] = result
                     if status in {"merged", "prepared"}:
                         record_transition(current, "snoozed" if current.get("requested_snooze") else "completed", today)
                     elif status == "conflict":
@@ -144,6 +157,8 @@ class BriefingLoop:
                     elif status == "failed":
                         record_transition(current, "failed", today)
                     elif status == "unknown":
+                        record_transition(current, "uncertain", today)
+                    elif status == "in_progress" and closure_publication:
                         record_transition(current, "uncertain", today)
 
             self.store.update(save)
@@ -524,6 +539,10 @@ class BriefingLoop:
 
         def save_result(current: dict[str, Any]) -> None:
             item = current["proposals"][proposal_id]
+            if claimed.get("closure_scan_protocol") == 1 and (
+                item.get("closure_request_id") or item.get("invalidation_reason")
+            ):
+                return
             item["result"] = result
             next_status = {
                 "merged": "snoozed" if item.get("requested_snooze") else "completed",
@@ -541,6 +560,17 @@ class BriefingLoop:
         status = proposal.get("status")
         if proposal.get("source_status") in {"unavailable", "changed_or_removed"}:
             return "The receipt is retained, but its source is no longer current or available. Open a fresh task before acting."
+        if scan_pending(proposal) and status in {"executing", "uncertain"}:
+            result = proposal.get("result")
+            if confirmed_scan(result):
+                return (
+                    "The closure check has a saved checkpoint. The task is still open; nothing was submitted or closed. "
+                    "Open Tasks to explicitly continue one bounded check."
+                )
+            return (
+                "The closure check is not confirmed. The task is not confirmed closed. "
+                "Open Tasks to check the saved progress of this same request; do not create a replacement."
+            )
         if proposal.get("task_workspace") and status == "completed":
             if proposal.get("kind") == "prepare_task":
                 return "Preparation is ready to review in Tasks. It is a draft, not verified task completion."

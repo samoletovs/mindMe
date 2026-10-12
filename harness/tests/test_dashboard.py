@@ -422,6 +422,25 @@ def test_task_closure_preview_preserves_dashboard_state_without_extra_authority(
     publish.assert_not_called()
 
 
+def test_host_wires_both_source_bound_dashboard_capture_and_closure_continuation(monkeypatch):
+    import function_app as fa
+
+    subject, vault, *_ = dashboard()
+    monkeypatch.setattr(fa, "_tasks_enabled", lambda: True)
+    monkeypatch.setattr(fa, "_http_client", lambda: vault.client)
+    monkeypatch.setattr(fa, "_briefing_loop", lambda: subject.tasks.loop)
+    monkeypatch.setenv("MINDME_TASKS_TIMEZONE", "UTC")
+    monkeypatch.setenv("DIG_GITHUB_TOKEN", TOKEN)
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setenv("MEMEX_ACTION_URL", "https://synthetic.invalid/api/personal_action")
+    combined = fa._task_service()
+    assert combined.capture_reader(DAILY)["revision"] == blob(vault.files[DAILY])
+    assert combined.loop.capture_revision(NOTE) == blob(TEXT)
+    assert combined.resume_closure_action.__name__ == "continue_closure"
+    assert combined.publish_action.__self__ is combined.resume_closure_action.__self__
+    assert not combined.store.read()["proposals"]
+
+
 def test_expired_visit_has_explicit_fresh_baseline_not_false_new_changes():
     subject, *_ = dashboard()
     subject.tasks.store.update(lambda state: workspace(state).update(

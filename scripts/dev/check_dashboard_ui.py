@@ -44,6 +44,23 @@ TASK = {
     "definition": {"complete": True, "missing": []}, "source_status": "current",
     "text": "Synthetic task only.", "execution": "assisted", "waiting_for": "",
 }
+CLOSURE = {
+    "id": "4" * 24, "kind": "close_task", "task_workspace": True, "closure_scan_protocol": 1,
+    "status": "executing", "source_status": "current", "approved_on": "2026-10-08",
+    "source_path": TASK["path"], "source_revision": TASK["revision"],
+    "action": {
+        "kind": "update_task", "path": TASK["path"], "change": {"status": "done"},
+        "completion": {
+            "result": "One synthetic outline.", "evidence": "The synthetic owner checked it.",
+            "verification": "owner", "verified_on": "2026-10-08",
+        },
+    },
+    "result": {
+        "version": 1, "action_id": "5" * 32, "status": "in_progress", "path": "",
+        "phase": "closure_scan", "resumable": True,
+        "closure_continuation": "1" * 32, "scan_pass": 1, "scan_pass_limit": 6,
+    },
+}
 
 
 class StaticHandler(BaseHTTPRequestHandler):
@@ -84,6 +101,7 @@ def check(artifacts: Path) -> None:
                     page.on("pageerror", lambda error: errors.append(str(error)))
                     fixture = {"history": [], "writes": [], "denied": False, "stale": False}
                     review = copy.deepcopy(REVIEW)
+                    closure = copy.deepcopy(CLOSURE)
 
                     def route(request_route) -> None:
                         req = request_route.request
@@ -159,6 +177,20 @@ def check(artifacts: Path) -> None:
                         elif operation == "dashboard/visit":
                             fixture["writes"].append(operation)
                             body = {"recorded": True}
+                        elif operation in {"continue-closure", "recover-closure"}:
+                            fixture["writes"].append(operation)
+                            expected_fields = {"proposal_id", "request_id"}
+                            if operation == "continue-closure":
+                                expected_fields.add("closure_continuation")
+                                assert payload["closure_continuation"] == CLOSURE["result"]["closure_continuation"]
+                            assert set(payload) == expected_fields and payload["proposal_id"] == CLOSURE["id"]
+                            assert len(payload["request_id"]) == 32
+                            body = {
+                                **closure, "status": "executing",
+                                "result": {**CLOSURE["result"], "closure_continuation": "2" * 32, "scan_pass": 2},
+                            }
+                            closure.update(body)
+                            fixture["history"] = [body]
                         else:
                             raise AssertionError("Unexpected synthetic operation: " + operation)
                         request_route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
@@ -207,6 +239,38 @@ def check(artifacts: Path) -> None:
                     page.locator("#inspector .detail-title").wait_for()
                     page.screenshot(path=str(artifacts / f"tasks-{width}.png"), full_page=True)
                     assert page.locator("html").evaluate("(node) => node.scrollWidth <= innerWidth") is True
+                    fixture["history"] = [closure]
+                    page.locator(".navigation [data-view='activity']").click()
+                    page.get_by_role("button", name="Refresh", exact=True).click()
+                    page.get_by_role("button", name="Continue closure check", exact=True).wait_for()
+                    assert fixture["writes"].count("continue-closure") == 0
+                    page.get_by_role("button", name="Continue closure check", exact=True).click()
+                    page.get_by_text("Closure check checkpoint confirmed (2 of 6", exact=False).first.wait_for()
+                    page.wait_for_load_state("networkidle")
+                    assert fixture["writes"].count("continue-closure") == 1
+                    assert page.locator("html").evaluate("(node) => node.scrollWidth <= innerWidth") is True
+                    page.screenshot(path=str(artifacts / f"closure-{width}.png"), full_page=True)
+                    closure.update(status="uncertain", result={"status": "unknown"})
+                    fixture["history"] = [closure]
+                    page.get_by_role("button", name="Refresh", exact=True).click()
+                    page.get_by_role("button", name="Recover last closure request", exact=True).first.wait_for()
+                    assert fixture["writes"].count("recover-closure") == 0
+                    page.get_by_role("button", name="Recover last closure request", exact=True).first.click()
+                    page.get_by_text("Closure check checkpoint confirmed (2 of 6", exact=False).first.wait_for()
+                    page.wait_for_load_state("networkidle")
+                    assert fixture["writes"].count("recover-closure") == 1
+                    assert fixture["writes"].count("continue-closure") == 1
+                    closure.update(
+                        status="uncertain", publication_action_id="9" * 32,
+                        result={"status": "submitted", "pr_url": "https://github.com/example/mindVault/pull/7"},
+                        publish_result={"status": "unknown"},
+                    )
+                    fixture["history"] = [closure]
+                    page.get_by_role("button", name="Refresh", exact=True).click()
+                    page.get_by_role("button", name="Check this existing request", exact=True).first.wait_for()
+                    assert page.get_by_role("button", name="Continue closure check", exact=True).count() == 0
+                    assert page.get_by_role("button", name="Recover last closure request", exact=True).count() == 0
+                    page.get_by_role("button", name="Return to workspace", exact=True).click()
                     fixture["stale"] = True
                     page.get_by_role("button", name="Knowledge", exact=True).click()
                     page.get_by_role("button", name="Back to inbox", exact=True).click()
@@ -221,7 +285,7 @@ def check(artifacts: Path) -> None:
                     assert page.locator("#canonical-links a").count() == 0
                     assert page.evaluate("localStorage.length + sessionStorage.length") == 0
                     assert not errors, errors
-                    checks.append(f"{width}x{height}: Today, evidence in one interaction, source in two, feedback-only, preview/confirm, task compatibility, stale denial, session clearing, no overflow")
+                    checks.append(f"{width}x{height}: Today, evidence in one interaction, source in two, feedback-only, preview/confirm, explicit closure continuation/recovery, publication phase retained, task compatibility, stale denial, session clearing, no overflow")
                     page.close()
             finally:
                 browser.close()

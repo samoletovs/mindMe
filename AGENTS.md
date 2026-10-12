@@ -231,6 +231,13 @@ Task APIs prepare exact source-version-bound changes. The separate writer-owned
 `target_action_id`; never accept a browser-selected PR, repository or branch.
 Native checks and the exact writer manifest govern publication. Ready is owner
 selection, not inferred from a complete form or `execution: agent`.
+Resumable closure checks use the same approved mutation/action ID and only a
+writer-issued `closure_continuation` token. Advance one step only on explicit
+owner continuation; recovery reuses the last-sent token, never auto-selects the
+next checkpoint. Ordinary refresh, repeated approval and timer reconciliation
+must not continue scans. A checkpoint is not submitted/saved/closed. Preserve
+old conflicts; source/inventory drift needs new source-bound approval. See the
+bounded six-pass and unchanged per-call limits in the task runtime contract.
 
 Private preparation is bounded, uses the existing model with `store=False`, and
 cannot execute consequential actions. Standing scope is explicit and revision-

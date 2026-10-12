@@ -120,6 +120,16 @@ Automatic receipt maintenance applies the same evidence recheck before any
 publication-capable reconciliation. Revoked evidence leaves an unresolved,
 content-free operation receipt; it does not issue another publication attempt.
 
+The integrated task workspace also retains its explicitly continued closure
+checks. **Continue closure check** requests one bounded pass; **Recover last
+closure request** reuses the server's last-sent token, never the next checkpoint.
+Neither dashboard refresh nor automatic maintenance advances a scan. A partial
+check leaves the task open. Once the writer submits the closure, the durable
+publication operation ID keeps recovery in the existing publication phase, not
+back in scanning. Closing an ordinary task does not inherit dashboard capture
+authority or alter its separate visit/feedback state. See the
+[task runtime contract](task-workspace.md#explicit-bounded-closure-continuations).
+
 ## Authenticated routes
 
 All paths below are relative to `/api/tasks/api/dashboard`. Existing
@@ -150,6 +160,9 @@ shared feedback, owner/CSRF denial and exact task preview/approval/retry behavio
 check browser-module syntax. With an already-installed Python Playwright and
 Chromium, run `python scripts\dev\check_dashboard_ui.py --artifacts <session-path>`
 for labelled synthetic 1280px/390px screenshots and interaction assertions.
+The combined check includes inherited canonical GitHub navigation and
+source-exclusion warnings, explicit closure continuation/recovery without a
+browser-selected recovery token, and publication-phase controls after uncertainty.
 It intercepts all data routes; it neither logs into nor mutates production.
 The loopback-only helper and browser stop before it returns.
 

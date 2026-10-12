@@ -753,7 +753,26 @@ function proposalTitle(record) {
     close_task: "Verify and close", prepare_task: "Prepare a private draft", research: "Research a public question",
   })[record.kind] || "Task operation";
 }
+function closureScanPending(record) {
+  return record.kind === "close_task" && record.closure_scan_protocol === 1
+    && ["executing", "uncertain"].includes(record.status)
+    && !record.publication_action_id && !record.result?.pr_url;
+}
+function confirmedClosureScan(record) {
+  const result = record.result;
+  return closureScanPending(record) && result?.status === "in_progress"
+    && result.phase === "closure_scan" && result.resumable === true
+    && /^[a-f0-9]{32}$/.test(result.closure_continuation || "")
+    && Number.isInteger(result.scan_pass) && result.scan_pass >= 1 && result.scan_pass <= 6
+    && result.scan_pass_limit === 6;
+}
 function proposalStatusText(record) {
+  if (confirmedClosureScan(record)) {
+    return `Closure check checkpoint confirmed (${record.result.scan_pass} of 6 scan passes recorded). The task is still open; no closure has been submitted. Continue only when you want the next bounded step.`;
+  }
+  if (closureScanPending(record)) {
+    return "The last closure check is not confirmed. Recover that same request to inspect its progress; do not start another closure or assume the task is saved.";
+  }
   if (record.status === "completed") {
     if (record.kind === "prepare_task") return "A private draft is available. The task is still open.";
     if (record.kind === "research") return "The research operation has a result. Verify the artifact; this does not complete the underlying task.";
@@ -776,6 +795,9 @@ function renderProposal(record) {
   if (contentAvailable) {
     const action = element("div", null, "exact-action");
     append(action, element("h4", "Exact action to approve"), element("pre", JSON.stringify(record.action, null, 2)));
+    if (record.kind === "close_task" && record.closure_scan_protocol === 1) {
+      action.append(element("p", "Closure may require up to six explicitly continued checks of the pinned reference inventory. No task is submitted or closed from a partial check, and another pass never runs automatically.", "hint"));
+    }
     article.append(action);
   }
   if (contentAvailable && record.result?.preparation) {
@@ -812,7 +834,16 @@ function renderProposal(record) {
       proposal_id: record.id, approval_digest: record.approval_digest, decision: "decline",
     }, updateProposal)));
   }
-  if (["submitted", "executing", "uncertain"].includes(record.status)) {
+  if (contentAvailable && confirmedClosureScan(record)) {
+    actions.append(writeButton("Continue closure check", () => mutate("continue-closure", {
+      proposal_id: record.id, request_id: requestId(), closure_continuation: record.result.closure_continuation,
+    }, updateProposal), "primary"));
+    actions.append(element("p", "One explicit step only. It may submit the approved closure once all pinned evidence is checked; publication remains separately verified.", "hint"));
+  } else if (contentAvailable && closureScanPending(record)) {
+    actions.append(writeButton("Recover last closure request", () => mutate("recover-closure", {
+      proposal_id: record.id, request_id: requestId(),
+    }, updateProposal)));
+  } else if (["submitted", "executing", "uncertain"].includes(record.status)) {
     actions.append(writeButton("Check this existing request", () => mutate("reconcile", { proposal_id: record.id }, updateProposal)));
   }
   if (contentAvailable && record.status === "completed" && ["prepare_task", "research"].includes(record.kind) && !record.reviewed) {

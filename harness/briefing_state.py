@@ -175,6 +175,24 @@ def _tombstone(record: dict[str, Any], today: date) -> dict[str, Any]:
 def _validate_proposal(identifier: str, record: object) -> None:
     if not isinstance(record, dict) or record.get("id") != identifier:
         raise StateError("invalid_proposal")
+    if "closure_scan_protocol" in record:
+        from closure_scan import CONTINUATION, is_closure
+
+        if type(record["closure_scan_protocol"]) is not int or record["closure_scan_protocol"] != 1 or not is_closure(record):
+            raise StateError("invalid_closure_scan_record")
+        if record.get("closure_last_token") is not None and (
+            not isinstance(record["closure_last_token"], str) or not CONTINUATION.fullmatch(record["closure_last_token"])
+        ):
+            raise StateError("invalid_closure_scan_record")
+        if "closure_request_id" in record and (
+            not isinstance(record["closure_request_id"], str) or not CONTINUATION.fullmatch(record["closure_request_id"])
+        ):
+            raise StateError("invalid_closure_scan_record")
+        if "publication_action_id" in record and (
+            not isinstance(record["publication_action_id"], str)
+            or not CONTINUATION.fullmatch(record["publication_action_id"])
+        ):
+            raise StateError("invalid_closure_scan_record")
     if record.get("task_workspace"):
         if any(key in record and type(record[key]) is not bool for key in ("reviewed", "acknowledged_unavailable")):
             raise StateError("invalid_task_review_receipt")

@@ -166,6 +166,8 @@ an empty template would instead default to the function name.
 | `/api/prepare` | POST | Prepare a bounded private-planning or public-research proposal |
 | `/api/decide` | POST | Approve/decline the exact proposal ID and action digest |
 | `/api/reconcile` | POST | Reconcile/publish the same previously approved receipt |
+| `/api/continue-closure` | POST | Explicitly continue one bounded closure step using its confirmed writer token |
+| `/api/recover-closure` | POST | Recover the last closure request using its original action and last-sent token; never select the next checkpoint automatically |
 | `/api/clarify`, `/api/clarify-proposal` | POST | Bounded definition questions and a separate exact refinement proposal |
 | `/api/projects`, `/api/standing` | POST | Explicit active-project and narrowly scoped preparation authorization |
 | `/api/review-result` | POST | Owner reviews current output, or explicitly acknowledges an unavailable result's content-free notice; never completes a task |
@@ -298,6 +300,65 @@ invented as the date the work happened. memex separately records processing
 time, moves the file to `tasks/done/`, preserves Capture and existing dates,
 clears open stage/focus, and repairs supported links or refuses closure.
 
+### Explicit bounded closure continuations
+
+The approved resumable closure contract permits a finite proof set of at most
+128 eligible blobs / 2,000,000 declared bytes, including the task and applicable
+ignore policy. Each writer invocation retains its existing 100-read /
+512,000-fetched-byte / 64,000-per-blob / 20-second work bound and 25-second outcome
+window. There are at most six explicitly requested read-only scan passes, with
+no automatic loop. Final materialization and publication keep their existing
+per-invocation bounds and eight-file mutation cap. Only complete pinned proof
+may authorize the already-approved write.
+
+New close requests create a new proposal for that owner request ID. Repeating
+the same request ID stays idempotent; an old conflict receipt is not reset,
+repinned or reused. Source/canonical/inventory drift and exhausted scan limits
+remain explicit conflicts requiring a fresh source-bound owner approval.
+
+An intermediate writer response is HTTP 202, `status: in_progress`,
+`phase: closure_scan`, `resumable: true`, `path: ""`, `scan_pass: 1..6`,
+`scan_pass_limit: 6`, and a server-issued 32-lowercase-hex
+`closure_continuation`. This is a saved checkpoint, not a submitted or closed
+task. It exposes no candidate paths, cursor, proofs or private source text.
+The next token authorizes one explicit step, including bounded final
+materialization once all proofs exist; it does not authorize a seventh scan.
+
+The owner clicks **Continue closure check**. The BFF verifies owner/CSRF,
+current source, immutable approval/action digest and the observed checkpoint in
+the same ETag update that claims the continuation request. It sends the SAME
+approved `update_task` request/action ID, adding only the writer-issued token.
+The token is not part of the approved mutation-body digest and cannot select
+paths, pins or proof. Double clicks, stale tabs, retries of the same caller
+request ID and late responses cannot advance or overwrite a newer checkpoint.
+
+An uncertain checkpoint returns no resumable authority. **Recover last closure
+request** uses the last token actually sent, not the next token in a later
+receipt. A missing/stale token on an existing scan only reads durable progress.
+If the last request never reached the writer, recovery can perform that same
+original authorized step; it never silently proceeds to another step. Running
+or uncertain writer checkpoints remain unconfirmed, not a success-shaped result.
+
+Ordinary refresh, repeated approval, legacy reconciliation and existing timers
+never continue a closure scan. They preserve its last receipt. Only the explicit
+continuation/recovery routes can send a scan request. Once the writer returns
+the existing `submitted` receipt with an actual task PR, the existing separately
+identified `publish_task` path resumes; submitted still does not mean canonical.
+That durable publication ID keeps the request in publication recovery even when
+a later publisher response is uncertain and omits its PR URL. Timer reconciliation
+keeps the original submitted receipt in `result` and records later publication
+outcomes separately in `publish_result`; uncertainty cannot restart a scan or
+strand the operation without a publication-recovery control.
+All displayed receipts use the shared current-source projection, and removed
+or ineligible sources cannot expose a continuation token or authorize a pass.
+
+The caller adds no task store, model call, standing permission, budget refund or
+change to the old conflict receipt. The writer keeps metadata-only bounded scan
+checkpoints in its existing private operation receipt; it owns complete-inventory,
+ignore-policy and final canonical fences. The final rollout must integrate the
+matching writer contract before enabling live continuation; offline adapter
+tests are not real-task closure evidence.
+
 Reading, signing in, an external outcome and human verification cannot be inferred
 from a generated draft or a merged research report. Knowledge stays in the task's
 Learning record first. Wiki promotion still needs the owning vault's recurrence
@@ -418,5 +479,8 @@ execution is used.
 for create/refine/wait/focus/date-clear/close and separate publication operations.
 Set `MINDME_TEST_CONTRACT_OUTPUT` to a session-artifact JSON path while running
 that test to export its synthetic array for memex's real request validator.
+`test_closure_scan.py::test_actual_closure_wire_export` similarly exports
+original/continuation/recovery/publication requests through the real caller
+adapters when `MINDME_TEST_CLOSURE_OUTPUT` names a session-artifact JSON file.
 Independent review, merged commits, verified push, hosted checks, deployment
 and authorized live acceptance are separate coordinator responsibilities.

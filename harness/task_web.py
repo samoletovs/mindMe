@@ -61,6 +61,10 @@ ERROR_TEXT = {
     "task_request_conflict": "This request ID already describes a different action. Reload the saved receipt.",
     "task_closure_requires_verification": "Check the done condition and record the actual result and evidence first.",
     "task_closure_date_invalid": "The verification date cannot be after the owner's current calendar date.",
+    "task_closure_checkpoint_changed": "That closure checkpoint has changed. Refresh its saved receipt before continuing.",
+    "task_closure_continuation_invalid": "This closure continuation is not valid. Use the current saved checkpoint.",
+    "task_closure_not_authorized": "This request cannot continue a closure. Inspect its existing receipt; no new action was started.",
+    "task_closure_continuation_unavailable": "Closure continuation is unavailable. The existing request is retained; do not submit a replacement.",
     "task_timezone_not_configured": "Configure the owner's IANA time zone before using Tasks. No calendar date was assumed.",
     "task_timezone_invalid": "The configured task time zone is invalid or unavailable. Use a valid IANA time zone.",
     "task_clock_invalid": "The task calendar is unavailable. No calendar date was assumed.",
@@ -236,6 +240,7 @@ class TaskWeb:
         operations = {
             "api/capture": service.capture, "api/refine": service.refine, "api/change": service.change,
             "api/prepare": service.prepare, "api/close": service.close, "api/decide": service.decide,
+            "api/continue-closure": service.continue_closure, "api/recover-closure": service.recover_closure,
         }
         if path in operations:
             return response(operations[path](payload, today))
