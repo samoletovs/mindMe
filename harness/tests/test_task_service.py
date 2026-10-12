@@ -558,6 +558,111 @@ def test_changed_source_invalidates_draft_history_and_removes_approval_surface()
     assert subject.store.read()["proposals"][proposal["id"]]["status"] == "invalidated"
 
 
+def test_pruning_reclaims_real_task_proposal_capacity_for_a_new_mutation():
+    subject, repository, *_ = service()
+    for index in range(200):
+        subject.refine({
+            **refine_payload(next_action=f"Write synthetic heading {index}."),
+            "request_id": f"{index:032x}",
+        }, TODAY)
+    assert len(subject.store.read()["proposals"]) == 200
+    assert len(workspace(subject.store.read())["requests"]) == 200
+
+    future = TODAY + timedelta(days=36)
+    subject.store.update(
+        lambda state: prune_state(state, inventory_paths=set(repository.records), today=future),
+    )
+    proposal = subject.refine({
+        **refine_payload(next_action="Write a post-retention heading."),
+        "request_id": "f" * 32,
+    }, future)
+    state = subject.store.read()
+    assert proposal["status"] == "pending"
+    assert len(state["proposals"]) == 1
+    assert len(workspace(state)["requests"]) == 1
+
+
+def test_pruning_preserves_submitted_request_conflict_protection():
+    subject, repository, *_ = service()
+    proposal = subject.refine(refine_payload(), TODAY)
+    assert approve(subject, proposal)["status"] == "submitted"
+
+    future = TODAY + timedelta(days=36)
+    subject.store.update(
+        lambda state: prune_state(state, inventory_paths=set(repository.records), today=future),
+    )
+    assert len(workspace(subject.store.read())["requests"]) == 1
+    with pytest.raises(TaskError, match="task_request_conflict"):
+        subject.refine(refine_payload(next_action="A conflicting late retry."), future)
+
+
+def test_pruning_preserves_claimed_and_unresolved_request_receipts():
+    subject, repository, *_ = service()
+    proposal = subject.refine(refine_payload(), TODAY)
+
+    def age_records(state):
+        requests = workspace(state)["requests"]
+        linked = next(record for record in requests.values() if record.get("proposal_id") == proposal["id"])
+        linked["created_on"] = "2026-08-01"
+        state["proposals"][proposal["id"]]["status"] = "uncertain"
+        requests["e" * 64] = {
+            "digest": "e" * 64, "status": "claimed", "created_on": "2026-08-01",
+        }
+
+    subject.store.update(age_records)
+    subject.store.update(
+        lambda state: prune_state(state, inventory_paths=set(repository.records), today=TODAY),
+    )
+    requests = workspace(subject.store.read())["requests"]
+    assert len(requests) == 2
+
+
+def test_pruning_removes_expired_clarification_and_its_message_binding():
+    subject, repository, *_ = service()
+    identifier = "a" * 24
+
+    def fill(state):
+        data = workspace(state)
+        data["clarifications"][identifier] = {
+            "source_path": PATH, "source_revision": REVISION, "turns": 0,
+            "changes": {}, "field": "outcome", "expires_on": TODAY.isoformat(),
+        }
+        data["bindings"]["1"] = {
+            "clarification_id": identifier, "field": "outcome", "turn": 0,
+        }
+
+    subject.store.update(fill)
+    subject.store.update(
+        lambda state: prune_state(state, inventory_paths=set(repository.records), today=TODAY),
+    )
+    data = workspace(subject.store.read())
+    assert data["clarifications"] == {}
+    assert data["bindings"] == {}
+
+
+def test_new_source_tombstone_gets_its_own_retention_window():
+    subject, _, *_ = service()
+    proposal = subject.refine(refine_payload(), TODAY)
+    subject.store.update(lambda state: state["messages"].update({"99": proposal["id"]}))
+
+    removed_on = TODAY + timedelta(days=36)
+    subject.store.update(
+        lambda state: prune_state(state, inventory_paths=set(), today=removed_on),
+    )
+    state = subject.store.read()
+    assert state["proposals"][proposal["id"]]["invalidated_on"] == removed_on.isoformat()
+    assert state["messages"]["99"] == proposal["id"]
+
+    after_retention = removed_on + timedelta(days=36)
+    subject.store.update(
+        lambda state: prune_state(state, inventory_paths=set(), today=after_retention),
+        allow_tombstone_prune=True,
+    )
+    state = subject.store.read()
+    assert proposal["id"] not in state["proposals"]
+    assert "99" not in state["messages"]
+
+
 def test_removed_source_keeps_content_free_task_receipt_visible_after_pruning():
     subject, _, _, _, _, _ = service()
     proposal = subject.refine(refine_payload(), TODAY)

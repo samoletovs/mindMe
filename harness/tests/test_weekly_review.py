@@ -24,7 +24,7 @@ class Store:
     def read(self) -> dict:
         return copy.deepcopy(self.state)
 
-    def update(self, mutate):
+    def update(self, mutate, *, allow_tombstone_prune=False):
         state = self.read()
         result = mutate(state)
         _encode(state)
