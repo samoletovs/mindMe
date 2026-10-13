@@ -32,7 +32,7 @@ guessed from its filename. Recorded source dates and UTC observation time are
 shown separately. First use (or a baseline older than 35 days) shows an explicit
 initial selection, never a claim that all those sources appeared today.
 
-**Record this visit** explicitly advances the next comparison to the displayed
+**Mark as seen** explicitly advances the next comparison to the displayed
 snapshot, including its unshown portion. It is not a read receipt or proof of
 understanding. One private `task_workspace.dashboard_visit` contains just a
 revision and observation timestamp in `briefing-state-v1.json`. A fifteen-minute

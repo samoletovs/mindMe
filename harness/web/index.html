@@ -16,6 +16,7 @@
     <div class="header-actions">
       <span id="connection" class="connection">Checking sign-in</span>
       <button id="command-open" class="quiet ai-feature" type="button" hidden aria-label="Open copilot command bar">Copilot <kbd>⌘ K</kbd></button>
+      <button id="header-mic" class="mic-button header-mic ai-feature" type="button" hidden aria-label="Record voice instruction">●</button>
       <button id="language-toggle" class="quiet" type="button" aria-label="Switch language">EN</button>
       <button id="theme-toggle" class="quiet" type="button" aria-label="Switch color theme">◐</button>
       <button id="refresh" class="quiet" type="button" hidden data-i18n="refresh">Refresh</button>
@@ -81,20 +82,20 @@
           <div id="proposal-preview"></div>
         </section>
 
-        <section id="today-section" aria-label="Today in your vault">
+        <section id="today-section" data-view-panel="today" aria-label="Today in your vault">
           <section class="today-hero">
-            <div class="hero-copy"><span class="eyebrow" data-i18n="personal">PERSONAL INTELLIGENCE</span><h2 data-i18n="hero">Make space for what matters.</h2><p data-i18n="heroDetail">A clear outcome. A useful next step. A copilot to get you there.</p><button id="briefing-open" class="primary ai-feature" type="button" hidden data-i18n="briefing">✦ Plan my day</button></div>
+            <div class="hero-copy"><span class="eyebrow" data-i18n="personal">PERSONAL INTELLIGENCE</span><h2 id="hero-line">Your day, ready in a moment.</h2><p id="hero-detail">Top priorities, next steps and a copilot to move them.</p><button id="briefing-open" class="primary ai-feature" type="button" hidden data-i18n="briefing">✦ Plan my day</button></div>
             <div class="intelligence-orb" aria-hidden="true"><span></span><span></span><span></span><b>✦</b></div>
           </section>
           <div id="today-priorities" class="priority-grid"></div>
           <div id="today-focus" class="focus-summary"></div>
           <div class="today-columns">
             <section aria-labelledby="today-work-title"><h2 id="today-work-title">Work to look at</h2><div id="today-work"></div></section>
-            <section aria-labelledby="today-new-title"><h2 id="today-new-title">Since your last recorded visit</h2><div id="today-new"></div></section>
+            <section aria-labelledby="today-new-title"><h2 id="today-new-title">New since last visit</h2><div id="today-new"></div></section>
           </div>
         </section>
 
-        <section id="knowledge-section" aria-labelledby="knowledge-title" hidden>
+        <section id="knowledge-section" data-view-panel="knowledge" aria-labelledby="knowledge-title" hidden>
           <div class="section-heading"><h2 id="knowledge-title">Inbox</h2><span class="hint">Findings first. Evidence one step away.</span></div>
           <p class="hint">Canonical daily reviews and weekly digests. Their interpretations and possible next steps are not approved work.</p>
           <div id="knowledge-status" role="status" aria-live="polite"></div>
@@ -106,7 +107,7 @@
           </div>
         </section>
 
-        <section id="tasks-section" aria-labelledby="task-list-heading" hidden>
+        <section id="tasks-section" data-view-panel="tasks" aria-labelledby="task-list-heading" hidden>
           <div class="task-scope actions" aria-label="Task attention filter">
             <button id="scope-needs" type="button" aria-pressed="false"><span data-i18n="needs">Needs you</span><span id="needs-count"></span></button>
             <button id="scope-all" type="button" aria-pressed="true" data-i18n="allTasks">All tasks</button>
@@ -135,7 +136,7 @@
           </div>
         </section>
 
-        <section id="areas-section" aria-labelledby="areas-title" hidden>
+        <section id="areas-section" data-view-panel="areas" aria-labelledby="areas-title" hidden>
           <h2 id="areas-title">Responsibilities and selected projects</h2>
           <p>Areas are ongoing responsibilities. A project has an outcome; an inventory entry is not automatically an active commitment.</p>
           <div id="area-list" class="area-list"></div>
@@ -157,7 +158,7 @@
           <details class="section-block"><summary>Preparation limits and usage</summary><pre id="budget-details"></pre><p class="hint">These are operational limits, not a guarantee of a provider's bill. Unconfirmed work is never treated as a refund.</p></details>
         </section>
 
-        <section id="activity-section" aria-labelledby="activity-title" hidden>
+        <section id="activity-section" data-view-panel="activity" aria-labelledby="activity-title" hidden>
           <h2 id="activity-title">Decisions and results</h2>
           <p>Follow the same request from proposal to canonical record. A prepared draft is not a verified outcome.</p>
           <div id="activity-list"></div>

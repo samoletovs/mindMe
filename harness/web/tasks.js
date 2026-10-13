@@ -82,7 +82,7 @@ const state = {
   captureSource: null,
 };
 const dashboard = new Dashboard({
-  state, element, append, button, writeButton, empty, api, mutate, showNotice, setBusy,
+  state, element, append, button, writeButton, empty, infoTip, api, mutate, showNotice, setBusy,
   renderTaskRow, setView, beginSourceCapture,
   openTask: (path) => { setView("tasks"); openTask(path); },
 });
@@ -273,6 +273,14 @@ function field(parent, name, label, options = {}) {
   parent.append(wrapper);
   return control;
 }
+function infoTip(text) {
+  const node = element("span", null, "info-tip");
+  node.tabIndex = 0;
+  node.setAttribute("aria-label", "More information");
+  const tip = element("span", text, "tip-text");
+  tip.setAttribute("role", "tooltip");
+  return append(node, element("span", "i", "info-mark"), tip);
+}
 function empty(parent, title, message) {
   const node = element("div", null, "empty");
   append(node, element("strong", title), element("p", message));
@@ -413,9 +421,10 @@ function renderTasks() {
     tasks.forEach((task) => list.append(renderTaskRow(task)));
   }
   const candidateCount = state.overview?.candidate_count;
-  $("page-status").textContent = state.overview
-    ? `${state.items.length} permitted tasks loaded${Number.isInteger(candidateCount) ? ` from ${candidateCount} candidates` : ""}. Filters and counts cover loaded tasks only.`
-    : "Source availability has not been confirmed.";
+  if (state.overview) {
+    $("page-status").replaceChildren(`${state.items.length} tasks${Number.isInteger(candidateCount) ? ` of ${candidateCount}` : ""} `,
+      infoTip("Filters and counts cover loaded, permitted tasks only."));
+  } else $("page-status").textContent = "Source availability has not been confirmed.";
   $("load-more").hidden = state.overview?.next_offset === null || state.overview?.next_offset === undefined;
   $("load-more").disabled = state.loading;
   for (const row of list.querySelectorAll?.(".task-row") || []) {
@@ -931,7 +940,7 @@ function proposalStatusText(record) {
     if (record.kind === "prepare_task") return "A private draft is available. The task is still open.";
     if (record.kind === "research") return "The research operation has a result. Verify the artifact; this does not complete the underlying task.";
     if (record.kind === "close_task") return "The approved closure reached the canonical record.";
-    return "The approved change reached the canonical record. This is not proof that the task itself is done.";
+    return "Saved to the canonical record. Closing the task still needs its evidence.";
   }
   if (record.status === "submitted") return "Submitted for publication. Not yet confirmed on the canonical branch.";
   if (["uncertain", "executing"].includes(record.status)) return "The result is not confirmed. Check this existing receipt; do not submit another operation.";
@@ -1435,9 +1444,18 @@ const COPY = {
   },
 };
 function t(key) { return COPY[assist.language]?.[key] || COPY.en[key] || key; }
+let activeViewTransition = null;
 function transitionView(view) {
+  activeViewTransition?.skipTransition();
   if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    document.startViewTransition(() => setView(view));
+    const transition = document.startViewTransition(() => setView(view));
+    activeViewTransition = transition;
+    document.documentElement.dataset.transitioning = "true";
+    transition.finished.catch(() => {}).finally(() => {
+      if (activeViewTransition !== transition) return;
+      activeViewTransition = null;
+      delete document.documentElement.dataset.transitioning;
+    });
   } else setView(view);
 }
 function threadFor(key) {
@@ -1469,13 +1487,17 @@ function initWorkspace() {
   $("copilot-close").addEventListener("click", () => $("copilot-dialog").close());
   $("quick-capture").addEventListener("click", () => $("capture-open").click());
   $("briefing-open").addEventListener("click", () => { openCopilot(); sendChat("global", t("dayPrompt")); });
-  $("quick-mic").addEventListener("click", () => {
+  for (const id of ["quick-mic", "header-mic"]) $(id).addEventListener("click", () => {
     const key = state.selected?.revision && ["tasks", "needs"].includes(state.view) ? state.selected.path : "global";
     if (key === "global") openCopilot();
     toggleVoice(key);
   });
   $("copilot-dialog").addEventListener("close", () => { if (assist.voiceKey === "global") cancelVoice(); });
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.selected && !$("copilot-dialog").open
+      && $("tasks-section").classList.contains("layout-board") && matchMedia("(min-width: 1101px) and (max-width: 1599px)").matches) {
+      closeDetail();
+    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k" && state.csrf && assist.available) {
       event.preventDefault(); openCopilot();
     }
@@ -1492,7 +1514,7 @@ function translateWorkspace() {
   $("language-toggle").textContent = assist.language.toUpperCase();
   document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = t(node.dataset.i18n); });
   document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
-  $("quick-mic").setAttribute("aria-label", t("record"));
+  for (const id of ["quick-mic", "header-mic"]) $(id).setAttribute("aria-label", t("record"));
 }
 async function loadAssist() {
   const generation = state.sessionGeneration;
@@ -1561,7 +1583,7 @@ function buildStepRail(task) {
   return rail;
 }
 function renderChats() {
-  $("quick-mic").setAttribute("aria-pressed", String(Boolean(assist.recorder)));
+  for (const id of ["quick-mic", "header-mic"]) $(id).setAttribute("aria-pressed", String(Boolean(assist.recorder)));
   if (!assist.available) return;
   document.querySelectorAll("[data-chat-key]").forEach((host) => renderChat(host, host.dataset.chatKey));
 }
@@ -1741,7 +1763,8 @@ function isCardSaved(card) {
 function watchReceipt(key, card) {
   if (isMockMode() || !/^[a-f0-9]{24}$/.test(card.receipt_id || "")
     || !["submitted", "executing"].includes(card.status) || assist.polls.has(card.receipt_id)) return;
-  const poll = { key, card, generation: state.sessionGeneration, started: Date.now(), attempt: 0, timer: null };
+  card.undo_available = false;
+  const poll = { key, card, generation: state.sessionGeneration, started: Date.now(), attempt: 0, timer: null, requestId: requestId() };
   assist.polls.set(card.receipt_id, poll);
   scheduleReceiptPoll(poll);
 }
@@ -1758,18 +1781,25 @@ async function pollReceipt(poll) {
   if (state.busy || state.unknown) { scheduleReceiptPoll(poll); return; }
   poll.attempt += 1;
   try {
-    const record = await api("reconcile", { proposal_id: poll.card.receipt_id });
+    const response = await api("assist/receipt", { request_id: poll.requestId, receipt_id: poll.card.receipt_id });
     if (poll.generation !== state.sessionGeneration) return;
-    if (record.id !== poll.card.receipt_id || typeof record.status !== "string") throw new Error("The publication receipt did not match this operation.");
+    const refreshed = Array.isArray(response?.cards)
+      ? response.cards.find((item) => item && item.kind === "applied" && item.receipt_id === poll.card.receipt_id) : null;
+    if (!refreshed || typeof refreshed.status !== "string") throw new Error("The publication receipt did not match this operation.");
     const card = poll.card;
-    card.status = record.status; card.publication_status = record.result?.status || null;
-    card.source_status = record.source_status;
-    if (record.source_status && record.source_status !== "current") {
+    card.status = refreshed.status;
+    card.publication_status = typeof refreshed.publication_status === "string" ? refreshed.publication_status : null;
+    card.source_status = typeof refreshed.source_status === "string" ? refreshed.source_status : null;
+    card.saved = refreshed.saved === true;
+    card.undo_available = refreshed.undo_available === true;
+    if (card.source_status && card.source_status !== "current") {
       card.title = t("appliedUnknown"); card.summary = ""; card.diff = []; card.action = null; card.task = null;
       card.undo_available = false;
+    } else {
+      for (const field of ["title", "summary", "action"]) if (typeof refreshed[field] === "string") card[field] = refreshed[field];
+      if (Array.isArray(refreshed.diff)) card.diff = refreshed.diff;
+      if (refreshed.task && typeof refreshed.task === "object") card.task = refreshed.task;
     }
-    card.saved = record.status === "completed" && record.result?.status === "merged" && record.source_status === "current";
-    if (typeof record.undo_available === "boolean") card.undo_available = record.undo_available;
     if (isCardSaved(card)) {
       assist.polls.delete(card.receipt_id);
       const wasSelected = state.selected?.path === poll.key;
@@ -1940,7 +1970,6 @@ async function toggleVoice(key) {
     recorder.start(1000);
     assist.voiceTimer = setTimeout(() => { if (recorder.state === "recording") recorder.stop(); }, 60000);
     renderChats();
-    $("quick-mic").setAttribute("aria-pressed", "true");
   } catch (error) {
     if (generation !== assist.voiceGeneration) return;
     cancelVoice();
@@ -2026,7 +2055,7 @@ async function mockApi(operation, payload) {
       cards.splice(0, cards.length, { kind: "applied", status: "completed", publication_status: "merged", source_status: "current", saved: true, action: "refine_task", title: "Next action sharpened", summary: "Synthetic change applied in local demo memory only.",
         diff: [{ field: "next_action", before, after: task.next_action }], receipt_id: receipt, undo_available: true });
     }
-    return { thread_id: payload.thread_id || requestId(), reply: assist.language === "ru" ? "Предлагаю небольшой первый шаг. План — это черновик, не подтверждение выполненной работы." : "Let's make the next move small and concrete. Here's a starting point; a plan is not proof that the work is done.",
+    return { thread_id: payload.thread_id || requestId(), reply: assist.language === "ru" ? "Сделаем следующий шаг маленьким и конкретным. Вот план на ~30 минут." : "Let's make the next move small and concrete. Here's a ~30 min plan.",
       language: assist.language, cards, suggestions: [{ label: t("next"), message: t("nextPrompt") }], usage: {} };
   }
   if (operation === "assist/change") {

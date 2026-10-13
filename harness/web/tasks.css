@@ -478,3 +478,48 @@ section:not([hidden]) > .today-hero, .ai-card, .chat-message { animation: enter 
   #canonical-links { gap: .4rem; }
   #canonical-links p { flex-basis: 100%; }
 }
+
+/* Polish round: single-view transitions, unobtrusive dock, board drawer, compact rail, info tips. */
+.work-content { view-transition-name: work-view; }
+::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+::view-transition-old(work-view) { animation: none; opacity: 0; }
+::view-transition-new(work-view) { animation: view-in 260ms cubic-bezier(.2,.8,.2,1) both; }
+@keyframes view-in { from { opacity: 0; transform: translateY(10px); } }
+.header-mic { width: 38px; height: 38px; min-width: 38px; min-height: 38px; font-size: .85rem; }
+@media (min-width: 1024px) {
+  .quick-bar { display: none !important; }
+  .app-footer { padding-bottom: 1.4rem; }
+  .toast { bottom: 1.5rem; }
+}
+@media (max-width: 1023px) {
+  .header-mic { display: none !important; }
+  .workspace { padding-bottom: calc(7rem + env(safe-area-inset-bottom)); }
+}
+.board { scroll-snap-type: x mandatory; scroll-padding-inline: .2rem; overscroll-behavior-x: contain; }
+.board-lane { scroll-snap-align: start; }
+@media (min-width: 1101px) and (max-width: 1599px) {
+  .layout-board.task-selected .task-layout { grid-template-columns: minmax(0, 1fr); }
+  .layout-board.task-selected .inspector {
+    position: fixed; top: var(--drawer-top, 72px); right: 0; bottom: 0; z-index: 8; width: min(470px, 94vw); max-height: none;
+    border-radius: 22px 0 0 0; box-shadow: -24px 0 80px #0000005c; animation: drawer-in 280ms cubic-bezier(.2,.8,.2,1);
+  }
+  .layout-board.task-selected .mobile-back { display: inline-flex; margin-bottom: .7rem; }
+}
+@keyframes drawer-in { from { transform: translateX(40px); opacity: 0; } }
+.step-rail { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: .3rem; overflow: visible; }
+.step-rail button { min-width: 0; padding: .4rem .2rem; gap: .1rem; align-items: center; text-align: center; font-size: .62rem; border-radius: 10px; min-height: 48px; }
+.step-rail button span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+@media (max-width: 690px) {
+  .step-rail { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; margin-inline: -.2rem; padding-inline: .2rem; }
+  .step-rail::-webkit-scrollbar { display: none; }
+  .step-rail button { flex: 0 0 74px; scroll-snap-align: start; }
+}
+.info-tip { position: relative; display: inline-grid; place-items: center; vertical-align: middle; width: 17px; height: 17px; border-radius: 50%; border: 1px solid var(--control-line); color: var(--muted); font: italic 600 .65rem Georgia, serif; cursor: help; }
+.info-tip .tip-text { position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(4px); width: max-content; max-width: min(280px, 80vw); padding: .55rem .7rem; border-radius: 10px; background: var(--elevated); border: 1px solid var(--line); color: var(--ink); font: 400 .72rem/1.45 system-ui, sans-serif; font-style: normal; box-shadow: 0 10px 30px #00000040; display: none; pointer-events: none; z-index: 12; }
+.info-tip:hover .tip-text, .info-tip:focus .tip-text, .info-tip:focus-within .tip-text { display: block; transform: translateX(-50%); animation: tip-in 140ms ease-out; }
+@keyframes tip-in { from { opacity: 0; } }
+.actions .info-tip { align-self: center; }
+#hero-line { max-width: 18ch; }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-new(work-view), .layout-board.task-selected .inspector { animation: none; }
+}

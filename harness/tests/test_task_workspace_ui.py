@@ -118,22 +118,42 @@ def test_receipt_poll_uses_existing_id_and_never_continues_closure():
 (async () => {
   state.csrf = "synthetic";
   assist.available = false;
-  const card = { kind: "applied", receipt_id: "b".repeat(24), status: "submitted", saved: false };
-  const poll = { key: "global", card, generation: state.sessionGeneration, started: Date.now(), attempt: 0, timer: null };
-  let call;
+  const card = { kind: "applied", receipt_id: "b".repeat(24), status: "submitted", saved: false, undo_available: true };
+  const scheduled = [];
+  scheduleReceiptPoll = (poll) => scheduled.push(poll);
+  watchReceipt("global", card);
+  assert.equal(card.undo_available, false);
+  const poll = scheduled[0];
+  assert.match(poll.requestId, /^[a-f0-9]{32}$/);
+  const refreshed = (fields) => ({ thread_id: "t", reply: "", language: "en", suggestions: [], usage: {},
+    cards: [{ kind: "applied", receipt_id: card.receipt_id, title: "Synthetic", summary: "", diff: [], ...fields }] });
+  const calls = [];
   api = async (operation, payload) => {
-    call = { operation, payload };
-    return { id: card.receipt_id, status: "completed", source_status: "current",
-      result: { status: "merged" }, undo_available: true };
+    calls.push({ operation, payload });
+    return refreshed({ status: "executing", publication_status: null, source_status: "current", saved: false, undo_available: true });
   };
   loadOverview = async () => {};
   showToast = () => {};
   await pollReceipt(poll);
-  assert.equal(call.operation, "reconcile");
-  assert.deepEqual(call.payload, { proposal_id: "b".repeat(24) });
+  assert.equal(card.saved, false);
+  assert.equal(isCardSaved(card), false);
+  assert.equal(scheduled.length, 2);
+  api = async (operation, payload) => {
+    calls.push({ operation, payload });
+    return refreshed({ status: "completed", publication_status: "merged", source_status: "current", saved: true, undo_available: true });
+  };
+  await pollReceipt(poll);
+  assert.deepEqual(calls.map((c) => c.operation), ["assist/receipt", "assist/receipt"]);
+  assert.ok(calls.every((c) => c.payload.request_id === poll.requestId && c.payload.receipt_id === "b".repeat(24)));
   assert.equal(isCardSaved(card), true);
   assert.equal(card.undo_available, true);
-  api = async () => ({ id: card.receipt_id, status: "uncertain", source_status: "removed",
+  api = async () => refreshed({ status: "completed", publication_status: "merged", source_status: "current", saved: true });
+  await pollReceipt(poll);
+  assert.equal(card.undo_available, false, "Undo comes only from the refreshed card");
+  api = async () => ({ cards: [{ kind: "applied", receipt_id: "e".repeat(24), status: "completed" }] });
+  await pollReceipt(poll);
+  assert.equal(card.status, "uncertain");
+  api = async () => refreshed({ status: "uncertain", source_status: "removed", saved: false, undo_available: true,
     result: { phase: "closure_scan", closure_continuation: "c".repeat(32) } });
   card.diff = [{ field: "title", before: "Old synthetic text", after: "Changed synthetic text" }];
   card.title = "Old synthetic title";
@@ -142,8 +162,9 @@ def test_receipt_poll_uses_existing_id_and_never_continues_closure():
   assert.equal(card.diff.length, 0);
   assert.equal(card.undo_available, false);
   assert.match(card.title, /check Activity/);
+  assert.equal(scheduled.length, 2, "uncertain receipts never continue polling or closure");
 
-  api = async () => ({ id: card.receipt_id, status: "completed", source_status: "current", result: { status: "merged" } });
+  api = async () => refreshed({ status: "completed", publication_status: "merged", source_status: "current", saved: true });
   loadOverview = async () => { state.sessionGeneration += 1; };
   let toastAfterExpiry = false;
   showToast = () => { toastAfterExpiry = true; };
@@ -206,8 +227,25 @@ def screenshot(page, name):
     if folder:
         target = Path(folder)
         target.mkdir(parents=True, exist_ok=True)
+        settle(page)
         page.evaluate("window.scrollTo(0, 0)")
-        page.screenshot(path=str(target / f"{name}.png"), full_page=True)
+        # Full-page capture misplaces fixed overlays, so capture the real viewport when one is showing.
+        overlay = page.evaluate("""[...document.querySelectorAll('body *')].some((node) =>
+          getComputedStyle(node).position === 'fixed' && node.getClientRects().length && node.offsetWidth > 0)""")
+        page.screenshot(path=str(target / f"{name}.png"), full_page=not overlay)
+
+
+def settle(page):
+    page.wait_for_function("!document.documentElement.dataset.transitioning")
+    page.evaluate("""Promise.all(document.getAnimations()
+      .filter((a) => Number.isFinite(a.effect?.getComputedTiming?.().endTime))
+      .map((a) => a.finished.catch(() => {})))""")
+
+
+def visible_panels(page):
+    return page.evaluate("""[...document.querySelectorAll('[data-view-panel]')]
+      .filter((node) => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden')
+      .map((node) => node.dataset.viewPanel)""")
 
 
 @pytest.mark.parametrize("width,height,scheme", [
@@ -223,13 +261,38 @@ def test_real_browser_layouts_and_task_chat(workspace_url, chromium, width, heig
     page.locator("#briefing-open").wait_for(state="visible")
     page.locator(".priority-card").first.wait_for()
     assert page.locator(".priority-card").count() == 3
+    assert visible_panels(page) == ["today"]
+    hero = page.locator("#hero-line").inner_text()
+    assert "today" in hero and "~" in hero, hero
+    desktop = width >= 1024
+    assert page.locator("#quick-bar").is_visible() is not desktop
+    assert page.locator("#header-mic").is_visible() is desktop
+    if not desktop:
+        bar = page.locator("#quick-bar").bounding_box()
+        padding = page.evaluate("parseFloat(getComputedStyle(document.getElementById('workspace')).paddingBottom)")
+        assert padding >= bar["height"], "Mobile content can hide behind the action bar"
     screenshot(page, f"{width}-{scheme}-today")
     page.locator('[data-view="tasks"]').click()
+    settle(page)
+    assert visible_panels(page) == ["tasks"], "Only one workspace view may remain visible"
     assert page.locator(".board-lane").count() == 6
     screenshot(page, f"{width}-{scheme}-flow")
+    page.locator('[data-view="today"]').click()
+    page.locator('[data-view="tasks"]').click()
+    settle(page)
+    assert visible_panels(page) == ["tasks"], "Rapid navigation left a stale view visible"
     page.locator("#task-list .task-row").first.click()
     page.locator(".task-copilot textarea").wait_for()
     assert page.locator(".step-rail button").count() == 7
+    rail = page.evaluate("""(() => { const rail = document.querySelector('.step-rail').getBoundingClientRect();
+      return { fits: [...document.querySelectorAll('.step-rail button')].every((b) => b.getBoundingClientRect().right <= rail.right + 1),
+        scrolls: getComputedStyle(document.querySelector('.step-rail')).overflowX }; })()""")
+    assert rail["fits"] or (not desktop and rail["scrolls"] == "auto"), rail
+    if width == 1440:
+        assert page.evaluate("getComputedStyle(document.getElementById('inspector')).position") == "fixed"
+        lanes = page.evaluate("""(() => { const board = document.querySelector('.board').getBoundingClientRect();
+          return board.right <= innerWidth + 1; })()""")
+        assert lanes, "Board must stay within the viewport while the task drawer is open"
     page.locator(".task-copilot textarea").fill("Build a plan for this task.")
     page.locator(".task-copilot button[type=submit]").click()
     page.locator(".ai-card.plan").wait_for()
@@ -294,7 +357,7 @@ def test_real_browser_owner_boundary_voice_and_text_only_proposal(workspace_url,
 
     page.route("**/api/tasks/api/**", respond)
     page.goto(workspace_url + "#tasks")
-    page.locator("#quick-chat").wait_for(state="visible")
+    page.locator("#command-open").wait_for(state="visible")
     page.locator("#task-list .task-row").click()
     page.locator(".task-copilot textarea").fill("Prepare a synthetic outline.")
     page.locator(".task-copilot button[type=submit]").click()
@@ -348,7 +411,7 @@ def test_real_browser_ai_disabled_preserves_manual_controls(workspace_url, chrom
     page.get_by_role("button", name="Edit & plan", exact=True).click()
     page.locator("#definition-form").wait_for()
     assert page.locator(".task-copilot").count() == 0
-    page.locator("#quick-capture").click()
+    page.locator("#capture-open").click()
     assert page.locator("#capture-text").is_visible()
     context.close()
 
@@ -369,8 +432,8 @@ def test_real_browser_uncertain_ai_request_locks_replacement(workspace_url, chro
 
     page.route("**/api/tasks/api/**", respond)
     page.goto(workspace_url + "#tasks")
-    page.locator("#quick-chat").wait_for(state="visible")
-    page.locator("#quick-chat").click()
+    page.locator("#command-open").wait_for(state="visible")
+    page.locator("#command-open").click()
     page.locator("#global-chat textarea").fill("A synthetic instruction.")
     page.locator("#global-chat button[type=submit]").click()
     page.locator("#uncertain").wait_for(state="visible")
@@ -388,7 +451,7 @@ def test_real_browser_drag_undo_and_reduced_motion(workspace_url, chromium):
     context = chromium.new_context(viewport={"width": 1440, "height": 1000}, reduced_motion="reduce")
     page = context.new_page()
     page.goto(workspace_url + "?mock=1#tasks")
-    page.locator("#quick-chat").wait_for(state="visible")
+    page.locator("#command-open").wait_for(state="visible")
     card = page.locator('.board-lane[data-stage="ready"] .task-row').first
     title = card.locator("h3").inner_text()
     card.drag_to(page.locator('.board-lane[data-stage="doing"]'))
@@ -405,7 +468,7 @@ def test_real_browser_undo_language_keyboard_and_mock_isolation(workspace_url, c
     live_requests = []
     page.on("request", lambda request: live_requests.append(request.url) if "/api/tasks/api/" in request.url else None)
     page.goto(workspace_url + "?mock=1#tasks")
-    page.locator("#quick-chat").wait_for(state="visible")
+    page.locator("#command-open").wait_for(state="visible")
     assert page.locator("html").get_attribute("lang") == "ru"
     page.locator("#language-toggle").click()
     page.locator("#task-list .task-row").first.click()

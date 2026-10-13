@@ -147,8 +147,11 @@ still opens evidence-based closure rather than accepting a drag as verification.
 Knowledge, Areas & projects, standing preparation and Activity remain reachable.
 
 The task copilot has outcome/done conditions, a seven-step AI rail, and an
-in-memory instruction thread. The global copilot opens with Ctrl/Cmd+K or the
-bottom action bar. Its English/Russian controls follow the browser language,
+in-memory instruction thread. The global copilot opens with Ctrl/Cmd+K, the
+header (desktop) or the phone's bottom action bar; the bar is hidden at 1024px
+and wider so it never covers tasks. Between 1101 and 1599px an open task becomes
+a right-hand drawer over the horizontally scrolling board. Only one view is shown
+after a transition. Its English/Russian controls follow the browser language,
 with an in-memory toggle. Assist uses the existing same-origin API, session,
 CSRF and uncertain-request recovery boundary. Applied cards distinguish pending
 publication from confirmed canonical saving, show exact diffs and receipt-bound
@@ -159,11 +162,12 @@ controls and leave the manual task workflow available.
 
 `applied` does not mean saved: canonical saving requires `saved: true`,
 `status: completed`, `publication_status: merged` and `source_status: current`. Submitted/executing
-receipts reconcile by their existing proposal ID with bounded backoff for at
-most two minutes while visible. Uncertain/failed/invalidated receipts require
+receipts refresh through `assist/receipt` with their 24-hex receipt ID and one
+stable request ID reused across that receipt's polls, with bounded backoff for at
+most two minutes while visible (manual flows keep `/api/reconcile`). Uncertain/failed/invalidated receipts require
 inspection; no replacement request or closure continuation is scheduled.
-Source-invalidated card content is removed. Undo is exposed only with confirmed
-saving and server-provided availability. A change response can contain only
+Source-invalidated card content is removed. Undo is exposed only from the
+refreshed card's confirmed saving and server-provided availability. A change response can contain only
 cards/usage, without fabricating an AI reply or thread.
 
 Voice uses browser microphone permission and MediaRecorder (Opus/WebM, or MP4
