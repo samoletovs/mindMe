@@ -76,7 +76,7 @@ const CLOSURE_CONFLICTS = {
 };
 const $ = (id) => document.getElementById(id);
 const state = {
-  csrf: "", view: "today", layout: "list", items: [], overview: null, selected: null,
+  csrf: "", view: "today", layout: "board", items: [], overview: null, selected: null,
   tab: "overview", busy: false, unknown: null, proposal: null, clarification: null,
   loading: false, detailGeneration: 0, sessionGeneration: 0, authExpires: 0, expiryTimer: null,
   captureSource: null,
@@ -161,6 +161,7 @@ function errorMessage(error) {
   return error.message || "The service could not confirm this request.";
 }
 async function api(operation, payload) {
+  if (isMockMode()) return mockApi(operation, payload);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), payload === undefined ? 25000 : 125000);
   try {
@@ -168,9 +169,10 @@ async function api(operation, payload) {
       method: payload === undefined ? "GET" : "POST",
       credentials: "same-origin", mode: "same-origin", cache: "no-store",
       headers: payload === undefined ? {} : {
-        "Content-Type": "application/json", "X-MindMe-CSRF": state.csrf,
+        "Content-Type": payload.audio ? payload.audio.type : "application/json", "X-MindMe-CSRF": state.csrf,
+        ...(payload.audio ? { "X-Request-Id": payload.request_id } : {}),
       },
-      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+      ...(payload === undefined ? {} : { body: payload.audio || JSON.stringify(payload) }),
       signal: controller.signal,
     });
     let body;
@@ -202,13 +204,15 @@ async function api(operation, payload) {
     clearTimeout(timeout);
   }
 }
-async function mutate(operation, payload, onSuccess) {
+async function mutate(operation, payload, onSuccess, afterSuccess) {
   if (state.busy || state.unknown) return;
-  const attempt = { operation, payload, onSuccess };
+  if (assist.recorder || assist.acquiringVoice) { showNotice(t("finishVoice"), "pending"); return; }
+  const attempt = { operation, payload, onSuccess, afterSuccess };
   await performMutation(attempt);
 }
 async function performMutation(attempt) {
   const generation = state.sessionGeneration;
+  let confirmed = false;
   setBusy(true);
   showNotice("Working on this exact request. Please wait for its receipt.");
   try {
@@ -217,6 +221,7 @@ async function performMutation(attempt) {
     state.unknown = null;
     $("uncertain").hidden = true;
     await attempt.onSuccess(result);
+    confirmed = true;
   } catch (error) {
     if (generation === state.sessionGeneration && error.status >= 400 && error.status < 500) {
       state.unknown = null;
@@ -226,13 +231,22 @@ async function performMutation(attempt) {
       state.unknown = attempt;
       $("uncertain").hidden = false;
     }
-    showNotice(errorMessage(error), "error");
+    const voiceFallback = attempt.operation === "assist/voice" && error.status >= 400 && error.status < 500 ? ` ${t("voiceTypeFallback")}` : "";
+    showNotice((attempt.operation.startsWith("assist/") ? assistError(error) : errorMessage(error)) + voiceFallback, "error");
+    if (attempt.operation.startsWith("assist/") && error.status === 404) {
+      assist.available = false;
+      document.querySelectorAll(".ai-feature").forEach((node) => { node.hidden = true; });
+      $("copilot-dialog").close();
+      if (state.selected?.revision) renderDetail();
+    }
     if (error.status === 401) {
       $("access-message").textContent = "Your sign-in expired. Sign in again, then inspect Activity before repeating a request.";
     }
   } finally {
     setBusy(false);
+    renderChats();
   }
+  if (confirmed && generation === state.sessionGeneration && attempt.afterSuccess) await attempt.afterSuccess();
 }
 function field(parent, name, label, options = {}) {
   const wrapper = element("div", null, options.wide ? "wide" : "");
@@ -280,12 +294,12 @@ function setView(view, load = true) {
   if (!["today", "needs", "tasks", "knowledge", "areas", "activity"].includes(view)) view = "today";
   state.view = view;
   const titles = {
-    today: ["Today", "Approved focus, current work and something worth revisiting."],
-    knowledge: ["Knowledge", "Understand the finding. Check its evidence. Choose what happens next."],
-    needs: ["Needs you", "Decisions, due follow-ups and the work you selected."],
-    tasks: ["All tasks", "An open task is not automatically today's commitment."],
-    areas: ["Areas & projects", "Keep responsibilities visible. Choose which outcomes to advance."],
-    activity: ["Activity", "Proposals, preparation and the evidence of follow-through."],
+    today: [t("today"), t("todayDescription")],
+    knowledge: [t("knowledgeNav"), t("knowledgeDescription")],
+    needs: [t("needs"), t("needsDescription")],
+    tasks: [t("flow"), t("flowDescription")],
+    areas: [t("areasNav"), t("areasDescription")],
+    activity: [t("activityNav"), t("activityDescription")],
   };
   $("view-title").textContent = titles[view][0];
   $("view-description").textContent = titles[view][1];
@@ -308,6 +322,7 @@ function setView(view, load = true) {
 }
 function renderTaskRow(task, action = () => openTask(task.path)) {
   const row = button("", action, "task-row");
+  row.dataset.path = task.path;
   row.setAttribute("aria-pressed", String(state.selected?.path === task.path));
   const top = element("div", null, "row-top");
   append(top, statusBadge(task.stage), element("span", task.area ? prettyId(task.area) : "Area not clarified"));
@@ -321,6 +336,18 @@ function renderTaskRow(task, action = () => openTask(task.path)) {
   if (task.waiting_for) timing.append(element("span", "Waiting on a dependency"));
   if (task.definition?.missing?.length) timing.append(element("span", "Definition needs work"));
   row.append(timing);
+  if (task.estimate_min != null) timing.append(element("span", `${task.estimate_min} min`, "status"));
+  if (task.ai_hint) row.append(element("p", `✦ ${task.ai_hint}`, "row-ai"));
+  if (state.layout === "board") {
+    row.draggable = true;
+    row.addEventListener("dragstart", (event) => {
+      assist.dragPath = task.path;
+      event.dataTransfer.setData("text/plain", task.path);
+      event.dataTransfer.effectAllowed = "move";
+      row.classList.add("dragging");
+    });
+    row.addEventListener("dragend", () => { assist.dragPath = null; row.classList.remove("dragging"); });
+  }
   return row;
 }
 function filteredTasks() {
@@ -334,6 +361,7 @@ function filteredTasks() {
 }
 function renderTasks() {
   const list = $("task-list");
+  const positions = new Map(Array.from(list.querySelectorAll?.(".task-row") || []).map((row) => [row.dataset.path, row.getBoundingClientRect()]));
   list.replaceChildren();
   list.className = `task-list ${state.layout === "board" ? "board" : ""}`;
   $("tasks-section").classList.toggle("layout-board", state.layout === "board");
@@ -355,11 +383,27 @@ function renderTasks() {
       "Check the filters, load more tasks, or capture a new request. Nothing has been completed or discarded.");
   } else if (state.layout === "board") {
     list.tabIndex = 0;
-    list.setAttribute("aria-label", "Workflow board. Scroll horizontally for more stages; open a task to change its stage.");
-    for (const stage of STAGES) {
-      const laneTasks = tasks.filter((task) => task.stage === stage);
+    list.setAttribute("aria-label", t("boardHelp"));
+    for (const [stage, stages, label] of [
+      ["clarify", ["untriaged", "clarify", "backlog"], "inbox"],
+      ["ready", ["ready"], "ready"], ["doing", ["doing"], "doing"],
+      ["waiting", ["waiting"], "waiting"], ["verify", ["verify"], "verify"], ["done", ["done"], "done"],
+    ]) {
+      const laneTasks = tasks.filter((task) => stages.includes(task.stage));
       const lane = element("section", null, "board-lane");
-      lane.append(element("h3", `${LABELS[stage]} (${laneTasks.length})`));
+      lane.dataset.stage = stage;
+      lane.append(append(element("h3"), element("span", null, "lane-dot"), element("span", t(label)), element("span", laneTasks.length, "lane-count")));
+      lane.addEventListener("dragover", (event) => {
+        if (!assist.dragPath || state.busy || state.unknown) return;
+        event.preventDefault(); lane.classList.add("drag-over");
+      });
+      lane.addEventListener("dragleave", () => lane.classList.remove("drag-over"));
+      lane.addEventListener("drop", (event) => {
+        event.preventDefault(); lane.classList.remove("drag-over");
+        const task = state.items.find((item) => item.path === assist.dragPath);
+        assist.dragPath = null;
+        if (task) moveTask(task, stage);
+      });
       laneTasks.forEach((task) => lane.append(renderTaskRow(task)));
       if (!laneTasks.length) lane.append(element("p", "No loaded tasks", "empty"));
       list.append(lane);
@@ -374,6 +418,15 @@ function renderTasks() {
     : "Source availability has not been confirmed.";
   $("load-more").hidden = state.overview?.next_offset === null || state.overview?.next_offset === undefined;
   $("load-more").disabled = state.loading;
+  for (const row of list.querySelectorAll?.(".task-row") || []) {
+    const before = positions.get(row.dataset.path);
+    if (!before || !row.animate || matchMedia("(prefers-reduced-motion: reduce)").matches) continue;
+    const after = row.getBoundingClientRect();
+    const dx = before.left - after.left, dy = before.top - after.top;
+    if (Math.abs(dx) + Math.abs(dy) > 2) row.animate([
+      { transform: `translate(${dx}px, ${dy}px)`, opacity: .6 }, { transform: "translate(0, 0)", opacity: 1 },
+    ], { duration: 400, easing: "cubic-bezier(.2,.85,.25,1)" });
+  }
 }
 function renderAttention() {
   const target = $("attention");
@@ -395,6 +448,8 @@ function renderAttention() {
   if (pending || unreviewed) target.append(button("Review decisions and results", () => setView("activity")));
 }
 function render() {
+  $("layout-list").setAttribute("aria-pressed", String(state.layout === "list"));
+  $("layout-board").setAttribute("aria-pressed", String(state.layout === "board"));
   $("needs-count").textContent = String(state.items.filter(isAttention).length + pendingProposals().length);
   $("tasks-count").textContent = String(state.items.length);
   $("activity-count").textContent = String(pendingProposals().length);
@@ -595,7 +650,7 @@ async function openTask(path) {
     if (generation !== state.detailGeneration) return;
     if (!task.path || !task.revision || typeof task.title !== "string") throw new Error("The canonical task response is incomplete.");
     state.selected = task;
-    state.tab = "overview";
+    state.tab = assist.available ? "chat" : "overview";
     renderDetail();
     renderTasks();
     if (matchMedia("(max-width: 690px)").matches) $("inspector").scrollIntoView({ block: "start" });
@@ -617,7 +672,7 @@ function detailBase() {
   const task = state.selected;
   const target = $("inspector");
   target.replaceChildren();
-  target.append(button("Back to tasks", closeDetail, "mobile-back quiet"));
+  target.append(button(t("back"), closeDetail, "mobile-back quiet"));
   const header = element("div", null, "detail-header");
   append(header, statusBadge(task.stage), element("h2", task.title, "detail-title"),
     element("p", `${task.area ? prettyId(task.area) : "Area not clarified"}${task.project ? ` / ${prettyId(task.project)}` : ""}`, "hint"));
@@ -625,9 +680,17 @@ function detailBase() {
   append(links, safeLink("Open canonical source", task.url), element("span", `Revision ${task.revision.slice(0, 7)}`));
   header.append(links);
   target.append(header);
+  const outcome = element("section", null, "outcome-block");
+  append(outcome, element("span", t("outcome"), "eyebrow"), element("p", task.outcome || t("notDefined")),
+    element("span", t("doneWhen"), "eyebrow"), element("p", task.done_when || t("notDefined")));
+  target.append(outcome);
+  if (assist.available) target.append(buildStepRail(task));
   const tabs = element("nav", null, "detail-tabs");
   tabs.setAttribute("aria-label", "Task actions");
-  for (const [id, title] of [["overview", "Overview"], ["edit", "Edit & plan"], ["ai", "AI help"], ["close", "Close"]]) {
+  for (const [id, title] of [
+    ...(assist.available ? [["chat", t("chatTab")]] : []),
+    ["overview", t("overviewTab")], ["edit", t("editTab")], ["ai", t("aiTab")], ["close", t("closeTab")],
+  ]) {
     const node = button(title, () => { state.tab = id; renderDetail(); });
     node.setAttribute("aria-pressed", String(state.tab === id));
     tabs.append(node);
@@ -639,17 +702,26 @@ function renderDetail() {
   if (!state.selected?.revision) return;
   const panel = detailBase();
   const task = state.selected;
-  if (state.tab === "overview") {
+  if (state.tab === "chat") {
+    panel.append(append(element("dl", null, "detail-section"), element("dt", t("nextAction")), element("dd", task.next_action || t("notDefined"))));
+  } else if (state.tab === "overview") {
     const description = element("dl", null, "detail-section");
-    for (const [label, value] of [["Outcome", task.outcome], ["Next action", task.next_action], ["Done when", task.done_when],
-      ["Execution", task.execution], ["Review on", task.review_on], ["Deadline", task.deadline], ["Focus on", task.focus_on], ["Waiting for", task.waiting_for]]) {
+    for (const [label, value] of [[t("nextAction"), task.next_action]]) {
       append(description, element("dt", label), element("dd", value || "Not recorded"));
     }
     panel.append(description);
-    if (task.definition?.missing?.length) {
-      panel.append(element("p", `Needs clarification: ${task.definition.missing.join(", ")}. These are structural checks, not approval.`, "hint"));
+    const metadata = element("details", null, "task-metadata");
+    metadata.append(element("summary", t("taskDetails")));
+    const dates = element("dl", null, "detail-section");
+    for (const [label, value] of [["Execution", task.execution], ["Review on", task.review_on], ["Deadline", task.deadline], ["Focus on", task.focus_on], ["Waiting for", task.waiting_for]]) {
+      append(dates, element("dt", label), element("dd", value || "Not recorded"));
     }
-    panel.append(writeButton("Clarify this task", () => mutate("clarify", { path: task.path, revision: task.revision }, showClarification)));
+    metadata.append(dates);
+    if (task.definition?.missing?.length) {
+      metadata.append(element("p", `Needs clarification: ${task.definition.missing.join(", ")}. These are structural checks, not approval.`, "hint"));
+    }
+    metadata.append(writeButton("Clarify this task", () => mutate("clarify", { path: task.path, revision: task.revision }, showClarification)));
+    panel.append(metadata);
     if (task.text) {
       const details = element("details", null, "section-block");
       append(details, element("summary", "Read the full source"), element("pre", task.text));
@@ -662,6 +734,13 @@ function renderDetail() {
     renderPreparation(panel, task);
   } else {
     renderClose(panel, task);
+  }
+  if (assist.available) {
+    const chat = element("section", null, "task-copilot section-block");
+    chat.append(element("h3", t("taskCopilot")));
+    const host = element("div"); host.dataset.chatKey = task.path;
+    chat.append(host); panel.append(chat);
+    renderChat(host, task.path);
   }
 }
 function renderEdit(panel, task) {
@@ -1014,6 +1093,7 @@ function renderAreas() {
   setBusy(state.busy);
 }
 function clearData() {
+  clearAssist();
   dashboard.clear();
   clearTimeout(state.expiryTimer);
   state.expiryTimer = null;
@@ -1058,6 +1138,7 @@ function checkSessionExpiry() {
   state.expiryTimer = setTimeout(checkSessionExpiry, Math.min(remaining, 2147483647));
 }
 async function start() {
+  initWorkspace();
   clearData();
   $("access").hidden = false;
   $("workspace").hidden = true;
@@ -1074,9 +1155,13 @@ async function start() {
     $("workspace").hidden = false;
     for (const id of ["refresh", "capture-open", "sign-out"]) $(id).hidden = false;
     $("connection").textContent = "Personal workspace";
+    $("quick-bar").hidden = false;
+    if (isMockMode()) $("connection").textContent = t("mock");
     checkSessionExpiry();
     await loadOverview();
+    if (!state.selected) closeDetail();
     setView(location.hash.slice(1) || "today");
+    await loadAssist();
   } catch (error) {
     state.csrf = "";
     $("access-message").textContent = error.status === 401
@@ -1091,7 +1176,7 @@ async function start() {
 for (const stage of STAGES) {
   const option = element("option", LABELS[stage]); option.value = stage; $("stage-filter").append(option);
 }
-document.querySelectorAll("[data-view]").forEach((node) => node.addEventListener("click", () => setView(node.dataset.view)));
+document.querySelectorAll("[data-view]").forEach((node) => node.addEventListener("click", () => transitionView(node.dataset.view)));
 for (const id of ["task-search", "stage-filter", "area-filter"]) $(id).addEventListener(id === "task-search" ? "input" : "change", renderTasks);
 $("layout-list").addEventListener("click", () => setLayout("list"));
 $("layout-board").addEventListener("click", () => setLayout("board"));
@@ -1201,6 +1286,7 @@ $("sign-out").addEventListener("click", async () => {
   const unconfirmed = Boolean(state.unknown);
   setBusy(true);
   try {
+    if (isMockMode()) { expireSession(); return; }
     const response = await fetch("/api/tasks/auth/logout", {
       method: "POST", credentials: "same-origin", mode: "same-origin", cache: "no-store",
       headers: { "Content-Type": "application/json", "X-MindMe-CSRF": state.csrf }, body: "{}",
@@ -1217,4 +1303,766 @@ $("sign-out").addEventListener("click", async () => {
     setBusy(false);
   }
 });
+
+const assist = {
+  available: false, initialized: false, language: "en", threads: new Map(),
+  dragPath: null, recorder: null, stream: null, voiceKey: null, voiceTimer: null,
+  voiceGeneration: 0, processingVoice: false, acquiringVoice: false, speak: false, toastTimer: null,
+  polls: new Map(),
+};
+const COPY = {
+  en: {
+    today: "Today", flow: "Flow", copilot: "Copilot", capture: "+ Capture",
+    refresh: "Refresh", signOut: "Sign out", knowledgeNav: "Knowledge", areasNav: "Areas & projects", activityNav: "Activity",
+    captureTitle: "Get it out of your head", closeCapture: "Close capture", captureQuestion: "What do you need to do?",
+    captureDetails: "Add the details you already know", reviewCapture: "Review capture",
+    needs: "Needs you", allTasks: "All tasks", list: "List", search: "Search loaded tasks",
+    searchPlaceholder: "Find an outcome or next action", stage: "Stage", area: "Area",
+    back: "Back to tasks", overviewTab: "Overview", editTab: "Edit & plan", aiTab: "AI help", closeTab: "Close",
+    chatTab: "✦ Chat",
+    knowledgeDescription: "Understand the finding. Check its evidence. Choose what happens next.",
+    needsDescription: "Decisions, due follow-ups and the work you selected.",
+    areasDescription: "Keep responsibilities visible. Choose which outcomes to advance.",
+    activityDescription: "Proposals, preparation and the evidence of follow-through.",
+    personal: "PERSONAL INTELLIGENCE", hero: "Make space for what matters.",
+    heroDetail: "A clear outcome. A useful next step. A copilot to get you there.",
+    briefing: "✦ Plan my day", work: "Your work, in motion", board: "Flow board",
+    todayDescription: "Your focus, the next move, and intelligence to move it forward.",
+    flowDescription: "From a rough idea to a verified outcome. One flow, with AI alongside.",
+    inbox: "Inbox / Clarify", ready: "Ready", doing: "Doing", waiting: "Waiting", verify: "Verify", done: "Done",
+    outcome: "OUTCOME", doneWhen: "DONE WHEN", notDefined: "Not defined yet. Let's make it concrete.",
+    nextAction: "Next action", taskDetails: "Dates, execution & source details",
+    taskCopilot: "✦ Task copilot", welcome: "What shall we move forward?",
+    welcomeDetail: "Describe an outcome, untangle a task, or ask for a next step. English or Russian, text or voice.",
+    taskWelcome: "Let's make this task easier.",
+    taskWelcomeDetail: "Ask me to sharpen the outcome, estimate the work, build a plan, or prepare the next action.",
+    placeholder: "Ask, capture, or give an instruction…", send: "Send ↗", you: "YOU", ai: "MINDME",
+    thinking: "✦ Working with your canonical sources…", speak: "Read replies",
+    globalContext: "Across your tasks · Changes follow the server's approval and publication rules.",
+    taskContext: "This task only · Exact source version · Conversation stays in memory.",
+    refine: "Sharpen the outcome", refinePrompt: "Make the outcome and done condition concrete.",
+    plan: "Build a plan", planPrompt: "Propose a practical plan with estimates and who does each step.",
+    next: "Find the next move", nextPrompt: "Suggest the best next action and explain why.",
+    captureStep: "Capture", detailStep: "Detail", estimateStep: "Estimate", planStep: "Plan",
+    executeStep: "Execute", resolveStep: "Resolve", learnStep: "Learn",
+    stepHelp: "Prepare this AI step. A completed definition is not proof of completed work.",
+    record: "Record voice instruction", stop: "Stop recording", recording: "Listening · tap to finish",
+    finishVoice: "Finish the voice recording before starting another request.",
+    voiceSourceChanged: "The task changed while recording or recovering. Review the transcript draft against the current source before sending it.",
+    voiceTypeFallback: "You can type your instruction instead. No voice instruction was sent.",
+    transcribing: "Transcribing English / Russian…", voiceUnsupported: "Voice recording is unavailable in this browser. Type your instruction instead.",
+    voiceDenied: "Microphone access was not granted. No audio was sent. You can type instead.",
+    voiceEmpty: "No usable speech was returned. No instruction was sent.",
+    voiceError: "The recording could not be completed. No instruction was sent.",
+    voiceTooLarge: "The recording exceeded 2 MB. Record a shorter instruction.",
+    approve: "Approve", edit: "Edit", skip: "Skip", undo: "Undo",
+    applied: "Change applied", proposal: "Your decision", draft: "Draft · not executed",
+    applying: "Applying · publication pending", saved: "Saved to canonical source", appliedUnknown: "Change receipt · check Activity",
+    inspect: "Inspect Activity", failedChange: "Change not saved · inspect Activity",
+    knowledge: "Learning · not published", estimated: "Estimated effort", planLabel: "Suggested plan",
+    before: "Before", after: "After", receipt: "Receipt", preview: "Exact server action",
+    unavailable: "AI is unavailable. Manual capture, task editing and Activity still work.",
+    unknown: "This request is unconfirmed. Recover the same request above; do not send a replacement.",
+    budget: "AI budget reached. Manual task tools remain available.",
+    rate: "AI is busy. Wait before making a new request.",
+    model: "The AI model is unavailable. No change is claimed.",
+    mock: "LOCAL DEMO · synthetic data", boardHelp: "Flow board. Drag a task to prepare a stage change. Open the task for keyboard-accessible stage editing.",
+    closeHint: "Done needs checked evidence. Use verified closure; a drag cannot close the task.",
+    stageHint: "Stage change prepared for review. The card stays at its saved stage until canonical publication.",
+    dayPrompt: "Help plan today. Suggest up to three tasks with reasons and a next action, using current canonical task sources. Keep deadlines and unknowns explicit.",
+    showTask: "Open task", confidence: "Confidence", permission: "This proposal has no usable approval binding. Refresh Activity.",
+  },
+  ru: {
+    today: "Сегодня", flow: "Поток", copilot: "Копилот", capture: "+ Задача",
+    refresh: "Обновить", signOut: "Выйти", knowledgeNav: "Знания", areasNav: "Сферы и проекты", activityNav: "История",
+    captureTitle: "Освободите голову", closeCapture: "Закрыть ввод", captureQuestion: "Что нужно сделать?",
+    captureDetails: "Добавить известные детали", reviewCapture: "Проверить запись",
+    needs: "Требует вас", allTasks: "Все задачи", list: "Список", search: "Поиск среди загруженных задач",
+    searchPlaceholder: "Найти результат или следующий шаг", stage: "Этап", area: "Сфера",
+    back: "К задачам", overviewTab: "Обзор", editTab: "Правки и план", aiTab: "Помощь ИИ", closeTab: "Завершение",
+    chatTab: "✦ Чат",
+    knowledgeDescription: "Разберите вывод. Проверьте доказательства. Выберите следующий шаг.",
+    needsDescription: "Решения, сроки пересмотра и выбранная вами работа.",
+    areasDescription: "Держите обязанности в поле зрения. Выберите результат для продвижения.",
+    activityDescription: "Предложения, подготовка и подтверждения результата.",
+    personal: "ЛИЧНЫЙ ИНТЕЛЛЕКТ", hero: "Освободите место для важного.",
+    heroDetail: "Ясный результат. Полезный следующий шаг. Копилот, который поможет.",
+    briefing: "✦ Спланировать день", work: "Ваши задачи в движении", board: "Доска",
+    todayDescription: "Ваш фокус, следующий шаг и помощь ИИ в работе.",
+    flowDescription: "От идеи до проверенного результата. Один поток, вместе с ИИ.",
+    inbox: "Входящие / Уточнить", ready: "Готово к работе", doing: "В работе", waiting: "Ожидание", verify: "Проверить", done: "Завершено",
+    outcome: "РЕЗУЛЬТАТ", doneWhen: "КРИТЕРИЙ ГОТОВНОСТИ", notDefined: "Пока не определено. Давайте уточним.",
+    nextAction: "Следующий шаг", taskDetails: "Даты, выполнение и источник",
+    taskCopilot: "✦ Копилот задачи", welcome: "Что будем продвигать?",
+    welcomeDetail: "Опишите результат, разберите задачу или попросите следующий шаг. Текстом или голосом, по-русски или по-английски.",
+    taskWelcome: "Сделаем эту задачу проще.",
+    taskWelcomeDetail: "Попросите уточнить результат, оценить работу, составить план или подготовить следующий шаг.",
+    placeholder: "Вопрос, идея или поручение…", send: "Отправить ↗", you: "ВЫ", ai: "MINDME",
+    thinking: "✦ Работаю с каноническими источниками…", speak: "Читать ответы",
+    globalContext: "Все задачи · Изменения подчиняются правилам подтверждения и публикации сервера.",
+    taskContext: "Только эта задача · Точная версия источника · Чат хранится только в памяти.",
+    refine: "Уточнить результат", refinePrompt: "Сделай результат и критерий готовности конкретными.",
+    plan: "Составить план", planPrompt: "Предложи практический план с оценкой времени и исполнителем каждого шага.",
+    next: "Найти следующий шаг", nextPrompt: "Предложи лучший следующий шаг и объясни почему.",
+    captureStep: "Записать", detailStep: "Уточнить", estimateStep: "Оценить", planStep: "План",
+    executeStep: "Выполнить", resolveStep: "Завершить", learnStep: "Усвоить",
+    stepHelp: "Подготовить этот шаг с ИИ. Полное описание не означает выполненную работу.",
+    record: "Записать голосовое поручение", stop: "Остановить запись", recording: "Слушаю · нажмите для завершения",
+    finishVoice: "Завершите запись голоса перед новым запросом.",
+    voiceSourceChanged: "Задача изменилась во время записи или восстановления. Проверьте черновик расшифровки по текущему источнику перед отправкой.",
+    voiceTypeFallback: "Можно ввести поручение текстом. Голосовое поручение не отправлено.",
+    transcribing: "Распознаю русский / английский…", voiceUnsupported: "В этом браузере нет записи голоса. Введите поручение текстом.",
+    voiceDenied: "Доступ к микрофону не предоставлен. Аудио не отправлено. Можно написать текстом.",
+    voiceEmpty: "Речь не распознана. Поручение не отправлено.",
+    voiceError: "Не удалось завершить запись. Поручение не отправлено.",
+    voiceTooLarge: "Запись больше 2 МБ. Запишите более короткое поручение.",
+    approve: "Подтвердить", edit: "Изменить", skip: "Пропустить", undo: "Отменить",
+    applied: "Изменение применено", proposal: "Ваше решение", draft: "Черновик · не выполнено",
+    applying: "Применяется · ожидает публикации", saved: "Сохранено в каноническом источнике", appliedUnknown: "Квитанция изменения · проверьте историю",
+    inspect: "Проверить историю", failedChange: "Не сохранено · проверьте историю",
+    knowledge: "Вывод · не опубликован", estimated: "Оценка работы", planLabel: "Предложенный план",
+    before: "Было", after: "Стало", receipt: "Квитанция", preview: "Точное действие сервера",
+    unavailable: "ИИ недоступен. Ручной ввод, редактирование задач и история работают.",
+    unknown: "Исход запроса неизвестен. Восстановите тот же запрос выше, не отправляйте новый.",
+    budget: "Лимит ИИ исчерпан. Ручные инструменты доступны.",
+    rate: "ИИ занят. Подождите перед новым запросом.",
+    model: "Модель ИИ недоступна. Изменение не подтверждено.",
+    mock: "ЛОКАЛЬНОЕ ДЕМО · вымышленные данные", boardHelp: "Доска задач. Перетащите задачу для подготовки смены этапа. Этап можно изменить с клавиатуры в задаче.",
+    closeHint: "Завершение требует проверки. Перетаскивание не закрывает задачу.",
+    stageHint: "Смена этапа подготовлена для проверки. Карточка остается на сохранённом этапе до канонической публикации.",
+    dayPrompt: "Помоги спланировать сегодня. Предложи до трёх задач с причинами и следующим шагом на основе текущих канонических источников. Явно укажи сроки и неизвестное.",
+    showTask: "Открыть задачу", confidence: "Уверенность", permission: "Нет привязки подтверждения. Обновите историю.",
+  },
+};
+function t(key) { return COPY[assist.language]?.[key] || COPY.en[key] || key; }
+function transitionView(view) {
+  if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    document.startViewTransition(() => setView(view));
+  } else setView(view);
+}
+function threadFor(key) {
+  if (!assist.threads.has(key)) assist.threads.set(key, { id: null, messages: [], suggestions: [], draft: "", pending: false });
+  return assist.threads.get(key);
+}
+function taskReference(key) {
+  if (key === "global") return null;
+  const task = state.selected?.path === key && state.selected.revision ? state.selected : state.items.find((item) => item.path === key);
+  return task?.revision ? { path: task.path, revision: task.revision } : null;
+}
+function initWorkspace() {
+  if (assist.initialized) return;
+  assist.initialized = true;
+  assist.language = navigator.language?.toLowerCase().startsWith("ru") ? "ru" : "en";
+  $("theme-toggle").addEventListener("click", () => {
+    const dark = document.documentElement.dataset.theme
+      ? document.documentElement.dataset.theme === "dark" : !matchMedia("(prefers-color-scheme: light)").matches;
+    document.documentElement.dataset.theme = dark ? "light" : "dark";
+    $("theme-toggle").setAttribute("aria-label", dark ? "Use dark theme" : "Use light theme");
+  });
+  $("language-toggle").addEventListener("click", () => {
+    assist.language = assist.language === "en" ? "ru" : "en";
+    translateWorkspace(); setView(state.view, false);
+    if (state.selected?.revision) renderDetail();
+    renderChats();
+  });
+  for (const id of ["command-open", "nav-copilot", "quick-chat"]) $(id).addEventListener("click", () => openCopilot());
+  $("copilot-close").addEventListener("click", () => $("copilot-dialog").close());
+  $("quick-capture").addEventListener("click", () => $("capture-open").click());
+  $("briefing-open").addEventListener("click", () => { openCopilot(); sendChat("global", t("dayPrompt")); });
+  $("quick-mic").addEventListener("click", () => {
+    const key = state.selected?.revision && ["tasks", "needs"].includes(state.view) ? state.selected.path : "global";
+    if (key === "global") openCopilot();
+    toggleVoice(key);
+  });
+  $("copilot-dialog").addEventListener("close", () => { if (assist.voiceKey === "global") cancelVoice(); });
+  document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k" && state.csrf && assist.available) {
+      event.preventDefault(); openCopilot();
+    }
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) for (const poll of assist.polls.values()) {
+      if (!poll.timer) scheduleReceiptPoll(poll);
+    }
+  });
+  translateWorkspace();
+}
+function translateWorkspace() {
+  document.documentElement.lang = assist.language;
+  $("language-toggle").textContent = assist.language.toUpperCase();
+  document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = t(node.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
+  $("quick-mic").setAttribute("aria-label", t("record"));
+}
+async function loadAssist() {
+  const generation = state.sessionGeneration;
+  try {
+    const usage = await api("assist/usage");
+    if (generation !== state.sessionGeneration) return;
+    if (!Number.isFinite(usage.month_eur) || !Number.isFinite(usage.month_cap_eur)) throw new Error(t("unavailable"));
+    assist.available = true;
+    $("assist-usage").replaceChildren(element("span", `AI · €${usage.month_eur.toFixed(2)} / €${usage.month_cap_eur.toFixed(2)}`));
+    const meter = element("meter", null, "usage-meter");
+    meter.min = 0; meter.max = Math.max(usage.month_cap_eur, 0.01); meter.value = usage.month_eur;
+    meter.setAttribute("aria-label", "Monthly AI budget");
+    $("assist-usage").append(meter);
+    const details = element("details");
+    append(details, element("summary", assist.language === "ru" ? "Лимиты ИИ" : "AI limits"),
+      element("p", `Today · €${usage.today_eur} / €${usage.today_cap_eur} · ${usage.calls_today} calls`),
+      element("p", Object.entries(usage.models || {}).map(([role, model]) => `${role}: ${model}`).join(" · ")));
+    $("assist-usage").append(details);
+  } catch (error) {
+    if (generation !== state.sessionGeneration) return;
+    assist.available = false;
+    $("assist-usage").textContent = t("unavailable");
+    if (error.status !== 404) showNotice(errorMessage(error), "error");
+  }
+  document.querySelectorAll(".ai-feature").forEach((node) => { node.hidden = !assist.available; });
+  if (state.selected?.revision) renderDetail();
+}
+function clearAssist() {
+  cancelVoice();
+  assist.available = false; assist.threads.clear(); assist.dragPath = null;
+  clearTimeout(assist.toastTimer);
+  for (const poll of assist.polls.values()) clearTimeout(poll.timer);
+  assist.polls.clear();
+  if (typeof window.speechSynthesis !== "undefined") window.speechSynthesis.cancel();
+  $("copilot-dialog").close?.();
+  $("global-chat").replaceChildren();
+  $("today-priorities").replaceChildren();
+  $("toast").replaceChildren(); $("toast").hidden = true;
+  $("assist-usage").replaceChildren();
+  $("quick-bar").hidden = true;
+  document.querySelectorAll(".ai-feature").forEach((node) => { node.hidden = true; });
+}
+function openCopilot() {
+  if (!assist.available || !state.csrf) return;
+  $("global-chat").dataset.chatKey = "global";
+  renderChat($("global-chat"), "global");
+  if (!$("copilot-dialog").open) $("copilot-dialog").showModal();
+  $("global-chat").querySelector("textarea")?.focus();
+}
+function buildStepRail(task) {
+  const rail = element("nav", null, "step-rail");
+  rail.setAttribute("aria-label", t("stepHelp"));
+  const cards = threadFor(task.path).messages.flatMap((message) => message.cards || []);
+  const complete = {
+    capture: true, detail: Boolean(task.definition?.complete),
+    estimate: cards.some((card) => card.kind === "estimate"), plan: cards.some((card) => card.kind === "plan"),
+    execute: false, resolve: task.stage === "done", learn: Boolean(task.completion?.learning),
+  };
+  for (const step of ["capture", "detail", "estimate", "plan", "execute", "resolve", "learn"]) {
+    const node = writeButton("", () => sendStep(task.path, step));
+    node.title = t("stepHelp");
+    node.dataset.complete = String(complete[step]);
+    append(node, element("span", complete[step] ? "✓" : "✦", "step-marker"), element("span", t(`${step}Step`)));
+    rail.append(node);
+  }
+  return rail;
+}
+function renderChats() {
+  $("quick-mic").setAttribute("aria-pressed", String(Boolean(assist.recorder)));
+  if (!assist.available) return;
+  document.querySelectorAll("[data-chat-key]").forEach((host) => renderChat(host, host.dataset.chatKey));
+}
+function renderChat(host, key) {
+  const thread = threadFor(key);
+  const active = host.querySelector("textarea") === document.activeElement;
+  const start = active ? document.activeElement.selectionStart : null;
+  const shell = element("div", null, "chat-shell");
+  shell.append(element("p", t(key === "global" ? "globalContext" : "taskContext"), "chat-context"));
+  const messages = element("div", null, "chat-messages");
+  messages.setAttribute("role", "log"); messages.setAttribute("aria-live", "polite");
+  if (!thread.messages.length) {
+    messages.append(append(element("div", null, "chat-welcome"),
+      element("h3", t(key === "global" ? "welcome" : "taskWelcome")),
+      element("p", t(key === "global" ? "welcomeDetail" : "taskWelcomeDetail"))));
+  }
+  for (const message of thread.messages) {
+    if (message.text) {
+      const node = element("div", null, `chat-message ${message.role}`);
+      append(node, element("span", t(message.role === "user" ? "you" : "ai"), "message-role"), element("span", message.text));
+      messages.append(node);
+    }
+    for (const card of message.cards || []) messages.append(renderAssistCard(card, key));
+  }
+  if (thread.pending) messages.append(element("div", t("thinking"), "thinking"));
+  if (state.unknown) messages.append(element("p", t("unknown"), "notice pending"));
+  shell.append(messages);
+  const suggestions = element("div", null, "chat-suggestions");
+  const ideas = thread.suggestions.length ? thread.suggestions : [
+    { label: t("refine"), message: t("refinePrompt") }, { label: t("plan"), message: t("planPrompt") }, { label: t("next"), message: t("nextPrompt") },
+  ];
+  for (const suggestion of ideas) suggestions.append(writeButton(suggestion.label, () => sendChat(key, suggestion.message)));
+  shell.append(suggestions);
+  if (assist.voiceKey === key || (assist.processingVoice && assist.processingVoice === key)) {
+    const waveform = element("span", null, "waveform"); waveform.setAttribute("aria-hidden", "true");
+    for (let i = 0; i < 7; i += 1) waveform.append(element("span"));
+    shell.append(append(element("div", null, "voice-status"), waveform, element("span", t(assist.recorder ? "recording" : "transcribing"))));
+  }
+  const form = element("form", null, "chat-form");
+  const input = element("textarea"); input.rows = 2; input.maxLength = 4000;
+  input.placeholder = t("placeholder"); input.value = thread.draft;
+  input.setAttribute("aria-label", t("placeholder"));
+  input.disabled = state.busy || Boolean(state.unknown) || Boolean(assist.processingVoice);
+  input.addEventListener("input", () => { thread.draft = input.value; });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing && !matchMedia("(pointer: coarse)").matches) {
+      event.preventDefault(); form.requestSubmit();
+    }
+  });
+  const actions = element("div", null, "chat-compose-actions");
+  const mic = button(assist.voiceKey === key ? "■" : "●", () => toggleVoice(key), "mic-button");
+  mic.disabled = (state.busy || Boolean(state.unknown) || Boolean(assist.processingVoice)) && assist.voiceKey !== key;
+  mic.setAttribute("aria-label", t(assist.voiceKey === key ? "stop" : "record"));
+  mic.setAttribute("aria-pressed", String(assist.voiceKey === key));
+  const speech = element("label", null, "checkbox speech-toggle");
+  const toggle = element("input"); toggle.type = "checkbox"; toggle.checked = assist.speak;
+  toggle.addEventListener("change", () => { assist.speak = toggle.checked; if (!assist.speak) window.speechSynthesis?.cancel(); });
+  append(speech, toggle, element("span", t("speak")));
+  const submit = element("button", t("send"), "primary"); submit.type = "submit";
+  submit.disabled = state.busy || Boolean(state.unknown) || Boolean(assist.processingVoice) || Boolean(assist.recorder);
+  append(actions, mic, speech, submit); append(form, input, actions);
+  form.addEventListener("submit", (event) => { event.preventDefault(); sendChat(key, input.value); });
+  shell.append(form); host.replaceChildren(shell);
+  if (active) { input.focus({ preventScroll: true }); input.setSelectionRange(start, start); }
+  messages.scrollTop = messages.scrollHeight;
+}
+function safeCardValue(value) {
+  if (value == null) return "—";
+  return typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
+}
+function renderAssistCard(card, key) {
+  const supported = ["applied", "proposal", "task", "plan", "estimate", "knowledge", "draft"];
+  const kind = supported.includes(card.kind) ? card.kind : "draft";
+  const target = element("article", null, `ai-card ${kind}`);
+  const badge = { applied: "applied", proposal: "proposal", plan: "planLabel", estimate: "estimated", knowledge: "knowledge", draft: "draft" }[kind];
+  if (badge) target.append(element("span", kind === "applied" ? appliedCardStatus(card) : t(badge), "status"));
+  if (card.title) target.append(element("h4", card.title));
+  if (card.summary) target.append(element("p", card.summary));
+  if (card.body) target.append(element("p", card.body));
+  if (Array.isArray(card.diff)) {
+    const diff = element("dl", null, "ai-diff");
+    for (const change of card.diff) append(diff, element("dt", change.field),
+      element("dd", `${t("before")}: ${safeCardValue(change.before)}`, "before"),
+      element("dd", `${t("after")}: ${safeCardValue(change.after)}`));
+    target.append(diff);
+  }
+  if (kind === "plan") {
+    for (const step of card.steps || []) {
+      const label = element("label", null, "checkbox plan-check");
+      const check = element("input"); check.type = "checkbox"; check.checked = Boolean(step.uiChecked);
+      check.addEventListener("change", () => { step.uiChecked = check.checked; });
+      append(label, check, element("span", `${step.text} · ${step.estimate_min ?? "?"} min · ${step.who}`));
+      target.append(label);
+    }
+    target.append(element("p", `${card.total_estimate_min ?? "?"} min · ${t("draft")}`, "hint"));
+  }
+  if (kind === "estimate") {
+    append(target, element("h4", `${card.minutes_low}–${card.minutes_high} min`),
+      element("p", `${t("confidence")}: ${safeCardValue(card.confidence)}`, "hint"), element("p", card.rationale));
+  }
+  const actions = element("div", null, "actions");
+  if (kind === "applied" && card.receipt_id) {
+    if (isCardSaved(card) && card.undo_available) actions.append(writeButton(t("undo"), () => undoAssist(key, card.receipt_id)));
+    if (!isCardSaved(card)) actions.append(button(t("inspect"), () => {
+      $("copilot-dialog").close(); transitionView("activity");
+    }));
+    target.append(element("p", `${t("receipt")}: ${card.receipt_id}`, "hint"));
+  }
+  if (kind === "proposal") {
+    if (card.action) {
+      const details = element("details");
+      append(details, element("summary", t("preview")), element("pre", safeCardValue(card.action)));
+      target.append(details);
+    }
+    if (!card.decided) {
+      actions.append(writeButton(t("approve"), () => decideAssist(key, card, "approve"), "primary"),
+        writeButton(t("edit"), () => {
+          threadFor(key).draft = `${t("edit")}: ${card.title || card.summary || ""}\n`;
+          renderChats();
+          document.querySelector(`[data-chat-key="${CSS.escape(key)}"] textarea`)?.focus();
+        }), writeButton(t("skip"), () => decideAssist(key, card, "decline")));
+    } else target.append(element("p", card.decisionStatus || card.decided, "hint"));
+  }
+  if (kind === "task" && typeof card.path === "string") {
+    actions.append(button(t("showTask"), () => {
+      $("copilot-dialog").close(); setView("tasks"); openTask(card.path);
+    }));
+  }
+  target.append(actions);
+  return target;
+}
+function assistError(error) {
+  return ({ budget_exhausted: t("budget"), rate_limited: t("rate"), model_unavailable: t("model") })[error.code] || errorMessage(error);
+}
+async function receiveAssist(key, response, operation = "assist/chat") {
+  const generation = state.sessionGeneration;
+  const cardsOnly = operation === "assist/change";
+  if (!Array.isArray(response.cards) || response.cards.some((card) => !card || typeof card.kind !== "string")
+    || (!cardsOnly && (typeof response.reply !== "string" || typeof response.thread_id !== "string"))) {
+    throw new Error("The AI response is incomplete. Inspect Activity before repeating any instruction.");
+  }
+  const thread = threadFor(key);
+  showNotice("");
+  if (typeof response.thread_id === "string") thread.id = response.thread_id;
+  thread.messages.push({ role: "assistant", text: typeof response.reply === "string" ? response.reply : "", cards: response.cards });
+  thread.suggestions = Array.isArray(response.suggestions) ? response.suggestions : [];
+  renderChats();
+  for (const card of response.cards) {
+    if (card.kind === "applied") {
+      showToast(`${card.title || t("applied")} · ${appliedCardStatus(card)}`, isCardSaved(card) && card.undo_available ? () => undoAssist(key, card.receipt_id) : null);
+      watchReceipt(key, card);
+    }
+  }
+  if (response.cards.some((card) => ["applied", "task"].includes(card.kind))) {
+    const wasSelected = state.selected?.path === key;
+    await loadOverview();
+    if (generation !== state.sessionGeneration) return;
+    if (key !== "global" && wasSelected && (!state.selected || state.selected.path === key)) await openTask(key);
+  } else if (key !== "global" && state.selected?.path === key && state.selected?.revision) renderDetail();
+  if (generation !== state.sessionGeneration) return;
+  if (response.reply && assist.speak && window.speechSynthesis && typeof SpeechSynthesisUtterance !== "undefined") {
+    const utterance = new SpeechSynthesisUtterance(response.reply);
+    utterance.lang = response.language === "ru" ? "ru-RU" : "en-US";
+    window.speechSynthesis.speak(utterance);
+  }
+}
+function appliedCardStatus(card) {
+  if (isCardSaved(card)) return t("saved");
+  if (["submitted", "executing"].includes(card.status)) return t("applying");
+  if (["failed", "invalidated", "declined", "expired"].includes(card.status)) return t("failedChange");
+  return t("appliedUnknown");
+}
+function isCardSaved(card) {
+  return card.saved === true && card.status === "completed" && card.publication_status === "merged"
+    && card.source_status === "current";
+}
+function watchReceipt(key, card) {
+  if (isMockMode() || !/^[a-f0-9]{24}$/.test(card.receipt_id || "")
+    || !["submitted", "executing"].includes(card.status) || assist.polls.has(card.receipt_id)) return;
+  const poll = { key, card, generation: state.sessionGeneration, started: Date.now(), attempt: 0, timer: null };
+  assist.polls.set(card.receipt_id, poll);
+  scheduleReceiptPoll(poll);
+}
+function scheduleReceiptPoll(poll) {
+  if (poll.timer || document.hidden || poll.generation !== state.sessionGeneration) return;
+  const delay = Math.min(2000 * 2 ** poll.attempt, 32000);
+  if (Date.now() + delay - poll.started > 120000 || poll.attempt >= 7) {
+    assist.polls.delete(poll.card.receipt_id); return;
+  }
+  poll.timer = setTimeout(() => { poll.timer = null; pollReceipt(poll); }, delay);
+}
+async function pollReceipt(poll) {
+  if (poll.generation !== state.sessionGeneration || !state.csrf || document.hidden) return;
+  if (state.busy || state.unknown) { scheduleReceiptPoll(poll); return; }
+  poll.attempt += 1;
+  try {
+    const record = await api("reconcile", { proposal_id: poll.card.receipt_id });
+    if (poll.generation !== state.sessionGeneration) return;
+    if (record.id !== poll.card.receipt_id || typeof record.status !== "string") throw new Error("The publication receipt did not match this operation.");
+    const card = poll.card;
+    card.status = record.status; card.publication_status = record.result?.status || null;
+    card.source_status = record.source_status;
+    if (record.source_status && record.source_status !== "current") {
+      card.title = t("appliedUnknown"); card.summary = ""; card.diff = []; card.action = null; card.task = null;
+      card.undo_available = false;
+    }
+    card.saved = record.status === "completed" && record.result?.status === "merged" && record.source_status === "current";
+    if (typeof record.undo_available === "boolean") card.undo_available = record.undo_available;
+    if (isCardSaved(card)) {
+      assist.polls.delete(card.receipt_id);
+      const wasSelected = state.selected?.path === poll.key;
+      await loadOverview();
+      if (poll.generation !== state.sessionGeneration) return;
+      if (wasSelected && (!state.selected || state.selected.path === poll.key)) await openTask(poll.key);
+      if (poll.generation !== state.sessionGeneration) return;
+      showToast(`${card.title || t("applied")} · ${t("saved")}`, card.undo_available ? () => undoAssist(poll.key, card.receipt_id) : null);
+    } else if (["submitted", "executing"].includes(card.status)) scheduleReceiptPoll(poll);
+    else assist.polls.delete(card.receipt_id);
+    renderChats();
+  } catch (error) {
+    if (poll.generation !== state.sessionGeneration) return;
+    poll.card.status = "uncertain"; poll.card.saved = false;
+    assist.polls.delete(poll.card.receipt_id);
+    showNotice(`${t("appliedUnknown")}. ${assistError(error)}`, "pending");
+    renderChats();
+  }
+}
+async function assistMutation(operation, payload, key, onSuccess) {
+  if (!assist.available || !state.csrf || state.busy || state.unknown || assist.recorder) return;
+  const thread = threadFor(key);
+  const generation = state.sessionGeneration;
+  thread.pending = true;
+  renderChats();
+  await mutate(operation, payload, async (response) => {
+    await receiveAssist(key, response, operation);
+    if (onSuccess && generation === state.sessionGeneration) await onSuccess(response);
+  });
+  thread.pending = false;
+  if (state.unknown) {
+    showNotice(t("unknown"), "pending");
+  }
+  renderChats();
+}
+async function sendChat(key, raw, voice = false) {
+  const message = String(raw || "").trim();
+  if (!message || state.busy || state.unknown || !assist.available) return;
+  if (assist.recorder || assist.acquiringVoice) { showNotice(t("finishVoice"), "pending"); return; }
+  if (key !== "global" && !taskReference(key)) { showNotice(t("unavailable"), "error"); return; }
+  const thread = threadFor(key);
+  const proposals = thread.messages.flatMap((entry) => entry.cards || []).filter((card) => card.kind === "proposal" && !card.decided);
+  if (voice && /^(yes|approve|да|подтверждаю|одобряю)[.!]?$/i.test(message) && proposals.length === 1) {
+    await decideAssist(key, proposals[0], "approve"); return;
+  }
+  thread.messages.push({ role: "user", text: message });
+  thread.draft = "";
+  await assistMutation("assist/chat", {
+    request_id: requestId(), message, thread_id: thread.id, task: taskReference(key),
+    language: voice ? "auto" : assist.language, voice,
+  }, key);
+}
+async function sendStep(key, step) {
+  if (!taskReference(key) || state.busy || state.unknown) return;
+  if (assist.recorder || assist.acquiringVoice) { showNotice(t("finishVoice"), "pending"); return; }
+  threadFor(key).messages.push({ role: "user", text: `✦ ${t(`${step}Step`)}` });
+  await assistMutation("assist/step", {
+    request_id: requestId(), step, task: taskReference(key), input: null, language: assist.language,
+  }, key);
+}
+async function undoAssist(key, receiptId) {
+  if (!receiptId) return;
+  const generation = state.sessionGeneration;
+  await assistMutation("assist/undo", { request_id: requestId(), receipt_id: receiptId }, key, async () => {
+    $("toast").hidden = true;
+    for (const thread of assist.threads.values()) for (const message of thread.messages) {
+      for (const card of message.cards || []) if (card.receipt_id === receiptId) card.undo_available = false;
+    }
+    const wasSelected = state.selected?.path === key;
+    await loadOverview();
+    if (generation !== state.sessionGeneration) return;
+    if (wasSelected && (!state.selected || state.selected.path === key)) await openTask(key);
+  });
+}
+async function decideAssist(key, card, decision) {
+  if (!card.proposal_id || !card.action_digest) { showNotice(t("permission"), "error"); return; }
+  await mutate("decide", {
+    proposal_id: card.proposal_id, approval_digest: card.action_digest, decision,
+  }, async (record) => {
+    card.decided = decision; card.decisionStatus = proposalStatusText(record);
+    threadFor(key).messages.push({ role: "assistant", text: card.decisionStatus });
+    showToast(card.decisionStatus);
+    await loadOverview();
+    renderChats();
+  });
+}
+function moveTask(task, stage) {
+  if (task.stage === stage || state.busy || state.unknown) return;
+  if (stage === "done") { openTask(task.path).then(() => { state.tab = "close"; renderDetail(); showNotice(t("closeHint")); }); return; }
+  if (assist.available) {
+    assistMutation("assist/change", {
+      request_id: requestId(), path: task.path, revision: task.revision, change: { stage },
+    }, task.path);
+    return;
+  }
+  mutate("refine", { request_id: requestId(), path: task.path, revision: task.revision, changes: { stage } }, (record) => {
+    showProposal(record); showNotice(t("stageHint"));
+  });
+}
+function showToast(text, undo) {
+  clearTimeout(assist.toastTimer);
+  $("toast").replaceChildren(element("span", text));
+  if (undo) $("toast").append(writeButton(t("undo"), undo));
+  $("toast").hidden = false;
+  assist.toastTimer = setTimeout(() => { $("toast").hidden = true; }, undo ? 12000 : 7000);
+}
+function cancelVoice() {
+  assist.voiceGeneration += 1;
+  clearTimeout(assist.voiceTimer);
+  if (assist.recorder && assist.recorder.state !== "inactive") assist.recorder.stop();
+  assist.stream?.getTracks().forEach((track) => track.stop());
+  assist.stream = null; assist.recorder = null; assist.voiceKey = null; assist.processingVoice = false; assist.acquiringVoice = false;
+}
+async function toggleVoice(key) {
+  if (assist.recorder) {
+    if (assist.voiceKey === key && assist.recorder.state !== "inactive") assist.recorder.stop();
+    return;
+  }
+  if (state.busy || state.unknown || assist.processingVoice || assist.acquiringVoice || !assist.available) return;
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { showNotice(t("voiceUnsupported"), "error"); return; }
+  const generation = ++assist.voiceGeneration;
+  const session = state.sessionGeneration;
+  const sourceAtCapture = taskReference(key);
+  assist.acquiringVoice = true;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (generation !== assist.voiceGeneration || session !== state.sessionGeneration) { stream.getTracks().forEach((track) => track.stop()); return; }
+    assist.acquiringVoice = false;
+    assist.voiceKey = key;
+    assist.stream = stream;
+    const mime = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/ogg", "audio/mp4", "audio/webm"].find((type) => MediaRecorder.isTypeSupported(type));
+    const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : {});
+    assist.recorder = recorder;
+    const chunks = []; let size = 0; let failed = false;
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size) { chunks.push(event.data); size += event.data.size; }
+      if (size > 2 * 1024 * 1024 && recorder.state === "recording") recorder.stop();
+    });
+    recorder.addEventListener("error", () => { failed = true; showNotice(t("voiceError"), "error"); cancelVoice(); renderChats(); });
+    recorder.addEventListener("stop", async () => {
+      clearTimeout(assist.voiceTimer);
+      stream.getTracks().forEach((track) => track.stop());
+      if (generation !== assist.voiceGeneration || session !== state.sessionGeneration || failed) return;
+      assist.recorder = null; assist.stream = null; assist.voiceKey = null; assist.processingVoice = key;
+      const audio = new Blob(chunks, { type: recorder.mimeType || mime || "audio/webm" });
+      if (!size || size > 2 * 1024 * 1024) {
+        assist.processingVoice = false; showNotice(t(size ? "voiceTooLarge" : "voiceEmpty"), "error"); renderChats(); return;
+      }
+      renderChats();
+      let transcription = null;
+      await mutate("assist/voice", { audio, request_id: requestId() }, async (result) => {
+        if (typeof result.text !== "string" || !result.text.trim()) throw new Error(t("voiceEmpty"));
+        threadFor(key).draft = result.text;
+        transcription = result.text;
+      }, async () => {
+        assist.processingVoice = false;
+        renderChats();
+        if (session !== state.sessionGeneration) return;
+        const sourceNow = taskReference(key);
+        if (sourceAtCapture && (sourceNow?.path !== sourceAtCapture.path || sourceNow?.revision !== sourceAtCapture.revision)) {
+          showNotice(t("voiceSourceChanged"), "pending"); return;
+        }
+        await sendChat(key, transcription, true);
+      });
+      assist.processingVoice = false;
+      renderChats();
+    });
+    recorder.start(1000);
+    assist.voiceTimer = setTimeout(() => { if (recorder.state === "recording") recorder.stop(); }, 60000);
+    renderChats();
+    $("quick-mic").setAttribute("aria-pressed", "true");
+  } catch (error) {
+    if (generation !== assist.voiceGeneration) return;
+    cancelVoice();
+    showNotice(error.name === "NotAllowedError" ? t("voiceDenied") : t("voiceError"), "error");
+    renderChats();
+  }
+}
+
+function isMockMode() {
+  return typeof location !== "undefined" && ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)
+    && new URLSearchParams(location.search).get("mock") === "1";
+}
+const mockState = { items: null, receipts: new Map(), proposals: new Map() };
+function mockItems() {
+  if (mockState.items) return mockState.items;
+  const samples = [
+    ["Design a better morning", "ready", "personal", "Create a 20-minute routine that starts the day with focus.", "Try the routine three mornings and record what worked.", "Choose one small change for tomorrow.", "Start small: one repeatable experiment.", 20],
+    ["Ship the reading companion", "doing", "building", "Turn saved sources into a useful reading workspace.", "Keyboard, mobile and evidence checks pass.", "Review the mobile prototype.", "I can prepare the accessibility checklist.", 45],
+    ["Разобрать идеи для статьи", "clarify", "learning", "Выбрать одну идею и сформулировать главный тезис.", "Есть тезис, три источника и план статьи.", "Сравнить две идеи.", "Давайте сначала уточним аудиторию.", null],
+    ["Prepare the weekend trail", "waiting", "personal", "Choose a short public walking route.", "Route and weather checked before leaving.", "Check the updated forecast.", "Waiting is not the same as falling behind.", 15],
+    ["Verify the export workflow", "verify", "building", "Confirm a synthetic export is complete and reproducible.", "A second run produces matching checksums.", "Run the synthetic fixture again.", "Bring evidence before marking this done.", 10],
+    ["Learn from the prototype", "ready", "learning", "Capture one reusable lesson from the experiment.", "A short source-linked learning note is reviewed.", "Compare the expected and actual result.", "Keep the lesson concrete, not a transcript.", 25],
+    ["Voice-first task capture", "untriaged", "building", "", "", "Define the smallest useful outcome.", "A rough thought is enough to start.", null],
+  ];
+  mockState.items = samples.map(([title, stage, area, outcome, done_when, next_action, ai_hint, estimate_min], i) => ({
+    path: `tasks/synthetic-${i + 1}.md`, revision: "a".repeat(40), title, stage, area, outcome, done_when,
+    next_action, ai_hint, estimate_min, project: "synthetic-workspace", execution: "assisted",
+    review_on: i < 2 ? "2026-10-13" : "", deadline: "", focus_on: i === 0 ? "2026-10-13" : "",
+    waiting_for: stage === "waiting" ? "An updated public forecast" : "", definition: { complete: Boolean(outcome), missing: outcome ? [] : ["outcome", "done_when"] },
+    attention_eligible: i < 3, attention_reasons: i === 0 ? ["focus_today"] : i < 3 ? ["review_due"] : [],
+    text: `# ${title}\n\nSynthetic local demo. No personal content or live action.`,
+  }));
+  return mockState.items;
+}
+async function mockApi(operation, payload) {
+  await new Promise((resolve) => setTimeout(resolve, operation.startsWith("assist/") ? 650 : 120));
+  const items = mockItems();
+  if (operation === "session") return { authenticated: true, csrf: "synthetic-local-only", expires: Date.now() / 1000 + 3600 };
+  if (operation.startsWith("overview")) return structuredClone({
+    canonical_revision: "a".repeat(40), items, history: [...mockState.proposals.values()], areas: ["personal", "building", "learning"],
+    projects: [{ id: "synthetic-workspace", title: "Build a thoughtful workspace" }], active_projects: {},
+    next_offset: null, history_next_offset: null, project_next_offset: null, attention_complete: true,
+    attention: { calendar_date: "2026-10-13", timezone: "Europe/Riga", deadline_horizon_days: 7, assessed_count: items.length },
+    excluded_count: 0, errors: [], limits: {}, budget: {},
+  });
+  if (operation === "task") {
+    const item = items.find((task) => task.path === payload.path);
+    if (!item) throw Object.assign(new Error("Synthetic task not found."), { status: 404 });
+    return structuredClone(item);
+  }
+  if (operation.startsWith("dashboard/today")) return {
+    items: [], focus: { status: "available", items: [{ status: "current", text: "Build less friction between an idea and a useful outcome.", starts_on: "2026-10-01", ends_on: "2026-10-31" }] },
+    visit_token: "synthetic", first_visit: true, observed_at: "2026-10-13T15:00:00+00:00", next_offset: null, canonical_revision: "a".repeat(40),
+  };
+  if (operation.startsWith("dashboard/inbox")) return {
+    items: [{ id: "synthetic-review", revision: "a".repeat(40), kind: "daily_review", as_of: "2026-10-13",
+      findings: [{ id: "F1", basis: "inferred", statement: "A smaller next action made the prototype easier to start." }] }],
+    next_offset: null, canonical_revision: "a".repeat(40),
+  };
+  if (operation === "dashboard/read") return {
+    id: payload.id, revision: payload.revision, kind: "daily_review", as_of: "2026-10-13", title: "A small experiment",
+    path: "wiki/synthetic-review.md", findings: [{ id: "F1", basis: "inferred", statement: "A smaller next action made the prototype easier to start.", next_step: "Try a ten-minute first step.", evidence: [] }],
+  };
+  if (operation === "assist/usage") return { month_eur: 1.24, month_cap_eur: 10, today_eur: .08, today_cap_eur: .5, calls_today: 4, models: { assist: "small-model", planner: "planner", orchestrator: "orchestrator" } };
+  if (operation === "assist/voice") return { text: assist.language === "ru" ? "Составь план для этой задачи" : "Build a plan for this task", language: assist.language, duration_s: 3 };
+  if (operation === "assist/chat" || operation === "assist/step") {
+    const task = items.find((item) => item.path === payload.task?.path);
+    const message = payload.message || payload.step;
+    const plan = /plan|план/i.test(message);
+    const cards = plan ? [{ kind: "plan", title: task?.title || "Make today lighter", steps: [
+      { text: "Clarify the observable outcome", estimate_min: 5, who: "me" },
+      { text: "Prepare a small first draft", estimate_min: 15, who: "ai" },
+      { text: "Check the result against the done condition", estimate_min: 10, who: "me" },
+    ], total_estimate_min: 30 }] : payload.step === "estimate"
+      ? [{ kind: "estimate", minutes_low: 20, minutes_high: 40, confidence: "medium", rationale: "One bounded draft and a human evidence check." }]
+      : [{ kind: "draft", title: "A useful next move", body: "Start with one observable result. Prepare the first small step, then check it against the done condition." }];
+    if (task && /sharpen|concrete|уточн|конкретн|detail/i.test(message)) {
+      const before = task.next_action;
+      task.next_action = "Draft one concrete option and check it against the desired outcome.";
+      const receipt = requestId();
+      mockState.receipts.set(receipt, { path: task.path, before });
+      task.revision = requestId().padEnd(40, "b");
+      cards.splice(0, cards.length, { kind: "applied", status: "completed", publication_status: "merged", source_status: "current", saved: true, action: "refine_task", title: "Next action sharpened", summary: "Synthetic change applied in local demo memory only.",
+        diff: [{ field: "next_action", before, after: task.next_action }], receipt_id: receipt, undo_available: true });
+    }
+    return { thread_id: payload.thread_id || requestId(), reply: assist.language === "ru" ? "Предлагаю небольшой первый шаг. План — это черновик, не подтверждение выполненной работы." : "Let's make the next move small and concrete. Here's a starting point; a plan is not proof that the work is done.",
+      language: assist.language, cards, suggestions: [{ label: t("next"), message: t("nextPrompt") }], usage: {} };
+  }
+  if (operation === "assist/change") {
+    const task = items.find((item) => item.path === payload.path);
+    if (!task || task.revision !== payload.revision) throw Object.assign(new Error("Synthetic source changed."), { status: 409 });
+    const before = task.stage; task.stage = payload.change.stage;
+    const receipt = requestId();
+    mockState.receipts.set(receipt, { path: task.path, before, field: "stage" });
+    task.revision = requestId().padEnd(40, "b");
+    return { cards: [
+      { kind: "applied", status: "completed", publication_status: "merged", source_status: "current", saved: true, title: "Stage updated", diff: [{ field: "stage", before, after: task.stage }], receipt_id: receipt, undo_available: true },
+    ], suggestions: [], usage: {} };
+  }
+  if (operation === "assist/undo") {
+    const receipt = mockState.receipts.get(payload.receipt_id);
+    if (!receipt) throw Object.assign(new Error("Synthetic undo receipt is unavailable."), { status: 409 });
+    const task = items.find((item) => item.path === receipt.path);
+    task[receipt.field || "next_action"] = receipt.before; task.revision = requestId().padEnd(40, "c");
+    mockState.receipts.delete(payload.receipt_id);
+    return { thread_id: requestId(), reply: "Synthetic change undone. The saved next action has been restored.", cards: [], suggestions: [] };
+  }
+  if (operation === "refine" || operation === "change") {
+    const record = { id: requestId(), kind: "refine_task", status: "pending", approval_digest: "b".repeat(64), source_status: "current", action: { task: payload.path, revision: payload.revision, changes: payload.changes || payload.change } };
+    mockState.proposals.set(record.id, record); return structuredClone(record);
+  }
+  if (operation === "decide") {
+    const record = mockState.proposals.get(payload.proposal_id);
+    if (!record) throw Object.assign(new Error("Synthetic proposal not found."), { status: 404 });
+    record.status = payload.decision === "approve" ? "completed" : "declined";
+    if (record.status === "completed") {
+      const task = items.find((item) => item.path === record.action.task);
+      Object.assign(task, record.action.changes);
+      task.revision = requestId().padEnd(40, "d");
+    }
+    return structuredClone(record);
+  }
+  throw Object.assign(new Error("This operation is not part of the synthetic demo. No live API was called."), { status: 422 });
+}
 start();

@@ -77,6 +77,7 @@ export class Dashboard {
   renderToday() {
     const { state, element, append, button, writeButton, empty, openTask, renderTaskRow } = this.ui;
     const work = $("today-work");
+    this.renderPriorities();
     work.replaceChildren();
     if (!state.overview) {
       empty(work, "Tasks are not available yet.", "Source failures are not an empty backlog.");
@@ -88,6 +89,7 @@ export class Dashboard {
         work.append(element("p", `${decisions.length} loaded proposal(s) need a decision; ${results.length} prepared result(s) await review.`));
         work.append(button("Review decisions and results", () => this.ui.setView("activity")));
       }
+
       const attention = state.items.filter((item) => item.attention_eligible);
       work.append(element("h3", "Dates and follow-ups"));
       if (!attention.length) empty(work, "No matching tasks on the loaded page.", "That is not a statement about unassessed tasks.");
@@ -138,6 +140,33 @@ export class Dashboard {
     }));
     news.append(append(element("div", null, "actions"), visit, button("Open Knowledge inbox", () => this.ui.setView("knowledge"))));
     news.append(element("p", "Record this snapshot as the next visit's baseline, including any unshown part. No reading, understanding or task completion is inferred.", "hint"));
+  }
+
+  renderPriorities() {
+    const { state, element, append, button, openTask } = this.ui;
+    const target = $("today-priorities");
+    target.replaceChildren();
+    const ru = document.documentElement?.lang === "ru";
+    const labels = {
+      focus_today: ru ? "Выбрано на сегодня" : "Selected for today",
+      deadline_due: ru ? "Наступил срок" : "Deadline due",
+      deadline_soon: ru ? "Срок приближается" : "Deadline approaching",
+      review_due: ru ? "Пора пересмотреть" : "Review due",
+    };
+    const tasks = state.items.filter((task) => task.attention_eligible);
+    if (!tasks.length) return;
+    const rank = (task) => (task.attention_reasons || []).reduce((score, reason) =>
+      score + (({ deadline_due: 16, deadline_soon: 8, focus_today: 4, review_due: 2 })[reason] || 0), 0);
+    tasks.sort((a, b) => rank(b) - rank(a));
+    tasks.slice(0, 3).forEach((task, i) => {
+      const card = button("", () => openTask(task.path), "priority-card");
+      append(card, element("span", `${ru ? "СЛЕДУЮЩИЙ ШАГ" : "NEXT UP"} / 0${i + 1}`, "priority-number"),
+        element("strong", task.title),
+        element("p", task.next_action || (ru ? "Уточните следующий шаг." : "Clarify the next step.")),
+        element("p", (task.attention_reasons || []).map((reason) => labels[reason] || reason).join(" · "), "hint"));
+      if (task.estimate_min != null) card.append(element("span", `${task.estimate_min} min`, "status"));
+      target.append(card);
+    });
   }
 
   sourceDates(item) {

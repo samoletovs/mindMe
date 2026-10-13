@@ -3,40 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="dark light">
   <meta name="referrer" content="no-referrer">
-  <title>Your vault - mindMe</title>
+  <title>mindMe — Your AI workspace</title>
   <link rel="stylesheet" href="/api/tasks/assets/tasks.css">
   <script type="module" src="/api/tasks/assets/tasks.js"></script>
 </head>
 <body>
-  <!--
-  THESIS: A personal dispatch desk: see the next action and inspect its evidence,
-  not a wall of productivity metrics.
-  OWN-WORLD: Daylight white, cool neutral rails, dark green ink, restrained teal
-  selection, system typography and flat ruled task rows.
-  STORY: Check approved focus and due work; inspect a finding's evidence before
-  feedback or an explicit task preview. A review is never approval.
-  FIRST VIEWPORT: Existing left rail, dated focus and task attention, then changed
-  sources. Knowledge uses the incumbent ledger plus reader. Phones show one pane.
-  FORM: Constrained Operate/Read extension of ledger plus detail (seed 77201f3f).
-  Capture and exact approval stay in the work stream; no new visual world.
-  -->
   <a class="skip-link" href="#main">Skip to workspace</a>
   <header class="app-header">
-    <a class="brand" href="/api/tasks" aria-label="mindMe vault home">mind<span>Me</span><span class="brand-divider"></span><span class="brand-section">Your vault</span></a>
+    <a class="brand" href="/api/tasks" aria-label="mindMe vault home"><span class="brand-symbol" aria-hidden="true">m</span>mind<span>Me</span><span class="brand-divider"></span><span class="brand-section">Personal intelligence</span></a>
     <div class="header-actions">
       <span id="connection" class="connection">Checking sign-in</span>
-      <button id="refresh" class="quiet" type="button" hidden>Refresh</button>
-      <button id="capture-open" class="primary" type="button" hidden>+ Capture a task</button>
-      <button id="sign-out" class="quiet" type="button" hidden>Sign out</button>
+      <button id="command-open" class="quiet ai-feature" type="button" hidden aria-label="Open copilot command bar">Copilot <kbd>⌘ K</kbd></button>
+      <button id="language-toggle" class="quiet" type="button" aria-label="Switch language">EN</button>
+      <button id="theme-toggle" class="quiet" type="button" aria-label="Switch color theme">◐</button>
+      <button id="refresh" class="quiet" type="button" hidden data-i18n="refresh">Refresh</button>
+      <button id="capture-open" class="primary" type="button" hidden data-i18n="capture">+ Capture a task</button>
+      <button id="sign-out" class="quiet" type="button" hidden data-i18n="signOut">Sign out</button>
     </div>
   </header>
 
   <main id="main" tabindex="-1">
     <section id="access" class="access-panel" aria-labelledby="access-title">
       <div class="access-mark" aria-hidden="true">m</div>
-      <h1 id="access-title">Your work, with a clear next step.</h1>
+      <h1 id="access-title">Less managing.<br>More moving forward.</h1>
       <p id="access-message">Checking your personal workspace. No private content is stored in this browser.</p>
       <div class="actions">
         <a id="sign-in" class="button primary" href="/api/tasks/auth/login" hidden>Sign in with Microsoft</a>
@@ -47,12 +38,14 @@
 
     <div id="workspace" class="workspace" hidden>
       <nav class="navigation" aria-label="Workspace views">
-        <button type="button" data-view="today" aria-current="page">Today</button>
-        <button type="button" data-view="tasks">Tasks <span id="tasks-count"></span></button>
-        <button type="button" data-view="knowledge">Knowledge</button>
-        <button type="button" data-view="areas">Areas &amp; projects</button>
-        <button type="button" data-view="activity">Activity <span id="activity-count"></span></button>
-        <div class="nav-note"><strong>One source of truth.</strong><p>Proposals are not commitments. A submitted change is not yet saved to the canonical record.</p></div>
+        <div class="nav-eyebrow">YOUR WORKSPACE</div>
+        <button type="button" data-view="today" aria-current="page"><span data-i18n="today">Today</span><span aria-hidden="true">◉</span></button>
+        <button type="button" data-view="tasks"><span data-i18n="flow">Flow</span><span id="tasks-count"></span></button>
+        <button type="button" data-view="knowledge" data-i18n="knowledgeNav">Knowledge</button>
+        <button type="button" data-view="areas" data-i18n="areasNav">Areas &amp; projects</button>
+        <button type="button" data-view="activity"><span data-i18n="activityNav">Activity</span><span id="activity-count"></span></button>
+        <button id="nav-copilot" class="ai-feature" type="button" hidden><span data-i18n="copilot">Copilot</span><span aria-hidden="true">✦</span></button>
+        <div class="nav-note"><strong>Grounded in your vault.</strong><p>AI helps you move. Your canonical record stays the source of truth.</p><span id="assist-usage"></span></div>
       </nav>
 
       <div class="work-content">
@@ -70,16 +63,16 @@
         <div id="warnings" class="warnings"></div>
 
         <section id="capture-section" class="capture-section" aria-labelledby="capture-title" hidden>
-          <div class="section-heading"><h2 id="capture-title">Get it out of your head</h2><button id="capture-cancel" class="quiet" type="button">Close capture</button></div>
+          <div class="section-heading"><h2 id="capture-title" data-i18n="captureTitle">Get it out of your head</h2><button id="capture-cancel" class="quiet" type="button" data-i18n="closeCapture">Close capture</button></div>
           <p>One rough request is enough. Missing details can stay in Clarify. Keep sensitive details in their private record.</p>
           <p id="capture-context" class="notice" hidden></p>
           <form id="capture-form">
-            <label for="capture-text">What do you need to do?</label>
+            <label for="capture-text" data-i18n="captureQuestion">What do you need to do?</label>
             <textarea id="capture-text" name="text" rows="3" maxlength="2000" required placeholder="Describe the outcome or the question you want to resolve."></textarea>
             <label for="capture-title-input">Title <span class="optional">optional</span></label>
             <input id="capture-title-input" name="title" maxlength="120" placeholder="Leave blank to use the first line of your request">
-            <details><summary>Add the details you already know</summary><div id="capture-details" class="form-grid"></div></details>
-            <div class="form-footer"><p class="hint">First review the proposed record. Capturing it will not start research or an agent.</p><button class="primary" type="submit">Review capture</button></div>
+            <details><summary data-i18n="captureDetails">Add the details you already know</summary><div id="capture-details" class="form-grid"></div></details>
+            <div class="form-footer"><p class="hint">First review the proposed record. Capturing it will not start research or an agent.</p><button class="primary" type="submit" data-i18n="reviewCapture">Review capture</button></div>
           </form>
         </section>
 
@@ -89,6 +82,11 @@
         </section>
 
         <section id="today-section" aria-label="Today in your vault">
+          <section class="today-hero">
+            <div class="hero-copy"><span class="eyebrow" data-i18n="personal">PERSONAL INTELLIGENCE</span><h2 data-i18n="hero">Make space for what matters.</h2><p data-i18n="heroDetail">A clear outcome. A useful next step. A copilot to get you there.</p><button id="briefing-open" class="primary ai-feature" type="button" hidden data-i18n="briefing">✦ Plan my day</button></div>
+            <div class="intelligence-orb" aria-hidden="true"><span></span><span></span><span></span><b>✦</b></div>
+          </section>
+          <div id="today-priorities" class="priority-grid"></div>
           <div id="today-focus" class="focus-summary"></div>
           <div class="today-columns">
             <section aria-labelledby="today-work-title"><h2 id="today-work-title">Work to look at</h2><div id="today-work"></div></section>
@@ -110,21 +108,21 @@
 
         <section id="tasks-section" aria-labelledby="task-list-heading" hidden>
           <div class="task-scope actions" aria-label="Task attention filter">
-            <button id="scope-needs" type="button" aria-pressed="false">Needs you <span id="needs-count"></span></button>
-            <button id="scope-all" type="button" aria-pressed="true">All tasks</button>
+            <button id="scope-needs" type="button" aria-pressed="false"><span data-i18n="needs">Needs you</span><span id="needs-count"></span></button>
+            <button id="scope-all" type="button" aria-pressed="true" data-i18n="allTasks">All tasks</button>
           </div>
           <div id="attention" class="attention"></div>
           <div class="section-heading task-heading">
-            <h2 id="task-list-heading">Your open work</h2>
+            <h2 id="task-list-heading" data-i18n="work">Your work, in motion</h2>
             <div class="segmented" aria-label="Task layout">
-              <button id="layout-list" type="button" aria-pressed="true">List</button>
-              <button id="layout-board" type="button" aria-pressed="false">Board</button>
+              <button id="layout-list" type="button" aria-pressed="true" data-i18n="list">List</button>
+              <button id="layout-board" type="button" aria-pressed="false" data-i18n="board">Flow board</button>
             </div>
           </div>
           <div class="filters">
-            <label class="search-label" for="task-search">Search loaded tasks<input id="task-search" type="search" placeholder="Find an outcome or next action"></label>
-            <label for="stage-filter">Stage<select id="stage-filter"><option value="">All stages</option></select></label>
-            <label for="area-filter">Area<select id="area-filter"><option value="">All areas</option></select></label>
+            <label class="search-label" for="task-search"><span data-i18n="search">Search loaded tasks</span><input id="task-search" type="search" placeholder="Find an outcome or next action" data-i18n-placeholder="searchPlaceholder"></label>
+            <label for="stage-filter"><span data-i18n="stage">Stage</span><select id="stage-filter"><option value="">All stages</option></select></label>
+            <label for="area-filter"><span data-i18n="area">Area</span><select id="area-filter"><option value="">All areas</option></select></label>
           </div>
           <div class="task-layout">
             <div id="list-pane">
@@ -168,6 +166,16 @@
       </div>
     </div>
   </main>
+  <div id="quick-bar" class="quick-bar" hidden>
+    <button id="quick-capture" type="button" class="quiet" data-i18n="capture">+ Capture</button>
+    <button id="quick-mic" type="button" class="mic-button ai-feature" hidden aria-label="Record voice instruction">●</button>
+    <button id="quick-chat" type="button" class="quiet ai-feature" hidden data-i18n="copilot">✦ Copilot</button>
+  </div>
+  <dialog id="copilot-dialog" class="copilot-dialog" aria-labelledby="copilot-title">
+    <div class="copilot-heading"><div><span class="eyebrow">MINDME AI</span><h2 id="copilot-title" data-i18n="copilot">Copilot</h2></div><button id="copilot-close" type="button" class="quiet" aria-label="Close copilot">✕</button></div>
+    <div id="global-chat"></div>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <footer class="app-footer">mindMe <span aria-hidden="true">/</span> Personal work, grounded in your vault.</footer>
   <noscript><p class="notice">JavaScript is required for this workspace. No task action has been taken.</p></noscript>
 </body>

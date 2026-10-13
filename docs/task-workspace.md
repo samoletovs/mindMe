@@ -135,6 +135,47 @@ All source strings are text, not executable HTML. Existing webhook-secret and
 Function-key authentication remain unchanged; do not enable global EasyAuth
 across those routes.
 
+### Owner workspace UI
+
+The static shell uses a deep-ink/violet dark theme and a cool light theme
+(system preference plus an in-memory toggle), with reduced-motion support.
+Today highlights up to three loaded, server-eligible tasks with their recorded
+attention reasons; it is not a new commitment or a claim of complete coverage.
+Flow offers a list and six-stage board; dragging uses deterministic, source-bound
+`assist/change` (or the existing exact refinement when AI is unavailable). Done
+still opens evidence-based closure rather than accepting a drag as verification.
+Knowledge, Areas & projects, standing preparation and Activity remain reachable.
+
+The task copilot has outcome/done conditions, a seven-step AI rail, and an
+in-memory instruction thread. The global copilot opens with Ctrl/Cmd+K or the
+bottom action bar. Its English/Russian controls follow the browser language,
+with an in-memory toggle. Assist uses the existing same-origin API, session,
+CSRF and uncertain-request recovery boundary. Applied cards distinguish pending
+publication from confirmed canonical saving, show exact diffs and receipt-bound
+Undo. Proposal cards retain exact server-bound approval; spoken yes/approve/да
+confirms only a single pending card in the current thread. Plan checkboxes track
+this session's draft, not canonical completion. AI-disabled responses hide AI
+controls and leave the manual task workflow available.
+
+`applied` does not mean saved: canonical saving requires `saved: true`,
+`status: completed`, `publication_status: merged` and `source_status: current`. Submitted/executing
+receipts reconcile by their existing proposal ID with bounded backoff for at
+most two minutes while visible. Uncertain/failed/invalidated receipts require
+inspection; no replacement request or closure continuation is scheduled.
+Source-invalidated card content is removed. Undo is exposed only with confirmed
+saving and server-provided availability. A change response can contain only
+cards/usage, without fabricating an AI reply or thread.
+
+Voice uses browser microphone permission and MediaRecorder (Opus/WebM, or MP4
+where supported), stops at sixty seconds/two MiB, then displays the transcript
+and sends it as an instruction. No browser speech-recognition provider is used.
+Optional speech synthesis is off by default. Chat, audio, task content and UI
+preferences are never written to browser storage; sign-out/expiry clears them
+and stops microphone tracks. No external assets, analytics or service worker.
+For synthetic development only, serve this shell on localhost with `?mock=1`.
+Mock responses never call the real API and fail explicitly for unsupported
+operations; this flag cannot bypass authentication on the deployed origin.
+
 ## Routes
 
 `GET /` is a root-only, anonymous 302 redirect to the fixed relative `/api/tasks`
