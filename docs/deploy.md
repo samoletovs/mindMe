@@ -46,6 +46,83 @@ required. A larger spend needs its separate justification/approval.
 Rollback disables the two new flags. Preserve the existing private ledger and
 writer receipts so uncertain operations cannot be replayed as new tasks.
 
+## AI task assistance rollout
+
+This release adds no resource, public storage, OAuth permission, identity role,
+model deployment or timer. Read-only checks on 2026-10-13 confirmed that the
+existing mindMe Foundry account has `gpt-6-luna`, `gpt-6-sol` and
+`gpt-4o-mini-transcribe`. The Function's existing user-assigned identity has
+`Cognitive Services User` at that account scope. `gpt-6-astra` was not deployed;
+complex chat uses Sol, without creating another deployment. These are
+configuration checks, not a live inference or deployment success claim.
+
+| Setting | Default / constraint |
+|---|---|
+| `MINDME_ASSIST_ENABLED` | `false`; enable only after backend/frontend integration and checked deployment |
+| `MINDME_ASSIST_AUTO_APPLY` | `true`; owner's standing authority for permitted ordinary task edits; false restores proposals |
+| `MINDME_ASSIST_MONTHLY_EUR` | `12`; positive EUR value at most `20`; daily allocation is monthly/20 |
+| `MINDME_ASSIST_MODEL` | `gpt-6-luna`, routine capture/detail/estimate/next/quick assistance |
+| `MINDME_ASSIST_PLANNER_MODEL` | `gpt-6-sol`, planning/resolution/learning |
+| `MINDME_ASSIST_ORCHESTRATOR_MODEL` | `gpt-6-sol`, complex chat fallback when Astra is unavailable |
+| `MINDME_ASSIST_TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe`, English/Russian and mixed speech |
+| `MINDME_ASSIST_MODEL_PRICES_JSON` | `{}`; per-deployment positive `input_eur_per_1m` / `output_eur_per_1m`; conservative fallback EUR 10 / 50 per million tokens, not an advertised model tariff |
+| `MINDME_ASSIST_TRANSCRIPTION_EUR_PER_MINUTE` | `0.006`; positive estimated EUR/minute, measured validated audio duration |
+| `MINDME_ASSIST_MAX_OUTPUT_TOKENS` | `2400`; bounded `128`-`4000`, shared by reservation and the SDK request |
+
+Existing preparation/research count and review-capacity limits remain unchanged.
+The owner approved a combined EUR 20/month ceiling, not EUR 20 for every
+component. Assist estimates and reservations do not replace monitoring combined
+Azure/GitHub spend. Configure conservative model prices before enabling it.
+The price JSON keys must match configured deployment names, for example
+`{"gpt-6-luna":{"input_eur_per_1m":10,"output_eur_per_1m":50},"gpt-6-sol":{"input_eur_per_1m":10,"output_eur_per_1m":50}}`.
+Those example rates are conservative application estimates, not verified Azure
+prices. Replace them only with reviewed deployment-specific EUR estimates;
+zero/negative or unconfigured-model overrides are rejected.
+Existing transcription settings retain their legacy optional behavior; the
+new assist transcription deployment applies only behind the assist flag.
+
+After the coordinator approves merging both checked PRs, deploy from a clean
+checkout of their exact reviewed revision. Do not publish a dirty worktree or
+mistake a green unit-test workflow for deployment:
+
+```powershell
+git fetch origin --quiet
+$release = "<reviewed-merged-commit>"
+git rev-parse HEAD
+git status --porcelain
+# Both outputs must establish the exact intended revision and a clean tree.
+gh run list --repo samoletovs/mindMe --commit $release --workflow tests.yml
+# Require the native test run for this exact revision to pass.
+az account show
+# Verify the personal identity/subscription privately; never paste identifiers.
+az functionapp config appsettings set -g foundrylab-rg -n func-mindme-ymcptc `
+  --settings MINDME_ASSIST_ENABLED=false --output none
+Set-Location harness
+func azure functionapp publish func-mindme-ymcptc --python
+Set-Location ..
+az functionapp config appsettings set -g foundrylab-rg -n func-mindme-ymcptc `
+  --settings MINDME_ASSIST_AUTO_APPLY=true MINDME_ASSIST_MONTHLY_EUR=12 `
+  MINDME_ASSIST_MODEL=gpt-6-luna MINDME_ASSIST_PLANNER_MODEL=gpt-6-sol `
+  MINDME_ASSIST_ORCHESTRATOR_MODEL=gpt-6-sol `
+  MINDME_ASSIST_TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe `
+  MINDME_ASSIST_TRANSCRIPTION_EUR_PER_MINUTE=0.006 `
+  "MINDME_ASSIST_MODEL_PRICES_JSON={}" `
+  MINDME_ASSIST_MAX_OUTPUT_TOKENS=2400 --output none
+# Configure the audited model prices, verify remaining combined budget,
+# resolved existing secrets, owner sign-in, and native writer readiness first.
+# Only then, with the coordinator's deployment instruction:
+az functionapp config appsettings set -g foundrylab-rg -n func-mindme-ymcptc `
+  --settings MINDME_ASSIST_ENABLED=true --output none
+```
+
+Synthetic live acceptance must check both English and Russian task voice,
+typed chat, deterministic board moves, fresh-source validation, actual
+publication receipts, Undo and unconfirmed-delivery replay. No real task should
+be closed for a smoke test. Register `/tasks`, `/next` and `/plan` using the
+existing `scripts/dev/set_bot_commands.py` after publishing. Record the deployed
+revision and actual results. Roll back with `MINDME_ASSIST_ENABLED=false`;
+do not erase private assist/writer receipts to clear an uncertain request.
+
 ## Telegram copy rollout
 
 Plain-English copy has three delivery surfaces; updating one does not update all:

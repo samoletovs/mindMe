@@ -196,7 +196,12 @@ def parse_task(raw: str, path: str) -> dict[str, Any]:
     title = re.search(r"(?m)^# ([^\n]+)", raw)
     if title is None:
         raise SourceError("task_title_missing")
-    task: dict[str, Any] = {"path": path, "title": title[1].strip()}
+    task: dict[str, Any] = {"path": path, "title": title[1].strip(), "ai_hint": None}
+    estimate = values.get("estimate_min")
+    if estimate is not None:
+        if type(estimate) is not int or not 0 <= estimate <= 10000:
+            raise SourceError("task_definition_invalid")
+        task["estimate_min"] = estimate
     legacy_status = values.get("status", "")
     if not isinstance(legacy_status, str):
         raise SourceError("task_metadata_invalid")

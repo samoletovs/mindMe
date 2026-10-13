@@ -186,7 +186,7 @@ def _receipt_fields(record: dict[str, Any]) -> dict[str, Any]:
         key: copy.deepcopy(record[key]) for key in (
             "id", "kind", "text", "source_path", "source_revision", "source_url", "status",
             "action", "created_on", "expires_on", "activity", "result", "approved_on",
-            "approval_digest", "reviewed", "acknowledged_unavailable", "publish_result",
+            "approval_digest", "approved_by", "reviewed", "acknowledged_unavailable", "publish_result",
             "task_workspace",
             "closure_scan_protocol",
             "publication_action_id",

@@ -17,7 +17,7 @@
 3. **Never commit secrets.** Use Key Vault. `.env` is gitignored — never commit a populated `.env`.
 4. **Never widen cloud exposure.** Personal OS content may live only in the private `personal-os/` container guarded by managed-identity RBAC and Microsoft-managed at-rest encryption. Do not add public access, SAS-based distribution, or plaintext exports outside that boundary without explicit human approval.
 5. **Never use a corporate / work Microsoft account** for any auth. This is a personal project on the developer's personal Azure subscription only. Verify the signed-in identity with `az account show` before deploying.
-6. **Cost discipline.** Default to consumption plans, gpt-4o-mini, no premium SKUs. Budget cap: €10/mo.
+6. **Cost discipline.** Default to consumption plans, existing model deployments and no premium SKUs. The owner-approved combined AI budget for the opt-in task assist is EUR 20/mo; its separate estimated assist ledger defaults to EUR 12/mo. Existing preparation/research limits remain unchanged.
 7. **Pre-push audit (every push, not just the first).** Before `git push`, run `./scripts/audit-leaks.ps1` (or `./scripts/audit-leaks.ps1 -Staged` for staged-only). Exits non-zero on hits. The scan covers emails, real names, Telegram IDs, subscription GUIDs, addresses. If found, move the value to `.env` (gitignored) or the Personal OS, then re-stage. Same discipline as `samoletovs/me`.
 8. **Silence httpx + httpcore loggers before constructing any Telegram client.** `python-telegram-bot` uses `httpx` internally. `httpx` logs full request URLs at INFO level, and Telegram URLs contain the bot token in the path (`/bot<TOKEN>/getMe`). Without silencing, the token leaks to terminal scrollback, log files, and any session capture. Set `logging.getLogger("httpx").setLevel(logging.WARNING)` (and same for `httpcore`) BEFORE `Application.builder().token(...)` is called. If a token ever leaks, rotate it immediately via @BotFather (`/revoke` then `/token`). This rule cost us one token rotation already on 2026-05-10 — don't pay it again.
 9. **Never put personal content into OpenTelemetry span attributes.** Trace spans follow the same policy as logs (rule 1): IDs, sizes, durations, status codes, agent names — never prompts, completions, message bodies, briefing text, journal text, or any URL that contains a Telegram bot token. Auto-instrumentation for `httpx`/`requests`/`urllib` is **disabled** via `OTEL_PYTHON_DISABLED_INSTRUMENTATIONS` (set both in code and as an app setting) precisely because those instrumentors capture full URLs. GenAI content capture is **disabled** via `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=false` (same belt-and-suspenders pattern). All HTTP and LLM telemetry uses manual spans declared in `harness/function_app.py` with explicit, audited attribute lists. If you add a span, add it to the architecture.md §8 table; if you can't justify each attribute under rule 1, drop it.
@@ -247,3 +247,14 @@ Closure requires owner-checked acceptance plus result/evidence/verification date
 learning stays in the closed canonical task before any separately reviewed wiki
 promotion. Operational receipts remain in the existing private state, not a
 second task store. Never log task content, auth tokens/codes, or identity claims.
+
+The separate default-off `MINDME_ASSIST_ENABLED` adapter has owner-granted
+standing authority for ordinary source-bound task edits when
+`MINDME_ASSIST_AUTO_APPLY=true`. It still prepares/approves through TaskService
+and publishes through memex; no writer safety gate is bypassed. Unstated
+deadlines and unconfirmed closure remain proposals. An explicit owner statement
+that a selected task is done is attestation, not permission to invent evidence.
+`applied` card kind alone is not publication: require completed/merged/current
+and `saved: true`. Threads/audio/delivery guards stay private and bounded;
+the voice endpoint only transcribes, never creates or changes a task.
+See `docs/task-workspace.md` AI assist and `docs/deploy.md` for the exact contract.

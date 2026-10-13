@@ -90,6 +90,137 @@ and web transport are respectively `task_sources.py`, `task_service.py`,
 `task_auth.py`, `task_telegram.py`, and `task_web.py`. They share
 `BriefingStore`, `BriefingLoop`, and `ActionGateway`.
 
+## AI assist
+
+The optional `MINDME_ASSIST_ENABLED` flag defaults off. Assistance shares the
+existing owner BFF, CSRF header (`X-MindMe-CSRF`), exact HTTPS origin, permitted
+canonical task reader and memex writer. It does not grant access to private,
+routed or sensitivity-filtered tasks. Model calls reuse the existing Foundry
+project and managed identity, with `store=False`, bounded context/output and no
+automatic SDK retry. Task text, audio and model output never enter logs or traces.
+
+All assist routes have the full prefix `/api/tasks/api/assist/`:
+
+| Suffix | Method | Input / result |
+|---|---|---|
+| `voice` | POST | Raw audio, `X-Request-Id` UUID; transcript, language and duration |
+| `chat` | POST | UUID `request_id`, message (up to 4,000 characters), optional thread/task binding, language, voice flag |
+| `step` | POST | UUID `request_id`, capture/detail/estimate/plan/next/execute/resolve/learn, optional task and input |
+| `usage` | GET | Estimated monthly/daily EUR usage, caps, calls and configured model names |
+| `undo` | POST | UUID `request_id` and server-issued `receipt_id`; safe inverse of a confirmed eligible edit |
+| `change` | POST | UUID `request_id`, `path`, `revision`, `change: {"stage": "ready"}`; deterministic board move, no model call |
+| `receipt` | POST | UUID `request_id`, `receipt_id`; fresh publication/Undo projection, no model call or new task operation |
+
+Audio is at most 2 MiB and 120 seconds, validated before transcription. Supported
+content types are `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/mpeg` and
+`audio/wav`. Language is detected automatically, including mixed English/Russian.
+Unparseable recordings are rejected explicitly, not assigned a guessed duration.
+MP4 validation supports non-fragmented and fragmented single-track AAC-LC,
+including Safari-shaped `moof/trun` output and unknown initialization duration.
+It derives bounds from track/sample times and exact media-data coverage, not
+compressed byte size. WebM Opus without a Duration field and unknown-length
+segments/clusters is supported, as are Telegram Ogg Opus, MP3 and PCM/float WAV.
+Encrypted/multi-track containers, unsupported codecs and edit lists remain
+explicit format errors. Synthetic Safari-shaped fixtures are checked; an
+actual iPhone recording still belongs to authorized post-deploy acceptance.
+Audio is never persisted. The same UUID must be retained after an uncertain
+response: a new UUID is not a retry of the same operation.
+
+Chat and step responses contain `thread_id`, a short language-matched `reply`,
+`language`, typed `cards`, at most four follow-up `suggestions`, and `usage`.
+Private working threads retain at most twelve bounded turns for fourteen days
+in `system/mindme/task-assist-state-v1.json` in the existing private container,
+not browser storage. The sidecar has a 512 KiB ceiling, forty threads,
+160 request receipts, 160 inverse-operation records, 200 Telegram bindings and
+300 Telegram delivery guards. Capacity fails explicitly. Source-version
+bindings must be rechecked before recalled or cached task content is exposed;
+obsolete/private sources cannot become fresh authority through thread recall.
+Unconfirmed non-content operation guards remain protected from silent retry.
+Capture/detail produce a single batched task definition/edit. Estimates and
+plans are drafts, not commitments or evidence of completion. Execute prepares
+a work product (such as a checklist or email draft), never sends it or performs
+an external consequential action. Knowledge is a learning/wiki candidate, not
+automatic wiki publication. Board suggestions use the server's permitted,
+bounded inventory; incomplete attention must not become "nothing is due."
+
+The current strict memex contract has no `estimate_min` write field and does
+not permit `context` or `subtasks` in an existing-task refinement. Assist
+therefore returns estimate/full-plan cards without claiming those structures
+were saved; an accepted next-action refinement uses the existing writer path.
+Creation persists a generated estimate as plain text in accepted `context`
+and plan steps in accepted `subtasks` (at most six), preserving supplied content
+within the writer bounds. Learning
+can be saved with verified closure. Persisting structured estimates or replacing
+existing plan sections requires a coordinated writer contract/manifest update,
+not an assist-side whitelist bypass. Overview exposes `estimate_min` only when
+that valid field already exists in a canonical task.
+
+The owner's explicitly granted assist standing authority is controlled by
+`MINDME_ASSIST_AUTO_APPLY` (default true while assist itself remains off).
+Ordinary capture/refinement, next actions, stage and focus/review edits can be
+approved server-side through the existing proposal/decision/publication chain.
+Receipts identify `approved_by: assist-standing`. Memex native checks, exact
+writer manifest and canonical publication gates remain mandatory. A submitted
+PR, scan checkpoint or unknown result is not a saved change. An `applied` card
+represents a standing-authority attempt, not publication by its kind alone:
+`saved` is true only with `status: completed`, `publication_status: merged`
+and a current canonical source. Pending cards have `saved: false`, raw receipt
+status such as `submitted`, `executing` or `uncertain`, and no available Undo.
+Their `receipt_id` is the existing 24-hex proposal ID. Poll
+`POST /api/tasks/api/assist/receipt` with `{request_id, receipt_id}` and the same
+CSRF/origin protection. It returns the chat-style envelope with a refreshed
+`applied` card including `status`, `publication_status`, `source_status`,
+`saved` and `undo_available`; only completed/merged/current confirms publication.
+Reuse the poll UUID for the same receipt: reconciliation projects its current
+state rather than freezing an earlier pending response. The legacy
+`/api/tasks/api/reconcile` still returns the raw receipt and is unchanged.
+Polling does not continue a closure scan; checkpoints require the existing
+explicit continuation protocol. Reversible edits expose an Undo action bound to the actual
+current canonical revision. Task creation and closure are not silently undone
+by deletion or reopening.
+
+Card `status` is one of `completed`, `submitted`, `uncertain`, `unknown`,
+`conflict`, `failed`, `invalidated`, `executing`, `running`, `pending`,
+`accepted`, `snoozed`, `in_progress`, `cancelled`; other values normalize to
+`uncertain`. `publication_status` is `submitted`, `merged`, `conflict`, `failed`,
+`in_progress`, `unknown` or `null`. `source_status` is `current`, `unavailable`
+or `changed_or_removed`, with missing authority treated as `unavailable`.
+Clients must check publication/source flags, not infer saving from card kind.
+
+Deadlines must come from the owner's actual statement, not AI inference.
+Unstated deadline changes and closure without owner attestation stay proposals.
+An explicit statement that the selected task is done can authorize closure, but
+the model cannot fabricate results or evidence. Required result/evidence and the
+owner-calendar verification date still pass existing closure validation; missing
+facts need clarification. Disabling auto-apply restores ordinary proposal cards
+approved through `/api/tasks/api/decide`. Disabling assist does not erase writer
+receipts or grant legacy paths extra authority.
+Proposal cards expose `action_digest`, exactly the existing `approval_digest`;
+send `{proposal_id, approval_digest: card.action_digest, decision: "approve"}`
+to decide. The legacy `/api/change` remains proposal-only. Dragging to Done
+cannot replace explicit completion attestation.
+
+English and Russian Telegram task messages use the same assist service.
+`/tasks` shows focus/needs-you, `/next` suggests next work, `/plan <task>` prepares
+a plan, and `/task <text>` captures a task. Existing explicit `/note`, `/idea`,
+`/diary`, research and knowledge commands keep their routes. Replying in a task
+assist thread preserves its server-owned task context. A yes/approve/да/
+подтверждаю reply can approve the latest pending assist proposal; it cannot
+approve an unrelated capture. Telegram callbacks retain the exact owner/private
+DM allowlist and actual bot-message binding.
+
+Assist spending is separate from the existing three/day, forty/month preparation
+and research limits, which remain unchanged. The assist ledger uses estimated
+EUR costs from token usage and configured per-model prices. Monthly cap defaults
+to EUR 12 and cannot exceed EUR 20; the daily assist allocation is a soft
+threshold of monthly/20, not an additional hard call limit. Accounting periods
+use UTC; owner-calendar dates are used separately for task context/attestation.
+Reservations happen atomically before paid calls. These application estimates
+are not an Azure invoice or a guarantee that combined services stay under the
+owner-approved EUR 20/month total. Unknown calls retain their reservation rather
+than masquerading as free successful retries. Capacity, spending, model and
+request conflicts return explicit safe errors.
+
 ## Sign-in and authorization
 
 The BFF uses the supported MSAL authorization-code flow with S256 PKCE. It selects
