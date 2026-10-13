@@ -113,6 +113,48 @@ assert.equal(task.stage, "ready");
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node is required")
+def test_assist_routes_send_canonical_uuid_while_legacy_routes_keep_hex32():
+    from task_assist import _UUID_RE
+
+    # Live voice failed because assist IDs had their dashes stripped; bind the JS check to the real host regex.
+    run_ui_test(r"""
+(async () => {
+  const canonical = new RegExp("^" + %s.replace(/\\Z$/, "$"));
+  let counter = 0;
+  crypto.randomUUID = () => `3f2a${String(++counter).padStart(4, "0")}-9c1d-4e5f-8a7b-0123456789ab`;
+  assist.available = true;
+  state.csrf = "synthetic";
+  const path = "tasks/synthetic.md";
+  state.items = [{ path, revision: "a".repeat(40), stage: "ready" }];
+  state.selected = { path, revision: "a".repeat(40) };
+  const ids = {};
+  assistMutation = async (operation, payload) => { ids[operation] = payload.request_id; };
+  await sendChat(path, "Plan this.");
+  await sendStep(path, "plan");
+  await undoAssist(path, "c".repeat(24));
+  moveTask(state.items[0], "doing");
+  const receiptCalls = [];
+  api = async (operation, payload) => { receiptCalls.push(payload.request_id); return { cards: [{ kind: "applied", receipt_id: "d".repeat(24), status: "executing" }] }; };
+  setTimeout = () => 0;
+  const card = { kind: "applied", receipt_id: "d".repeat(24), status: "submitted" };
+  watchReceipt(path, card);
+  const poll = assist.polls.get(card.receipt_id);
+  assert.ok(poll);
+  await pollReceipt(poll);
+  poll.timer = null;
+  await pollReceipt(poll);
+  for (const operation of ["assist/chat", "assist/step", "assist/undo", "assist/change"]) {
+    assert.match(ids[operation], canonical, operation);
+  }
+  assert.equal(receiptCalls.length, 2);
+  assert.match(receiptCalls[0], canonical);
+  assert.equal(receiptCalls[0], receiptCalls[1]);
+  assert.match(requestId(), /^[0-9a-f]{32}$/);
+})()
+""" % json.dumps(_UUID_RE.pattern))
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is required")
 def test_receipt_poll_uses_existing_id_and_never_continues_closure():
     run_ui_test(r"""
 (async () => {
@@ -124,7 +166,7 @@ def test_receipt_poll_uses_existing_id_and_never_continues_closure():
   watchReceipt("global", card);
   assert.equal(card.undo_available, false);
   const poll = scheduled[0];
-  assert.match(poll.requestId, /^[a-f0-9]{32}$/);
+  assert.match(poll.requestId, /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/);
   const refreshed = (fields) => ({ thread_id: "t", reply: "", language: "en", suggestions: [], usage: {},
     cards: [{ kind: "applied", receipt_id: card.receipt_id, title: "Synthetic", summary: "", diff: [], ...fields }] });
   const calls = [];
@@ -382,7 +424,9 @@ def test_real_browser_owner_boundary_voice_and_text_only_proposal(workspace_url,
     page.wait_for_function("document.querySelector('.ai-card.proposal').textContent.includes('Submitted')")
     voice = next(request for operation, request in calls if operation == "assist/voice")
     assert voice.headers["x-mindme-csrf"] == "synthetic-csrf"
-    assert len(voice.headers["x-request-id"]) == 32
+    from task_assist import _uuid
+
+    assert _uuid(voice.headers["x-request-id"]) == voice.headers["x-request-id"]
     assert voice.headers["content-type"].startswith("audio/")
     assert voice.post_data_buffer and len(voice.post_data_buffer) <= 2 * 1024 * 1024
     if recover_voice:
@@ -392,6 +436,7 @@ def test_real_browser_owner_boundary_voice_and_text_only_proposal(workspace_url,
         assert recovered[0].post_data_buffer == recovered[1].post_data_buffer
     chat = next(request for operation, request in calls if operation == "assist/chat")
     assert chat.post_data_json["task"] == {"path": "tasks/synthetic.md", "revision": "a" * 40}
+    assert _uuid(chat.post_data_json["request_id"]) == chat.post_data_json["request_id"]
     decision = next(request for operation, request in calls if operation == "decide")
     assert decision.post_data_json == {"proposal_id": "b" * 24, "approval_digest": "c" * 64, "decision": "approve"}
     assert decision.headers["x-mindme-csrf"] == "synthetic-csrf"

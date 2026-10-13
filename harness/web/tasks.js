@@ -116,6 +116,10 @@ function attentionDate() {
 function requestId() {
   return crypto.randomUUID().replaceAll("-", "");
 }
+// Assist routes require the canonical hyphenated UUID; legacy task routes keep 32-hex IDs.
+function assistRequestId() {
+  return crypto.randomUUID().toLowerCase();
+}
 function safeLink(text, value) {
   try {
     const url = new URL(value);
@@ -1770,7 +1774,7 @@ function watchReceipt(key, card) {
   if (isMockMode() || !/^[a-f0-9]{24}$/.test(card.receipt_id || "")
     || !["submitted", "executing"].includes(card.status) || assist.polls.has(card.receipt_id)) return;
   card.undo_available = false;
-  const poll = { key, card, generation: state.sessionGeneration, started: Date.now(), attempt: 0, timer: null, requestId: requestId() };
+  const poll = { key, card, generation: state.sessionGeneration, started: Date.now(), attempt: 0, timer: null, requestId: assistRequestId() };
   assist.polls.set(card.receipt_id, poll);
   scheduleReceiptPoll(poll);
 }
@@ -1854,7 +1858,7 @@ async function sendChat(key, raw, voice = false) {
   thread.messages.push({ role: "user", text: message });
   thread.draft = "";
   await assistMutation("assist/chat", {
-    request_id: requestId(), message, thread_id: thread.id, task: taskReference(key),
+    request_id: assistRequestId(), message, thread_id: thread.id, task: taskReference(key),
     language: voice ? "auto" : assist.language, voice,
   }, key);
 }
@@ -1863,13 +1867,13 @@ async function sendStep(key, step) {
   if (assist.recorder || assist.acquiringVoice) { showNotice(t("finishVoice"), "pending"); return; }
   threadFor(key).messages.push({ role: "user", text: `✦ ${t(`${step}Step`)}` });
   await assistMutation("assist/step", {
-    request_id: requestId(), step, task: taskReference(key), input: null, language: assist.language,
+    request_id: assistRequestId(), step, task: taskReference(key), input: null, language: assist.language,
   }, key);
 }
 async function undoAssist(key, receiptId) {
   if (!receiptId) return;
   const generation = state.sessionGeneration;
-  await assistMutation("assist/undo", { request_id: requestId(), receipt_id: receiptId }, key, async () => {
+  await assistMutation("assist/undo", { request_id: assistRequestId(), receipt_id: receiptId }, key, async () => {
     $("toast").hidden = true;
     for (const thread of assist.threads.values()) for (const message of thread.messages) {
       for (const card of message.cards || []) if (card.receipt_id === receiptId) card.undo_available = false;
@@ -1897,7 +1901,7 @@ function moveTask(task, stage) {
   if (stage === "done") { openTask(task.path).then(() => { state.tab = "close"; renderDetail(); showNotice(t("closeHint")); }); return; }
   if (assist.available) {
     assistMutation("assist/change", {
-      request_id: requestId(), path: task.path, revision: task.revision, change: { stage },
+      request_id: assistRequestId(), path: task.path, revision: task.revision, change: { stage },
     }, task.path);
     return;
   }
@@ -1956,7 +1960,7 @@ async function toggleVoice(key) {
       }
       renderChats();
       let transcription = null;
-      await mutate("assist/voice", { audio, request_id: requestId() }, async (result) => {
+      await mutate("assist/voice", { audio, request_id: assistRequestId() }, async (result) => {
         if (typeof result.text !== "string" || !result.text.trim()) throw new Error(t("voiceEmpty"));
         threadFor(key).draft = result.text;
         transcription = result.text;
