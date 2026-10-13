@@ -273,13 +273,19 @@ function field(parent, name, label, options = {}) {
   parent.append(wrapper);
   return control;
 }
+let infoTipCount = 0;
 function infoTip(text) {
   const node = element("span", null, "info-tip");
   node.tabIndex = 0;
+  node.setAttribute("role", "note");
   node.setAttribute("aria-label", "More information");
   const tip = element("span", text, "tip-text");
+  tip.id = `info-tip-${++infoTipCount}`;
   tip.setAttribute("role", "tooltip");
-  return append(node, element("span", "i", "info-mark"), tip);
+  node.setAttribute("aria-describedby", tip.id);
+  const mark = element("span", "i", "info-mark");
+  mark.setAttribute("aria-hidden", "true");
+  return append(node, mark, tip);
 }
 function empty(parent, title, message) {
   const node = element("div", null, "empty");

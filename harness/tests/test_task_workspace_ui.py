@@ -264,6 +264,12 @@ def test_real_browser_layouts_and_task_chat(workspace_url, chromium, width, heig
     assert visible_panels(page) == ["today"]
     hero = page.locator("#hero-line").inner_text()
     assert "today" in hero and "~" in hero, hero
+    tip = page.locator(".info-tip").first
+    described = tip.get_attribute("aria-describedby")
+    assert described and page.locator(f"#{described}").count() == 1
+    tip.focus()
+    assert page.locator(f"#{described}").is_visible()
+    tip.blur()
     desktop = width >= 1024
     assert page.locator("#quick-bar").is_visible() is not desktop
     assert page.locator("#header-mic").is_visible() is desktop
