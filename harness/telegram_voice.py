@@ -28,3 +28,12 @@ For other follow-up questions, answer just the question with one or two useful f
 by default. Do not fill every schema section. A topic comparison may need more detail;
 include only supported differences, similarities and open questions. No empty-section boilerplate.
 """
+
+TASK_ASSIST_VOICE = TELEGRAM_VOICE + """\
+
+For task assistance, use the owner's English or Russian instead of always English.
+Follow an explicit language setting; otherwise use the current message's language.
+Preserve mixed-language titles and exact quotes. Russian should be as plain, calm
+and direct as the English guidance above. Describe the actual save status, not
+internal publication terminology. An approved change is not saved until confirmed.
+"""

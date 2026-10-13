@@ -10,7 +10,7 @@ import pytest
 from briefing_loop import BriefingLoop
 from briefing_plan import fingerprint
 from briefing_state import StateError, empty_state, prune_state
-from task_service import TaskError, TaskService, validate_changes
+from task_service import TaskError, TaskService, _receipt_fields, validate_changes
 from task_sources import parse_task
 from task_state import workspace
 from test_briefing_state import FakeBlob, proposal as legacy_proposal, store_for
@@ -25,6 +25,12 @@ SOURCE = (
     "```yaml\n"
     "```\n"
 )
+
+
+def test_receipt_projection_preserves_assist_standing_audit_marker():
+    record = legacy_proposal()
+    record.update(task_workspace=True, kind="capture_task", approved_by="assist-standing")
+    assert _receipt_fields(record)["approved_by"] == "assist-standing"
 
 
 def source_text(stage="ready", *, complete=True):

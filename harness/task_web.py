@@ -25,6 +25,8 @@ from dashboard_sources import DashboardError
 from execution_budget import BudgetExceeded, execution_budget
 from knowledge_plan import KnowledgeError
 from task_auth import AuthError, TaskAuth
+from task_assist import TaskAssistError
+from task_assist_state import AssistStoreError
 from task_service import TaskError, TaskService
 from vault_evolve import EvolveError
 
@@ -34,13 +36,24 @@ SECURITY_HEADERS = {
     "Cache-Control": "no-store, private", "Pragma": "no-cache",
     "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
     "X-Frame-Options": "DENY", "Cross-Origin-Opener-Policy": "same-origin",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Permissions-Policy": "camera=(), microphone=(self), geolocation=()",
     "Content-Security-Policy": (
         "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
         "img-src 'self'; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
     ),
 }
 ERROR_TEXT = {
+    "assist_disabled": "AI assistance is not enabled. Your saved tasks are unchanged.",
+    "budget_exhausted": "The AI spending limit has been reached. Your saved tasks remain available.",
+    "rate_limited": "Too many AI requests are active. Wait before starting another request.",
+    "model_unavailable": "The AI model could not confirm this request. Check its saved receipt before retrying.",
+    "assist_request_invalid": "Check the request fields and use a valid request ID.",
+    "assist_request_conflict": "This request ID belongs to a different request. No new action was started.",
+    "assist_request_uncertain": "This request has an unconfirmed outcome. Do not send it again as a new request.",
+    "assist_audio_invalid": "This recording could not be read. Record again in a supported audio format.",
+    "assist_audio_too_long": "Keep the recording under two minutes and 2 MB.",
+    "assist_capacity": "The private AI receipt store is full. No new action was started.",
+    "assist_undo_unavailable": "This change cannot safely be reversed automatically. Inspect the current task.",
     "authentication_required": "Sign in with the configured personal Microsoft account.",
     "auth_unconfigured": "Owner sign-in is not configured. No task data is available.",
     "auth_configuration_invalid": "Owner sign-in configuration needs attention. Access is disabled.",
@@ -117,13 +130,40 @@ def _body(req: func.HttpRequest) -> dict[str, Any]:
     return value
 
 
+def assist_error(error: TaskAssistError | AssistStoreError) -> tuple[str, int]:
+    code = str(error)
+    if code == "assist_monthly_budget_exhausted":
+        return "budget_exhausted", 402
+    if code.endswith("_capacity"):
+        return "rate_limited", 429
+    if code in {"assist_not_configured", "assist_disabled"}:
+        return "assist_disabled", 503
+    if code == "assist_request_conflict":
+        return code, 409
+    if code == "assist_request_uncertain":
+        return code, 503
+    if code == "task_source_changed":
+        return code, 409
+    if code in {"assist_audio_invalid", "assist_audio_too_long"}:
+        return code, 422
+    if isinstance(error, AssistStoreError) or code in {
+        "assist_model_unavailable", "assist_model_output_invalid", "assist_model_usage_invalid",
+        "assist_transcription_not_configured", "assist_transcription_invalid", "assist_configuration_invalid",
+        "assist_source_unavailable",
+    }:
+        return "model_unavailable", 503
+    return "assist_request_invalid", 422
+
+
 class TaskWeb:
     def __init__(
         self, *, env: Mapping[str, str], auth: Callable[[], TaskAuth], service: Callable[[], TaskService],
         dashboard: Callable[[TaskService, TaskAuth], DashboardService] | None = None,
+        assist: Callable[[TaskService], Any] | None = None,
     ) -> None:
         self.env, self.auth_factory, self.service_factory = env, auth, service
         self.dashboard_factory = dashboard
+        self.assist_factory = assist
 
     def handle(self, req: func.HttpRequest, path: str = "") -> func.HttpResponse:
         if self.env.get("MINDME_WEB_ENABLED", "").lower() != "true":
@@ -133,9 +173,18 @@ class TaskWeb:
                 return self._handle(req, path.strip("/"))
         except AuthError as error:
             return response({"error": str(error), "message": ERROR_TEXT.get(str(error), "Sign-in could not be verified. Try signing in again.")}, error.status)
+        except (TaskAssistError, AssistStoreError) as error:
+            code, status = assist_error(error)
+            log.warning("task assist rejected code=%s", code)
+            return response({"error": code, "message": ERROR_TEXT[code]}, status)
         except (TaskError, PlanError, KnowledgeError, DashboardError, EvolveError) as error:
             code = str(error)
             status = (
+                402 if code == "budget_exhausted"
+                else 429 if code in {"rate_limited", "assist_capacity"}
+                else 503 if code in {"assist_disabled", "model_unavailable", "assist_request_uncertain"}
+                else 409 if code == "assist_request_conflict"
+                else
                 503 if code in {"task_timezone_not_configured", "task_timezone_invalid", "task_clock_invalid"}
                 else 409 if code in {
                     "task_source_changed", "task_request_conflict", "task_source_not_canonical",
@@ -198,6 +247,27 @@ class TaskWeb:
             return response({"error": "tasks_not_configured", "message": "Task integration is not enabled. No task data was loaded."}, 503)
         service = self.service_factory()
         today = datetime.now(timezone.utc).date()
+        if path.startswith("api/assist/"):
+            if self.env.get("MINDME_ASSIST_ENABLED", "").lower() != "true" or self.assist_factory is None:
+                raise TaskError("assist_disabled")
+            assist = self.assist_factory(service)
+            if path == "api/assist/usage" and method == "GET":
+                return response(assist.usage(today))
+            if method != "POST":
+                return response({"error": "method_not_allowed"}, 405)
+            if path == "api/assist/voice":
+                return response(assist.voice(
+                    req.get_body(), req.headers.get("Content-Type", "").split(";")[0].strip().lower(),
+                    req.headers.get("X-Request-Id", ""), today,
+                ))
+            operations = {
+                "api/assist/chat": assist.chat, "api/assist/step": assist.step, "api/assist/undo": assist.undo,
+                "api/assist/change": assist.change,
+                "api/assist/receipt": assist.receipt,
+            }
+            if path in operations:
+                return response(operations[path](_body(req), today))
+            return response({"error": "route_not_found"}, 404)
         if path.startswith("api/dashboard/") and self.dashboard_factory is not None:
             dashboard = self.dashboard_factory(service, auth)
             if method == "GET" and path in {"api/dashboard/today", "api/dashboard/inbox"}:
