@@ -36,6 +36,7 @@ function node() {
     get firstElementChild() { return this.children[0]; },
     classList: { remove() {}, add() {} },
     addEventListener(name, callback) { this.events[name] = callback; },
+    setAttribute(name, value) { this[name] = value; },
     querySelector() { return null; },
     scrollIntoView() {},
     reset() {},

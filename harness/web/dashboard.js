@@ -75,8 +75,9 @@ export class Dashboard {
   }
 
   renderToday() {
-    const { state, element, append, button, writeButton, empty, openTask, renderTaskRow } = this.ui;
+    const { state, element, append, button, writeButton, empty, infoTip, openTask, renderTaskRow } = this.ui;
     const work = $("today-work");
+    this.renderPriorities();
     work.replaceChildren();
     if (!state.overview) {
       empty(work, "Tasks are not available yet.", "Source failures are not an empty backlog.");
@@ -88,9 +89,10 @@ export class Dashboard {
         work.append(element("p", `${decisions.length} loaded proposal(s) need a decision; ${results.length} prepared result(s) await review.`));
         work.append(button("Review decisions and results", () => this.ui.setView("activity")));
       }
+
       const attention = state.items.filter((item) => item.attention_eligible);
       work.append(element("h3", "Dates and follow-ups"));
-      if (!attention.length) empty(work, "No matching tasks on the loaded page.", "That is not a statement about unassessed tasks.");
+      if (!attention.length) empty(work, "Nothing due right now.", "Only loaded tasks are checked.");
       for (const task of attention.slice(0, 5)) {
         const row = renderTaskRow(task, () => openTask(task.path));
         work.append(row);
@@ -100,7 +102,9 @@ export class Dashboard {
         work.append(element("h3", "Waiting, not automatically due"));
         for (const task of waiting.slice(0, 3)) work.append(renderTaskRow(task, () => openTask(task.path)));
       }
-      work.append(element("p", `Task day ${state.overview.attention.calendar_date} / ${state.overview.attention.timezone}. This summary uses the task service's dates and eligibility, not your browser clock.`, "hint"));
+      const day = element("p", `Task day ${state.overview.attention.calendar_date} / ${state.overview.attention.timezone} `, "hint");
+      day.append(infoTip("Uses the task service's dates and eligibility, not your browser clock."));
+      work.append(day);
       if (state.overview.attention_complete === false || state.overview.next_offset != null) {
         work.append(element("p", "More tasks or source issues remain. Check Tasks before concluding that nothing needs attention.", "review-due"));
       }
@@ -120,10 +124,11 @@ export class Dashboard {
     if (this.today.focus.status !== "available") focus.append(element("p", "The focus projection is partial, withheld or unavailable. No private pointers are shown.", "review-due"));
     const news = $("today-new");
     news.replaceChildren();
-    news.append(element("p", this.today.first_visit
-      ? `${this.today.baseline_expired ? "The old baseline expired. " : "First recorded visit. "}These are selected current sources, not claims of new activity today.`
-      : `Compared with the canonical snapshot recorded ${utcStamp(this.today.since)}.`, "hint"));
-    news.append(element("p", `Observed ${utcStamp(this.today.observed_at)}. Source dates below are recorded metadata, not inferred creation or progress dates.`, "hint"));
+    const since = element("p", this.today.first_visit
+      ? `${this.today.baseline_expired ? "Fresh start" : "First visit"} · current sources `
+      : `Since ${utcStamp(this.today.since)} `, "hint");
+    since.append(infoTip(`${this.today.first_visit ? "These are selected current sources, not claims of new activity today. " : ""}Observed ${utcStamp(this.today.observed_at)}. Source dates are recorded metadata, not inferred progress dates.`));
+    news.append(since);
     this.issues(news, this.today);
     for (const item of this.today.items) {
       const row = button("", () => this.open(item), "source-row");
@@ -131,13 +136,60 @@ export class Dashboard {
         element("strong", item.title), element("p", this.sourceDates(item)));
       news.append(row);
     }
-    if (!this.today.items.length) empty(news, "No eligible changes in this window.", "This is not a claim about private, unread or unavailable sources.");
+    if (!this.today.items.length) {
+      const none = element("div", null, "empty");
+      append(none, element("strong", "Nothing new since your last visit. "), infoTip("Only eligible canonical sources are compared; private, unread or unavailable sources are not assessed."));
+      news.append(none);
+    }
     if (this.today.next_offset != null) news.append(button("Load more source changes", () => this.loadToday(true)));
-    const visit = writeButton("Record this visit", () => this.ui.mutate("dashboard/visit", { token: this.today.visit_token }, async () => {
-      this.ui.showNotice("Visit marker saved privately. The next comparison starts from this snapshot; this does not mark material read.");
+    const visit = writeButton("Mark as seen", () => this.ui.mutate("dashboard/visit", { token: this.today.visit_token }, async () => {
+      this.ui.showNotice("Marked as seen. Next time starts from this snapshot.");
     }));
-    news.append(append(element("div", null, "actions"), visit, button("Open Knowledge inbox", () => this.ui.setView("knowledge"))));
-    news.append(element("p", "Record this snapshot as the next visit's baseline, including any unshown part. No reading, understanding or task completion is inferred.", "hint"));
+    news.append(append(element("div", null, "actions"), visit,
+      infoTip("Saves this snapshot, including any unshown part, as the next comparison baseline. It does not mark anything read or done."),
+      button("Open Knowledge inbox", () => this.ui.setView("knowledge"))));
+  }
+
+  renderPriorities() {
+    const { state, element, append, button, openTask } = this.ui;
+    const target = $("today-priorities");
+    target.replaceChildren();
+    const ru = document.documentElement?.lang === "ru";
+    const labels = {
+      focus_today: ru ? "Выбрано на сегодня" : "Selected for today",
+      deadline_due: ru ? "Наступил срок" : "Deadline due",
+      deadline_soon: ru ? "Срок приближается" : "Deadline approaching",
+      review_due: ru ? "Пора пересмотреть" : "Review due",
+    };
+    const tasks = state.items.filter((task) => task.attention_eligible);
+    const rank = (task) => (task.attention_reasons || []).reduce((score, reason) =>
+      score + (({ deadline_due: 16, deadline_soon: 8, focus_today: 4, review_due: 2 })[reason] || 0), 0);
+    tasks.sort((a, b) => rank(b) - rank(a));
+    const top = tasks.slice(0, 3);
+    const minutes = top.reduce((sum, task) => sum + (Number.isFinite(task.estimate_min) ? task.estimate_min : 0), 0);
+    const duration = minutes >= 60
+      ? `${Math.floor(minutes / 60)}${ru ? " ч" : "h"}${minutes % 60 ? ` ${minutes % 60}${ru ? " мин" : "m"}` : ""}`
+      : `${minutes}${ru ? " мин" : "m"}`;
+    const count = top.length;
+    const line = !count ? (ru ? "Сегодня ничего срочного." : "Nothing urgent today.")
+      : ru ? `${count} ${count === 1 ? "шаг" : "шага"} на сегодня${minutes ? ` · ~${duration}` : ""}`
+        : `${count} ${count === 1 ? "thing moves" : "things move"} today${minutes ? ` · ~${duration}` : ""}`;
+    if ($("hero-line")) $("hero-line").textContent = line;
+    if ($("hero-detail")) {
+      $("hero-detail").textContent = count
+        ? `${ru ? "Начните с" : "Start with"}: ${top[0].title}`
+        : (ru ? "Выберите одну задачу и двигайте её." : "Pick one task and move it forward.");
+    }
+    if (!tasks.length) return;
+    top.forEach((task, i) => {
+      const card = button("", () => openTask(task.path), "priority-card");
+      append(card, element("span", `${ru ? "СЛЕДУЮЩИЙ ШАГ" : "NEXT UP"} / 0${i + 1}`, "priority-number"),
+        element("strong", task.title),
+        element("p", task.next_action || (ru ? "Уточните следующий шаг." : "Clarify the next step.")),
+        element("p", (task.attention_reasons || []).map((reason) => labels[reason] || reason).join(" · "), "hint"));
+      if (task.estimate_min != null) card.append(element("span", `${task.estimate_min} min`, "status"));
+      target.append(card);
+    });
   }
 
   sourceDates(item) {
