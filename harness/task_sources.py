@@ -62,6 +62,28 @@ def paragraph(raw: str, label: str) -> str:
     return found[1].strip() if found else ""
 
 
+def _context_estimate(raw: str) -> int | None:
+    prose = re.sub(r"(?ms)^```.*?^```[ \t]*$", "", raw)
+    section = re.search(
+        r"(?ms)^## Context(?: and boundaries)?[ \t]*\r?\n(.*?)(?=^#{1,2}[ \t]|\Z)", prose,
+    )
+    context = section[1] if section else paragraph(raw, "Context")
+    lines = re.findall(r"(?m)^[ \t]*Estimate:[ \t]*([^\r\n]*)", context)
+    if len(lines) != 1:
+        return None
+    match = re.fullmatch(r"~?[ \t]*(?:(\d{1,5})h(?:[ \t]+(\d{1,2})m)?|(\d{1,5})m)", lines[0].strip(), re.I)
+    if not match:
+        return None
+    if match[1]:
+        hours, minutes = int(match[1]), int(match[2] or 0)
+        if minutes >= 60:
+            return None
+        estimate = hours * 60 + minutes
+    else:
+        estimate = int(match[3])
+    return estimate if 0 <= estimate <= 10000 else None
+
+
 def _permitted(raw: str) -> bool:
     _, pairs = _metadata(raw)
     if _excluded_metadata(pairs) or _SENSITIVE_CONTENT.search(raw):
@@ -196,7 +218,10 @@ def parse_task(raw: str, path: str) -> dict[str, Any]:
     title = re.search(r"(?m)^# ([^\n]+)", raw)
     if title is None:
         raise SourceError("task_title_missing")
-    task: dict[str, Any] = {"path": path, "title": title[1].strip(), "ai_hint": None}
+    task: dict[str, Any] = {
+        "path": path, "title": title[1].strip(), "ai_hint": None,
+        "estimate_min": _context_estimate(raw),
+    }
     estimate = values.get("estimate_min")
     if estimate is not None:
         if type(estimate) is not int or not 0 <= estimate <= 10000:

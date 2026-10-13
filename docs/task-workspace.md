@@ -152,8 +152,11 @@ and plan steps in accepted `subtasks` (at most six), preserving supplied content
 within the writer bounds. Learning
 can be saved with verified closure. Persisting structured estimates or replacing
 existing plan sections requires a coordinated writer contract/manifest update,
-not an assist-side whitelist bypass. Overview exposes `estimate_min` only when
-that valid field already exists in a canonical task.
+not an assist-side whitelist bypass. Every overview item has `estimate_min`:
+a valid explicit canonical integer takes precedence; otherwise a single plain
+context line such as `Estimate: ~45m` or `Estimate: ~1h 20m` is parsed into minutes
+without inference. Missing, ambiguous, ranged or malformed context estimates
+return `null`; capture quotations and fenced code are not estimate authority.
 
 The owner's explicitly granted assist standing authority is controlled by
 `MINDME_ASSIST_AUTO_APPLY` (default true while assist itself remains off).
