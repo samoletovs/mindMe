@@ -1438,3 +1438,84 @@ def test_real_browser_access_retry_only_for_recoverable_failure(workspace_url, c
     assert operations == ["session", "session"]
     assert page.locator("#task-list .task-row").count() == 0
     context.close()
+
+
+@pytest.mark.parametrize("locale", ["en-US", "ru-RU"])
+@pytest.mark.parametrize("motion", ["reduce", "no-preference"])
+def test_real_browser_phone_arrival_keeps_navigation_and_context(workspace_url, chromium, locale, motion):
+    context = chromium.new_context(viewport={"width": 390, "height": 844}, locale=locale, reduced_motion=motion)
+    page = context.new_page()
+    page.goto(workspace_url + "?mock=1")
+    page.wait_for_function("!document.getElementById('command-open').hidden")
+    settle(page)
+    screenshot(page, f"arrival-cold-390-{locale[:2]}-{motion}", reset_scroll=False)
+
+    def assert_navigation_context():
+        header = page.locator(".app-header").bounding_box()
+        nav = page.locator(".navigation").bounding_box()
+        heading = page.locator("#view-title").bounding_box()
+        assert nav["y"] >= header["y"] + header["height"], (header, nav)
+        assert nav["y"] + nav["height"] <= heading["y"], (nav, heading)
+        assert heading["y"] + heading["height"] <= page.locator("#quick-bar").bounding_box()["y"]
+
+    assert_navigation_context()
+    assert page.evaluate("scrollY") == 0, "Bootstrap must not scroll to an arrival target"
+    assert page.evaluate("document.activeElement.tagName") == "BODY", "Cold loading must not focus the heading"
+    for view in ["tasks", "today", "knowledge"]:
+        page.locator(f'[data-view="{view}"]').click()
+        settle(page)
+        assert visible_panels(page) == [view]
+        assert_navigation_context()
+        assert page.locator("#view-title").evaluate("(node) => node === document.activeElement")
+        screenshot(page, f"arrival-{view}-390-{locale[:2]}-{motion}", reset_scroll=False)
+
+    page.locator('[data-view="tasks"]').click()
+    settle(page)
+    page.locator("#task-list .task-row").first.click()
+    page.locator('[data-detail-tab="edit"]').click()
+    title = page.locator('#definition-form [name="title"]')
+    title.fill("SYNTHETIC RETAINED ARRIVAL DRAFT")
+    page.locator('[data-view="today"]').click()
+    settle(page)
+    page.locator('[data-view="tasks"]').click()
+    settle(page)
+    assert_navigation_context()
+    assert page.locator('[data-detail-tab="edit"]').get_attribute("aria-pressed") == "true"
+    assert title.input_value() == "SYNTHETIC RETAINED ARRIVAL DRAFT"
+    assert page.locator("#inspector").evaluate("(node) => node === document.activeElement")
+    context.close()
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+@pytest.mark.parametrize("delayed_operation", ["session", "overview?offset=0"])
+def test_real_browser_delayed_bootstrap_does_not_steal_header_focus(workspace_url, chromium, width, delayed_operation):
+    context = chromium.new_context(viewport={"width": width, "height": 844 if width == 390 else 1000},
+                                   reduced_motion="reduce")
+    page = context.new_page()
+    fixture = {"held": None}
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        if operation == delayed_operation:
+            fixture["held"] = route
+            return
+        status, body = api_fixture(operation)
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    page.route("**/api/tasks/api/**", respond)
+    with page.expect_request("**/api/tasks/api/" + delayed_operation):
+        page.goto(workspace_url + "#tasks")
+    label_fixture(page)
+    control = page.locator("#theme-toggle")
+    control.focus()
+    assert fixture["held"] is not None
+    before = page.evaluate("scrollY")
+    status, body = api_fixture(delayed_operation)
+    fixture["held"].fulfill(status=status, content_type="application/json", body=json.dumps(body))
+    page.wait_for_function("!document.getElementById('command-open').hidden")
+    settle(page)
+    assert control.evaluate("(node) => node === document.activeElement"), "An async initial read stole header focus"
+    assert control.evaluate("(node) => node.matches(':focus-visible')"), "Keyboard focus must stay visible"
+    assert page.evaluate("scrollY") == before, "An async initial read scrolled the page"
+    assert visible_panels(page) == ["tasks"]
+    context.close()

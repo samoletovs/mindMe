@@ -122,7 +122,7 @@ export class Dashboard {
       if (decisions.length || results.length) {
         work.append(element("p", copy(`${decisions.length} loaded proposal(s) need a decision; ${results.length} prepared result(s) await review.`,
           `Ожидают решения: ${decisions.length}; подготовленных результатов для проверки: ${results.length}.`)));
-        work.append(button(copy("Review decisions and results", "Проверить решения и результаты"), () => this.ui.setView("activity")));
+        work.append(button(copy("Review decisions and results", "Проверить решения и результаты"), () => this.ui.setView("activity", { arrival: true })));
       }
 
       const attention = state.items.filter((item) => item.attention_eligible && !shown.has(item.path));
@@ -148,7 +148,7 @@ export class Dashboard {
       if (state.overview.attention_complete === false || state.overview.next_offset != null) {
         work.append(element("p", copy("More tasks or source issues remain. Check Tasks before concluding that nothing needs attention.", "Остались другие задачи или проблемы источников. Проверьте «Поток», прежде чем считать, что ничего не требует внимания."), "review-due"));
       }
-      work.append(button(copy("Open all loaded work in Flow", "Открыть все загруженные задачи в «Потоке»"), () => this.ui.setView("tasks")));
+      work.append(button(copy("Open all loaded work in Flow", "Открыть все загруженные задачи в «Потоке»"), () => this.ui.setView("tasks", { arrival: true })));
     }
     if (!this.today) return;
     const focus = $("today-focus");
@@ -193,7 +193,7 @@ export class Dashboard {
     }));
     news.append(append(element("div", null, "actions"), visit,
       infoTip(copy("Saves this snapshot, including any unshown part, as the next comparison baseline. It does not mark anything read or done.", "Сохраняет этот снимок, включая непоказанную часть, как базу следующего сравнения. Ничего не отмечается прочитанным или выполненным.")),
-      button(copy("Open Knowledge inbox", "Открыть входящие знаний"), () => this.ui.setView("knowledge"))));
+      button(copy("Open Knowledge inbox", "Открыть входящие знаний"), () => this.ui.setView("knowledge", { arrival: true }))));
   }
 
   priorityTasks() {
@@ -310,7 +310,7 @@ export class Dashboard {
       this.readerOrigin = document.activeElement;
       this.readerSelection = { id: item.id, findingId };
     }
-    this.ui.setView("knowledge", false);
+    this.ui.setView("knowledge", { load: false });
     const sequence = ++this.readSequence;
     const generation = this.ui.state.sessionGeneration;
     const target = $("knowledge-reader");

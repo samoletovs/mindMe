@@ -336,9 +336,14 @@ restoration requires a fresh permitted task and unchanged selection intent.
 Closing/navigating away while a request is returning cannot reopen the detail;
 moving keyboard focus elsewhere cannot pull it back into the composer.
 Deliberate view navigation establishes the heading or retained selected-detail
-context. Locale-only rendering, receipt polling and background refresh do not
-perform that arrival action. Normal signed-out/expired sessions offer Sign in,
-not a second Retry action; genuine network/server failures still offer recovery.
+context. Arrival is explicit and separate from loading: bootstrap must not scroll
+or take focus from a header control during an async initial read. On narrow
+screens, ordinary view arrival keeps the primary navigation strip below the
+header alongside the new context; task/evidence drill-down keeps its own focus
+and scroll behavior. Locale-only rendering, receipt polling and background
+refresh do not perform that arrival action. Normal signed-out/expired sessions
+offer Sign in, not a second Retry action; genuine network/server failures still
+offer recovery.
 Existing expiry and uncertain-operation guidance remains explicit.
 
 `applied` does not mean saved: canonical saving requires `saved: true`,

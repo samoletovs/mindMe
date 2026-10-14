@@ -102,8 +102,12 @@ A changed/removed revision still invalidates old source content;
 only a still-permitted, freshly re-read task can restore the selected view.
 Explicit close/navigation, a withheld source or a denied re-read cannot reopen it.
 Deliberate navigation establishes heading or selected-detail context; locale-only
-rendering and background refresh do not perform navigation. Normal signed-out
-states show Sign in alone; retry is for genuine service/network recovery.
+rendering and background refresh do not perform navigation. Initial loading does
+not move focus or scroll. On narrow screens, ordinary view arrival positions the
+navigation strip below the header with the new view context, rather than hiding
+the strip above the heading. Task/evidence drill-down keeps its own positioning.
+Normal signed-out states show Sign in alone; retry is for genuine service/network
+recovery.
 
 Source/model strings remain DOM text, never HTML. Requests, UUID formats, approval
 digests, receipt polling, Undo eligibility and closure gates remain service-owned.

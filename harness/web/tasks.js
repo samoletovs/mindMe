@@ -308,7 +308,7 @@ function isAttention(task) {
 function pendingProposals() {
   return (state.overview?.history || []).filter((record) => record.status === "pending" && record.action && record.approval_digest);
 }
-function setView(view, load = true) {
+function setView(view, { load = true, arrival = false } = {}) {
   if (!["today", "needs", "tasks", "knowledge", "areas", "activity"].includes(view)) view = "today";
   if (["tasks", "needs"].includes(state.view) && !["tasks", "needs"].includes(view)) {
     state.detailIntent += 1;
@@ -341,11 +341,12 @@ function setView(view, load = true) {
   render(!load);
   if (load && state.csrf && view === "today" && !dashboard.today) dashboard.loadToday();
   if (load && state.csrf && view === "knowledge" && !dashboard.inbox) dashboard.loadInbox();
-  if (load) {
+  if (arrival) {
     const target = ["tasks", "needs"].includes(view) && state.selected?.revision ? $("inspector")
       : view === "knowledge" && dashboard.reader ? $("knowledge-reader") : $("view-title");
     restoreFocus(target);
-    target.scrollIntoView({ block: "start", behavior: "instant" });
+    const position = matchMedia("(max-width: 930px)").matches ? document.querySelector(".navigation") : target;
+    position.scrollIntoView({ block: "start", behavior: "instant" });
   }
 }
 function taskTiming(task) {
@@ -486,7 +487,7 @@ function renderAttention() {
   if (state.overview.attention_complete === false) {
     target.append(element("p", "Attention coverage is incomplete. Unchecked or unavailable tasks may still have deadlines; load more and review source warnings.", "review-due"));
   }
-  if (pending || unreviewed) target.append(button("Review decisions and results", () => setView("activity")));
+  if (pending || unreviewed) target.append(button("Review decisions and results", () => setView("activity", { arrival: true })));
 }
 function render(preserveForms = false) {
   $("layout-list").setAttribute("aria-pressed", String(state.layout === "list"));
@@ -1251,7 +1252,7 @@ function renderAreas(preserve = false) {
   for (const area of data.areas) {
     const count = state.items.filter((task) => task.area === area).length;
     $("area-list").append(button(`${prettyId(area)} (${count} ${t("loaded")})`, () => {
-      $("area-filter").value = area; setView("tasks");
+      $("area-filter").value = area; setView("tasks", { arrival: true });
     }));
   }
   $("project-options").replaceChildren();
@@ -1391,9 +1392,9 @@ $("refresh").addEventListener("click", () => {
   if (state.view === "today") dashboard.loadToday();
   if (state.view === "knowledge") dashboard.loadInbox();
 });
-$("scope-needs").addEventListener("click", () => setView("needs"));
-$("scope-all").addEventListener("click", () => setView("tasks"));
-window.addEventListener("hashchange", () => setView(location.hash.slice(1)));
+$("scope-needs").addEventListener("click", () => setView("needs", { arrival: true }));
+$("scope-all").addEventListener("click", () => setView("tasks", { arrival: true }));
+window.addEventListener("hashchange", () => setView(location.hash.slice(1), { arrival: true }));
 $("load-more").addEventListener("click", () => loadOverview(true));
 $("projects-more").addEventListener("click", loadProjects);
 $("history-more").addEventListener("click", loadHistory);
@@ -1992,7 +1993,7 @@ let activeViewTransition = null;
 function transitionView(view) {
   activeViewTransition?.skipTransition();
   if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    const transition = document.startViewTransition(() => setView(view));
+    const transition = document.startViewTransition(() => setView(view, { arrival: true }));
     activeViewTransition = transition;
     document.documentElement.dataset.transitioning = "true";
     transition.finished.catch(() => {}).finally(() => {
@@ -2000,7 +2001,7 @@ function transitionView(view) {
       activeViewTransition = null;
       delete document.documentElement.dataset.transitioning;
     });
-  } else setView(view);
+  } else setView(view, { arrival: true });
 }
 function threadFor(key) {
   if (!assist.threads.has(key)) assist.threads.set(key, { id: null, messages: [], suggestions: [], draft: "", pending: false });
@@ -2040,7 +2041,7 @@ function initWorkspace() {
     languageContext = null;
     const page = { left: window.scrollX, top: window.scrollY, behavior: "instant" };
     assist.language = assist.language === "en" ? "ru" : "en";
-    translateWorkspace(); setView(state.view, false);
+    translateWorkspace(); setView(state.view, { load: false });
     if (state.selected?.revision) renderDetail();
     if (dashboard.inbox) dashboard.renderInbox();
     if (dashboard.reader) dashboard.renderReader();
