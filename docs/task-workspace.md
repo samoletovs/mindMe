@@ -305,6 +305,10 @@ controls and leave the manual task workflow available.
 
 Task/reader focus and back/Escape return are explicit; navigation supports arrow,
 Home and End keys. Capture restores its actual trigger, including the phone bar.
+The initial task-loading pane also has a focused region and a visible Back
+control. Leaving Tasks cancels a pending initial selection; a late response cannot
+strand a phone in a loading pane when the owner returns to Flow. A fully loaded
+selection remains available on return.
 Voice/API errors are repeated inside the copilot so a modal never hides the
 failure behind its backdrop. Keyboard/touch information controls are dismissable.
 Background receipt reads retain the same-source composer and selected tab.
@@ -326,6 +330,8 @@ cards/usage, without fabricating an AI reply or thread.
 Voice uses browser microphone permission and MediaRecorder (Opus/WebM, or MP4
 where supported), stops at sixty seconds/two MiB, then displays the transcript
 and sends it as an instruction. No browser speech-recognition provider is used.
+The header/phone Stop control retains the original recording's task binding
+even after navigating to another view; navigation never retargets that audio.
 Optional speech synthesis is off by default. Chat, audio, task content and UI
 preferences are never written to browser storage; sign-out/expiry clears them
 and stops microphone tracks. No external assets, analytics or service worker.

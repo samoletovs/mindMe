@@ -1021,9 +1021,10 @@ def test_real_browser_studio_reader_focus_source_text_and_failure(workspace_url,
     context.close()
 
 
-@pytest.mark.parametrize("dismiss", ["navigate", "close"])
-def test_real_browser_initial_task_load_cannot_outlive_selection(workspace_url, chromium, dismiss):
-    context = chromium.new_context(viewport={"width": 1440, "height": 1000}, reduced_motion="reduce")
+@pytest.mark.parametrize("width", [390, 1440])
+@pytest.mark.parametrize("dismiss", ["knowledge", "today", "back", "escape"])
+def test_real_browser_initial_task_load_cannot_outlive_selection(workspace_url, chromium, width, dismiss):
+    context = chromium.new_context(viewport={"width": width, "height": 844 if width == 390 else 1000}, reduced_motion="reduce")
     page = context.new_page()
     fixture = {"held": None, "hold": True}
 
@@ -1037,15 +1038,19 @@ def test_real_browser_initial_task_load_cannot_outlive_selection(workspace_url, 
 
     page.route("**/api/tasks/api/**", respond)
     page.goto(workspace_url + "#tasks")
-    page.locator("#command-open").wait_for()
+    page.wait_for_function("!document.getElementById('command-open').hidden")
     with page.expect_request("**/api/tasks/api/task"):
         page.locator("#task-list .task-row").click()
     page.wait_for_timeout(30)
     assert fixture["held"] is not None
     assert page.locator("#inspector").get_attribute("aria-busy") == "true"
-    if dismiss == "navigate":
-        page.locator('[data-view="activity"]').click()
+    assert page.locator("#inspector .mobile-back").is_visible()
+    assert page.locator("#inspector").evaluate("(node) => node === document.activeElement")
+    if dismiss in {"knowledge", "today"}:
+        page.locator(f'[data-view="{dismiss}"]').click()
         page.locator('[data-view="tasks"]').click()
+    elif dismiss == "back":
+        page.locator("#inspector .mobile-back").click()
     else:
         page.keyboard.press("Escape")
     assert "task-selected" not in (page.locator("#tasks-section").get_attribute("class") or "")
@@ -1060,4 +1065,44 @@ def test_real_browser_initial_task_load_cannot_outlive_selection(workspace_url, 
     page.locator("#task-list .task-row").click()
     page.locator(".task-copilot textarea").wait_for()
     assert page.locator("#inspector .detail-title").inner_text() == body["title"]
+    page.locator('[data-view="knowledge"]').click()
+    page.locator('[data-view="tasks"]').click()
+    assert page.locator("#inspector .detail-title").inner_text() == body["title"], "A fully loaded selection remains available on return"
+    context.close()
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+def test_real_browser_voice_stop_keeps_recording_binding_after_navigation(workspace_url, chromium, width):
+    context = chromium.new_context(viewport={"width": width, "height": 844 if width == 390 else 1000}, reduced_motion="reduce")
+    page = context.new_page()
+    calls = []
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        calls.append((operation, route.request))
+        status, body = api_fixture(operation)
+        if operation == "assist/voice":
+            body = {"text": "A synthetic instruction for the original task.", "language": "en", "duration_s": 1}
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    page.route("**/api/tasks/api/**", respond)
+    page.goto(workspace_url + "#tasks")
+    page.wait_for_function("!document.getElementById('command-open').hidden")
+    page.locator("#task-list .task-row").click()
+    page.locator(".task-copilot .mic-button").click()
+    page.locator('.task-copilot .mic-button[aria-pressed="true"]').wait_for()
+    page.locator('[data-view="today"]').click()
+    page.wait_for_timeout(1100)  # One fake Chromium media timeslice; no real microphone/audio.
+    stop = page.locator("#quick-mic" if width == 390 else "#header-mic")
+    assert stop.get_attribute("aria-label") == "Stop recording"
+    with page.expect_request("**/api/tasks/api/assist/chat"):
+        stop.click()
+    page.wait_for_function("!document.querySelector('.task-copilot button[type=submit]').disabled")
+    assert sum(operation == "assist/voice" for operation, _ in calls) == 1
+    chat = [request for operation, request in calls if operation == "assist/chat"]
+    assert len(chat) == 1
+    assert chat[0].post_data_json["task"] == {"path": "tasks/synthetic.md", "revision": "a" * 40}
+    assert chat[0].post_data_json["voice"] is True
+    assert stop.get_attribute("aria-pressed") == "false"
+    assert not page.locator("#copilot-dialog").is_visible(), "Stopping a task recording must not switch it into global chat"
     context.close()

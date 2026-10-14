@@ -734,10 +734,12 @@ async function openTask(path, focus = true) {
   if (focus) {
     state.selected = { path };
     state.clarification = null;
-    $("inspector").replaceChildren(element("p", t("loadingCanonical"), "empty"));
+    $("inspector").replaceChildren(button(t("back"), () => closeDetail(), "mobile-back quiet"),
+      element("p", t("loadingCanonical"), "empty"));
   }
   $("inspector").setAttribute("aria-busy", "true");
   renderTasks();
+  if (focus && ["tasks", "needs"].includes(state.view)) restoreFocus($("inspector"));
   try {
     const task = await api("task", { path });
     if (generation !== state.detailGeneration || intent !== state.detailIntent || state.selected?.path !== path) return;
@@ -1786,7 +1788,7 @@ function initWorkspace() {
   $("quick-capture").addEventListener("click", () => $("capture-open").click());
   $("briefing-open").addEventListener("click", () => { openCopilot(); sendChat("global", t("dayPrompt")); });
   for (const id of ["quick-mic", "header-mic"]) $(id).addEventListener("click", () => {
-    const key = state.selected?.revision && ["tasks", "needs"].includes(state.view) ? state.selected.path : "global";
+    const key = assist.voiceKey || (state.selected?.revision && ["tasks", "needs"].includes(state.view) ? state.selected.path : "global");
     if (key === "global") openCopilot();
     toggleVoice(key);
   });
