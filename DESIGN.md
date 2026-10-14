@@ -1,53 +1,114 @@
-# Task workspace interface
+# Vault kinetic studio
 
-The web surface is an operating tool for one personal owner, not a marketing page.
-The implemented source is `harness/web/index.html`, `tasks.css`, and `tasks.js`.
+The owner's personal working space, not a marketing dashboard or a second task
+store. The selected direction replaces both the old green ledger and the
+violet/gradient workspace. Source: `harness/web/index.html`, `tasks.css`,
+`tasks.js`, and `dashboard.js`.
+
+## Identity
+
+Graphite, warm ivory, and a narrow electric-chartreuse signal. Open space, aligned
+rules, expressive display type and readable working text carry the identity.
+The default is dark even when the operating system prefers light; the header
+offers an equally complete light theme. Theme and language choices stay in memory.
+
+| Role | Dark | Light |
+|---|---|---|
+| Canvas | `#171916` | `#f0eee5` |
+| Work surface | `#1e211d` | `#faf9f3` |
+| Primary text | `#f0eee5` | `#24291e` |
+| Secondary text | `#b0b4a7` | `#5a6250` |
+| Selection / links | `#d5f879` | `#466517` |
+| Primary action | `#d5f879` with `#202719` text | Same |
+
+Warm amber denotes waiting or pending; muted coral denotes failures, invalidation
+and overdue dates. Every status has a text label. Work controls use a 5px radius;
+the copilot and phone action bar use 12px. Most surfaces are flat: shadows only
+separate an overlapping drawer, dialog, tooltip or toast.
+
+Display typography uses native Helvetica Neue / Arial; working text uses the
+system UI stack. Both support Cyrillic without a font download. Large type is
+reserved for sign-in and the current view; task/source prose remains compact and
+readable. No external fonts, images, scripts, analytics or frontend dependencies.
 
 ## Composition
 
-A short navigation rail leads to Today, Tasks, Knowledge, Areas & projects, and
-Activity. Needs you and All tasks remain filters inside Tasks.
-The task ledger and a detail pane share the desktop work surface. On narrow screens,
-opening a task replaces the list; a visible Back to tasks control restores it.
-The optional board is horizontally scrollable, with normal forms for stage changes.
-Dragging is never required.
+- **Sign-in:** oversized two-line type beside an original self-contained SVG
+  folding study. The graphic is decorative, not a knowledge map, progress signal
+  or claim about personal data. Sign-in, auth failure and retry remain real BFF
+  states; no demonstration identity is used on the deployed origin.
+- **Today:** a compact next-move heading, a ranked ruled list of up to three
+  server-eligible loaded tasks, and a separate approved-focus panel. Source dates,
+  expired/draft focus and partial coverage are explicit. Recorded estimates name
+  how many of the shown tasks have estimates; they are not an invented total.
+  Task attention and source changes follow below, without a decorative hero
+  taking over the working viewport.
+- **Flow:** a scrollable six-lane board or a dense ruled list, real stage labels,
+  filters, outcome/done conditions, a seven-step preparation rail and task chat.
+  Stage changes have normal keyboard-accessible forms; dragging is optional.
+  Between 1101 and 1599px, the board's task drawer starts below the measured
+  header. At 1100px and below, the selected detail replaces the task list.
+- **Knowledge:** a finding inbox and an evidence reader. Exact quotations lead
+  to pinned same-origin source reads. The source reader's optional scroll-linked
+  line is a position indicator, never a saved reading or completion receipt.
+  On phones, the reader replaces the inbox with a clear return control.
+- **Areas, Activity and Capture:** the same rules, typography and control grammar.
+  Counts describe loaded permitted records. Proposals retain exact action
+  previews, publication receipts and the distinction between preparation and
+  verified real-world completion.
 
-Today puts dated approved focus before a paired view of task attention and source
-changes. Knowledge starts with an Inbox, using the same ruled ledger and detail
-pane to show exact quotations and a same-origin source reader. A finding's
-evidence takes one interaction; its source takes two. On a phone the reader
-replaces the inbox with an explicit Back control. No future-phase tabs are shown.
+The navigation rail becomes a horizontally scrollable strip at 930px. Desktop
+header actions remain available at 1024px and above. Below 1024px, the phone/tablet
+action bar supplies capture, voice and copilot with reserved bottom/safe-area
+space. Refresh and sign-out stay reachable on phones. The layout also covers a
+320px narrow viewport; long EN/RU text must wrap rather than widen the page.
 
-Capture remains in the header. Exact proposed changes are reviewed in the work
-stream, not behind a generic confirmation modal. The interface distinguishes
-drafting, approval, publication, canonical updates, and real-world completion.
+## Interaction
 
-## Visual system
+One finite sign-in entrance and line reveal establish the folding motif. Navigation
+transitions only the work area; chrome stays fixed. In-flight transitions are
+skipped, the old snapshot is invisible, and only one view panel can remain visible.
+Drawers/dialogs have short entrance choreography. Buttons respond to pressure;
+task movement animates only a confirmed rendered position change.
 
-Use the system UI font stack, with fixed rem sizes and restrained weight changes.
-The page ground is `#f4f7f6`, work surfaces are white, and primary text is `#20352f`.
-Secondary text is `#53675f`; the action/selection accent is `#006b53`.
-Amber means waiting or pending, not failure. Red marks errors or passed deadlines.
-Color is accompanied by a text label.
+No ambient orbit, endless loading shimmer or synthetic progress. The voice
+waveform animates only during actual recording and is explicitly decorative;
+recording/transcribing/error status is also readable text. Reduced motion removes
+all CSS and task-position animation. Unsupported view/scroll-transition APIs
+fall back to normal navigation and reading; content is never animation-dependent.
 
-Flat ruled rows carry tasks. Borders separate responsibilities; do not add decorative
-metrics, gradients, glass, or nested card grids. Controls have an 8px radius and
-at least 44px primary touch targets. Only color/border state transitions animate,
-and reduced-motion preferences are respected.
+Native controls, visible focus and 44px primary targets remain the baseline.
+Navigation supports arrow/Home/End keys. Task and reader opening moves focus;
+Escape/back restores an available trigger. Capture returns to its actual entry
+point, including the phone bar. Tooltips are touch/keyboard reachable and
+Escape-dismissable. Voice/API failures are visible inside the modal copilot as
+well as in the workspace, not only behind its backdrop.
 
-## Behavior and accessibility
+Background receipt refresh does not reset the selected tab or a same-source
+composer while reading. Draft/caret/scroll restoration is selection- and
+focus-aware. A changed/removed revision still invalidates old source content;
+only a still-permitted, freshly re-read task can restore the selected view.
+Explicit close/navigation, a withheld source or a denied re-read cannot reopen it.
 
-- Keep native buttons, fields, details, labels, visible focus and keyboard navigation.
-- Show an unavailable source as unavailable, never as a zero count or empty backlog.
-- Display the complete exact action before its approval button.
-- Do not render source or model text as HTML; use DOM text nodes.
-- Clear task content and unsaved searches at sign-out or session expiration.
-- Keep an unconfirmed request's original ID and payload for explicit recovery.
-- Retain server receipt history, not browser local/session storage or offline task caches.
-- Pages are bounded; counts and filters explicitly refer to loaded records.
-- Redacted history cannot reveal a former action or preparation payload.
-- No external fonts, scripts, analytics, or image services are used.
+Source/model strings remain DOM text, never HTML. Requests, UUID formats, approval
+digests, receipt polling, Undo eligibility and closure gates remain service-owned.
+Sign-out/expiry clears private UI state. There is no browser task or credential
+storage and no new inference call.
 
-The responsive boundaries are 1160px, 930px and 690px. Changes should preserve the
-390px phone and 1280px desktop layouts, source-state clarity, and readable forms
-before introducing additional visual effects.
+## Public references
+
+These informed the design, not a copied template or artwork:
+
+- [Linear's UI redesign](https://linear.app/now/how-we-redesigned-the-linear-ui):
+  aligned navigation/header/panels, reduced chrome, testing real list/split views.
+- [Craft](https://rauno.me/craft) and
+  [Awwwards animation collection](https://www.awwwards.com/websites/animation/):
+  authored hierarchy and purposeful interaction detail rather than decoration.
+- [Same-document view transitions](https://developer.chrome.com/docs/web-platform/view-transitions):
+  fixed chrome, scoped progressive enhancement and explicit snapshot handling.
+- [Scroll-driven animations](https://developer.chrome.com/docs/css-ui/scroll-driven-animations):
+  a compositor-driven source-reader position line, with reduced-motion fallback.
+
+Synthetic browser fixtures are labelled and loopback-only. Screenshots belong in
+session artifacts, not the repository. See `docs/task-workspace.md` for the
+runtime/safety contract and `docs/vault-dashboard.md` for the evidence reader.

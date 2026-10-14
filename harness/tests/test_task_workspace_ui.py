@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import shutil
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -15,6 +16,40 @@ from test_closure_scan_ui import run_ui_test
 
 
 WEB = Path(__file__).parents[1] / "web"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node is required")
+def test_studio_copy_covers_both_locales_and_partial_work_is_not_a_quiet_day():
+    keys = sorted(
+        set(re.findall(r'data-i18n(?:-aria|-placeholder)?="([^"]+)"', (WEB / "index.html").read_text(encoding="utf-8")))
+        | set(re.findall(r'\bt\("([^"]+)"\)', (WEB / "tasks.js").read_text(encoding="utf-8")))
+    )
+    run_ui_test(r"""
+for (const key of %s) for (const language of ["en", "ru"]) {
+  assert.ok(COPY[language][key], `${language} missing ${key}`);
+}
+state.items = [];
+state.overview = null;
+dashboard.renderPriorities();
+assert.match($("hero-line").textContent, /No task snapshot/);
+assert.match($("hero-detail").textContent, /Unavailable does not mean/);
+state.overview = { attention_complete: false, next_offset: null };
+dashboard.renderPriorities();
+assert.match($("hero-line").textContent, /more to check/);
+assert.match($("hero-detail").textContent, /Unchecked/);
+state.overview = { attention_complete: true, next_offset: 12 };
+dashboard.renderPriorities();
+assert.match($("hero-line").textContent, /more to check/);
+state.overview.next_offset = null;
+dashboard.renderPriorities();
+assert.match($("hero-detail").textContent, /loaded snapshot/);
+state.items = [
+  { title: "Synthetic estimated task", attention_eligible: true, estimate_min: 20 },
+  { title: "Synthetic unestimated task", attention_eligible: true },
+];
+dashboard.renderPriorities();
+assert.match($("hero-detail").textContent, /~20m recorded across 1\/2 tasks/);
+""" % json.dumps(keys))
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node is required")
@@ -271,10 +306,7 @@ def screenshot(page, name):
         target.mkdir(parents=True, exist_ok=True)
         settle(page)
         page.evaluate("window.scrollTo(0, 0)")
-        # Full-page capture misplaces fixed overlays, so capture the real viewport when one is showing.
-        overlay = page.evaluate("""[...document.querySelectorAll('body *')].some((node) =>
-          getComputedStyle(node).position === 'fixed' && node.getClientRects().length && node.offsetWidth > 0)""")
-        page.screenshot(path=str(target / f"{name}.png"), full_page=not overlay)
+        page.screenshot(path=str(target / f"{name}.png"), full_page=False)
 
 
 def settle(page):
@@ -302,10 +334,13 @@ def test_real_browser_layouts_and_task_chat(workspace_url, chromium, width, heig
     page.goto(workspace_url + "?mock=1")
     page.locator("#briefing-open").wait_for(state="visible")
     page.locator(".priority-card").first.wait_for()
+    if scheme == "light":
+        page.locator("#theme-toggle").click()
     assert page.locator(".priority-card").count() == 3
     assert visible_panels(page) == ["today"]
     hero = page.locator("#hero-line").inner_text()
-    assert "today" in hero and "~" in hero, hero
+    assert "today" in hero, hero
+    assert "~1h 5m recorded across 2/3 tasks" in page.locator("#hero-detail").inner_text()
     tip = page.locator(".info-tip").first
     described = tip.get_attribute("aria-describedby")
     assert described and page.locator(f"#{described}").count() == 1
@@ -331,6 +366,7 @@ def test_real_browser_layouts_and_task_chat(workspace_url, chromium, width, heig
     assert visible_panels(page) == ["tasks"], "Rapid navigation left a stale view visible"
     page.locator("#task-list .task-row").first.click()
     page.locator(".task-copilot textarea").wait_for()
+    assert page.locator("#inspector").evaluate("(node) => node === document.activeElement")
     assert page.locator(".step-rail button").count() == 7
     rail = page.evaluate("""(() => { const rail = document.querySelector('.step-rail').getBoundingClientRect();
       return { fits: [...document.querySelectorAll('.step-rail button')].every((b) => b.getBoundingClientRect().right <= rail.right + 1),
@@ -341,6 +377,9 @@ def test_real_browser_layouts_and_task_chat(workspace_url, chromium, width, heig
         lanes = page.evaluate("""(() => { const board = document.querySelector('.board').getBoundingClientRect();
           return board.right <= innerWidth + 1; })()""")
         assert lanes, "Board must stay within the viewport while the task drawer is open"
+        header_bottom = page.locator(".app-header").bounding_box()["y"] + page.locator(".app-header").bounding_box()["height"]
+        assert page.locator("#inspector").bounding_box()["y"] >= header_bottom - 1
+    screenshot(page, f"{width}-{scheme}-task-detail")
     page.locator(".task-copilot textarea").fill("Build a plan for this task.")
     page.locator(".task-copilot button[type=submit]").click()
     page.locator(".ai-card.plan").wait_for()
@@ -509,7 +548,7 @@ def test_real_browser_drag_undo_and_reduced_motion(workspace_url, chromium):
     page.locator('.board-lane[data-stage="doing"] h3').filter(has_text=title).wait_for()
     page.locator("#toast button").click()
     page.locator('.board-lane[data-stage="ready"] h3').filter(has_text=title).wait_for()
-    assert page.locator(".intelligence-orb span").first.evaluate("(node) => getComputedStyle(node).animationName") == "none"
+    assert page.locator(".studio-mark").evaluate("(node) => getComputedStyle(node).animationName") == "none"
     context.close()
 
 
@@ -537,4 +576,533 @@ def test_real_browser_undo_language_keyboard_and_mock_isolation(workspace_url, c
     page.keyboard.press("Escape")
     assert not page.locator("#copilot-dialog").is_visible()
     assert live_requests == []
+    context.close()
+
+
+def label_fixture(page):
+    page.evaluate("""() => {
+      const banner = document.getElementById('demo-banner');
+      banner.hidden = false;
+      banner.textContent = 'SYNTHETIC UI FIXTURE · no production data or identity';
+    }""")
+
+
+@pytest.mark.parametrize("width,height", [(1440, 1000), (390, 844)])
+@pytest.mark.parametrize("locale,scheme,motion", [
+    ("en-US", "dark", "no-preference"), ("en-US", "light", "reduce"),
+    ("ru-RU", "dark", "reduce"), ("ru-RU", "light", "no-preference"),
+])
+def test_real_browser_studio_sign_in(workspace_url, chromium, width, height, locale, scheme, motion):
+    context = chromium.new_context(viewport={"width": width, "height": height}, locale=locale, reduced_motion=motion)
+    page = context.new_page()
+    operations, requests, errors = [], [], []
+    page.on("request", lambda request: requests.append(request.url))
+    page.on("pageerror", lambda error: errors.append(str(error)))
+
+    def deny(route):
+        operations.append(route.request.url.split("/api/tasks/api/")[1])
+        route.fulfill(status=401, content_type="application/json", body=json.dumps({
+            "error": "authentication_required", "message": "Synthetic signed-out fixture.",
+        }))
+
+    page.route("**/api/tasks/api/**", deny)
+    page.goto(workspace_url)
+    page.locator("#sign-in").wait_for(state="visible")
+    label_fixture(page)
+    assert page.locator("html").get_attribute("data-theme") == "dark"
+    if scheme == "light":
+        page.locator("#theme-toggle").click()
+    assert page.locator("#sign-in").get_attribute("href") == "/api/tasks/auth/login"
+    assert page.locator("#workspace").is_hidden()
+    assert page.locator("html").get_attribute("lang") == locale[:2]
+    assert ("Место для мысли." if locale.startswith("ru") else "Room to think.") in page.locator("#access-title").inner_text()
+    assert page.locator("#sign-in").bounding_box()["height"] >= 44
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    assert operations == ["session"], "Sign-in must not load tasks or fake a live session"
+    assert all(url.startswith(workspace_url.split("/api/tasks")[0]) for url in requests), requests
+    settle(page)
+    assert page.evaluate("document.getAnimations().every(a => Number.isFinite(a.effect.getComputedTiming().endTime))")
+    if motion == "reduce":
+        assert page.locator(".fold-signal").evaluate("(node) => getComputedStyle(node).animationName") == "none"
+    screenshot(page, f"signin-{width}-{scheme}-{locale[:2]}-{motion}")
+    page.locator("#language-toggle").click()
+    assert page.locator("html").get_attribute("lang") != locale[:2]
+    assert page.evaluate("localStorage.length + sessionStorage.length") == 0
+    assert not errors
+    context.close()
+
+
+@pytest.mark.parametrize("width", [320, 390, 1024, 1101, 1440, 1599, 1600])
+def test_real_browser_keyboard_focus_and_responsive_frame(workspace_url, chromium, width):
+    context = chromium.new_context(viewport={"width": width, "height": 1000 if width >= 1024 else 844},
+                                   locale="ru-RU", reduced_motion="reduce")
+    page = context.new_page()
+    page.goto(workspace_url + "?mock=1#tasks")
+    page.locator("#briefing-open").wait_for(state="attached")
+    page.wait_for_function("!document.getElementById('command-open').hidden")
+    assert page.locator("#refresh").is_visible(), "Recovery must remain reachable on phones"
+    if width >= 1024:
+        for control in ["command-open", "header-mic", "capture-open", "refresh", "theme-toggle", "language-toggle", "sign-out"]:
+            box = page.locator(f"#{control}").bounding_box()
+            assert box and box["height"] >= 44 and box["x"] + box["width"] <= width + 1, control
+    nav = page.locator('[data-view="tasks"]')
+    nav.focus()
+    page.keyboard.press("End")
+    assert page.evaluate("document.activeElement.dataset.view") == "activity"
+    page.keyboard.press("Home")
+    assert page.evaluate("document.activeElement.dataset.view") == "today"
+    row = page.locator("#task-list .task-row").first
+    path = row.get_attribute("data-path")
+    row.press("Enter")
+    page.locator(".task-copilot textarea").wait_for()
+    assert page.locator("#inspector").evaluate("(node) => node === document.activeElement")
+    assert page.locator(".step-rail button").count() == 7
+    if 1101 <= width <= 1599:
+        header = page.locator(".app-header").bounding_box()
+        assert page.locator("#inspector").bounding_box()["y"] >= header["y"] + header["height"] - 1
+    last_step = page.locator(".step-rail button").last
+    last_step.focus()
+    assert last_step.evaluate("(node) => node.getBoundingClientRect().right <= innerWidth + 1")
+    page.keyboard.press("Escape")
+    assert page.evaluate("document.activeElement.dataset.path") == path
+    capture = "quick-capture" if width < 690 else "capture-open"
+    page.locator(f"#{capture}").click()
+    assert page.locator("#capture-text").evaluate("(node) => node === document.activeElement")
+    page.locator("#capture-text").fill("Synthetic unsaved capture / тестовый черновик")
+    if width in [390, 1440]:
+        screenshot(page, f"capture-{width}-ru-reduced")
+    page.keyboard.press("Escape")
+    assert page.locator("#capture-section").is_hidden()
+    assert page.evaluate("document.activeElement.id") == capture
+    page.keyboard.press("Control+k")
+    assert page.locator("#global-chat textarea").evaluate("(node) => node === document.activeElement")
+    page.keyboard.press("Escape")
+    assert not page.locator("#copilot-dialog").is_visible()
+    assert page.evaluate("document.activeElement.id") == capture
+    for view in ["areas", "activity", "today", "knowledge", "tasks"]:
+        page.locator(f'[data-view="{view}"]').click()
+        assert visible_panels(page) == [view]
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), view
+        if width in [390, 1440] and view in ["areas", "activity"]:
+            screenshot(page, f"{view}-{width}-ru-reduced")
+    if width == 1440:
+        samples = page.evaluate("""async () => {
+          const samples = [];
+          for (const view of ['today','knowledge','areas','activity','today','tasks'])
+            document.querySelector(`[data-view="${view}"]`).click();
+          for (let i = 0; i < 20; i++) {
+            await new Promise(requestAnimationFrame);
+            samples.push([...document.querySelectorAll('[data-view-panel]')].filter(n => n.getClientRects().length).length);
+          }
+          return samples;
+        }""")
+        assert set(samples) == {1}
+    page.locator("#sign-out").click()
+    page.locator("#sign-in").wait_for()
+    assert not page.locator("#capture-text").input_value()
+    assert not page.locator("#global-chat").inner_text()
+    assert page.locator("#task-list .task-row").count() == 0
+    assert page.locator("#today-priorities").inner_text() == ""
+    assert page.evaluate("localStorage.length + sessionStorage.length") == 0
+    context.close()
+
+
+@pytest.mark.parametrize("failure", ["permission", "rejected", "empty"])
+def test_real_browser_voice_failure_is_visible_inside_copilot(workspace_url, chromium, failure):
+    context = chromium.new_context(viewport={"width": 1440, "height": 1000})
+    page = context.new_page()
+    operations = []
+    if failure == "permission":
+        page.add_init_script("""Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
+          value: () => Promise.reject(new DOMException('Synthetic denial', 'NotAllowedError'))
+        });""")
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        operations.append(operation)
+        if operation == "assist/voice":
+            status, body = (422, {"error": "audio_invalid", "message": "Synthetic audio rejected."}) if failure == "rejected" else (200, {"text": "", "language": "en", "duration_s": 0})
+        else:
+            status, body = api_fixture(operation)
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    page.route("**/api/tasks/api/**", respond)
+    page.goto(workspace_url + "#tasks")
+    page.locator("#command-open").wait_for()
+    label_fixture(page)
+    page.locator("#command-open").click()
+    page.locator("#global-chat .mic-button").click()
+    if failure != "permission":
+        page.locator('#global-chat .mic-button[aria-pressed="true"]').wait_for()
+        page.wait_for_timeout(1100)  # Synthetic Chromium media, never a real microphone.
+        page.locator("#global-chat .mic-button").click()
+    page.locator("#copilot-notice").wait_for(state="visible")
+    message = page.locator("#copilot-notice").inner_text()
+    assert ("not granted" if failure == "permission" else "rejected" if failure == "rejected" else "No usable speech") in message
+    assert "assist/chat" not in operations
+    assert operations.count("assist/voice") == (0 if failure == "permission" else 1)
+    if failure == "empty":
+        assert page.locator("#uncertain").is_visible()
+        assert page.locator("#global-chat button[type=submit]").is_disabled()
+    else:
+        assert not page.locator("#uncertain").is_visible()
+        assert not page.locator("#global-chat textarea").is_disabled()
+    screenshot(page, f"voice-{failure}-synthetic")
+    context.close()
+
+
+@pytest.mark.parametrize("invalidated", [False, True])
+def test_real_browser_receipt_projects_saved_proof_and_undo(workspace_url, chromium, invalidated):
+    context = chromium.new_context(viewport={"width": 1440, "height": 1000}, reduced_motion="reduce")
+    page = context.new_page()
+    polls = []
+    card = {
+        "kind": "applied", "receipt_id": "d" * 24, "title": "Synthetic next action",
+        "status": "submitted", "saved": False, "source_status": "current", "undo_available": True,
+        "diff": [{"field": "next_action", "before": "Old synthetic step", "after": "New synthetic step"}],
+    }
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        if operation == "assist/chat":
+            status, body = 200, {"thread_id": "synthetic", "reply": "Synthetic fixture only.", "cards": [card], "suggestions": []}
+        elif operation == "assist/receipt":
+            polls.append(route.request.post_data_json)
+            refreshed = {**card, "status": "executing"} if len(polls) == 1 else {
+                **card, "status": "invalidated" if invalidated else "completed",
+                "publication_status": "merged", "source_status": "changed" if invalidated else "current",
+                "saved": not invalidated,
+            }
+            status, body = 200, {"cards": [refreshed]}
+        else:
+            status, body = api_fixture(operation)
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    page.route("**/api/tasks/api/**", respond)
+    page.goto(workspace_url + "#tasks")
+    page.locator("#command-open").wait_for()
+    label_fixture(page)
+    page.locator("#command-open").click()
+    page.locator("#global-chat textarea").fill("Synthetic source-bound edit.")
+    page.locator("#global-chat button[type=submit]").click()
+    page.locator(".ai-card.applied").wait_for()
+    assert "publication pending" in page.locator(".ai-card .status").inner_text()
+    assert page.locator(".ai-card").get_by_role("button", name="Undo", exact=True).count() == 0
+    page.wait_for_function("""(invalidated) => {
+      const card = document.querySelector('.ai-card.applied');
+      return invalidated ? card.textContent.includes('not saved') : card.textContent.includes('Saved to canonical');
+    }""", arg=invalidated, timeout=15000)
+    assert len(polls) == 2
+    assert polls[0] == polls[1], "Polling reuses one UUID and the existing receipt, not a new operation"
+    assert polls[0]["receipt_id"] == "d" * 24
+    if invalidated:
+        assert page.locator(".ai-card .ai-diff dd").count() == 0
+        assert page.locator(".ai-card").get_by_role("button", name="Undo", exact=True).count() == 0
+    else:
+        assert page.locator(".ai-card").get_by_role("button", name="Undo", exact=True).is_visible()
+    screenshot(page, f"receipt-{'invalidated' if invalidated else 'saved'}-synthetic")
+    context.close()
+
+
+@pytest.mark.parametrize("scenario", ["same", "changed", "close", "navigate", "withheld", "read_denied", "focus_elsewhere"])
+def test_real_browser_receipt_refresh_preserves_intent_and_composer(workspace_url, chromium, scenario):
+    context = chromium.new_context(viewport={"width": 1440, "height": 1000}, reduced_motion="reduce")
+    page = context.new_page()
+    fixture = {"refresh": False, "overview": None, "task": None, "task_reads": 0}
+    card = {
+        "kind": "applied", "receipt_id": "f" * 24, "title": "Synthetic edit",
+        "status": "submitted", "saved": False, "source_status": "current",
+    }
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        if operation == "assist/chat":
+            status, body = 200, {"thread_id": "synthetic", "reply": "Synthetic receipt pending.", "cards": [card], "suggestions": []}
+        elif operation == "assist/receipt":
+            fixture["refresh"] = True
+            status, body = 200, {"cards": [{**card, "status": "completed", "saved": True, "publication_status": "merged"}]}
+        elif operation.startswith("overview") and fixture["refresh"]:
+            fixture["overview"] = route
+            return
+        elif operation == "task" and fixture["refresh"]:
+            fixture["task"] = route
+            fixture["task_reads"] += 1
+            return
+        else:
+            if operation == "task":
+                fixture["task_reads"] += 1
+            status, body = api_fixture(operation)
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    page.route("**/api/tasks/api/**", respond)
+    page.goto(workspace_url + "#tasks")
+    page.locator("#command-open").wait_for()
+    page.locator("#task-list .task-row").click()
+    composer = page.locator(".task-copilot textarea")
+    composer.fill("A synthetic edit.")
+    page.locator(".task-copilot button[type=submit]").click()
+    page.locator(".ai-card.applied").wait_for()
+    page.wait_for_function("!document.querySelector('.task-copilot button[type=submit]').disabled")
+    page.locator('[data-detail-tab="overview"]').click()
+    composer.fill("My next synthetic instruction is still a draft.")
+    composer.evaluate("(node) => node.setSelectionRange(3, 9)")
+    page.locator("#inspector").evaluate("(node) => { node.scrollTop = 120; }")
+    scroll = page.locator("#inspector").evaluate("(node) => node.scrollTop")
+    if not fixture["overview"]:
+        with page.expect_request("**/api/tasks/api/overview?offset=0", timeout=10000):
+            pass
+        page.wait_for_timeout(30)  # Dispatch the held synthetic route, without releasing its response.
+    assert fixture["overview"] is not None
+    assert composer.input_value() == "My next synthetic instruction is still a draft."
+    assert composer.evaluate("(node) => node === document.activeElement")
+    assert page.locator('[data-detail-tab="overview"]').get_attribute("aria-pressed") == "true"
+
+    task_reads = fixture["task_reads"]
+    _, overview = api_fixture("overview?offset=0")
+    if scenario == "close":
+        page.keyboard.press("Escape")
+    elif scenario == "navigate":
+        page.locator('[data-view="activity"]').click()
+    elif scenario == "withheld":
+        overview["items"] = []
+    if scenario not in {"same", "withheld"}:
+        overview["items"][0]["revision"] = "b" * 40
+    if scenario in {"close", "navigate", "withheld"}:
+        fixture["overview"].fulfill(status=200, content_type="application/json", body=json.dumps(overview))
+        page.locator("#toast").get_by_text("Synthetic edit", exact=False).wait_for()
+        assert fixture["task_reads"] == task_reads, "A closed, hidden or withheld detail must not be reopened by receipt refresh"
+        assert page.locator("#inspector .detail-title").count() == 0
+        context.close()
+
+
+        return
+    with page.expect_request("**/api/tasks/api/task", timeout=5000):
+        fixture["overview"].fulfill(status=200, content_type="application/json", body=json.dumps(overview))
+    page.wait_for_timeout(30)
+    assert fixture["task"] is not None
+    if scenario == "same":
+        # A same-source background read must not unmount or blur the live composer while it waits.
+        assert composer.evaluate("(node) => node === document.activeElement")
+        assert composer.evaluate("(node) => [node.selectionStart, node.selectionEnd]") == [3, 9]
+    else:
+        assert page.locator("#inspector .detail-title").count() == 0, "Revision drift must clear stale source content before a re-read"
+    if scenario == "focus_elsewhere":
+        page.locator("#theme-toggle").focus()
+    if scenario == "read_denied":
+        fixture["task"].fulfill(status=403, content_type="application/json", body=json.dumps({
+            "error": "source_not_allowed", "message": "Synthetic source is no longer permitted.",
+        }))
+        page.locator("#notice").get_by_text("Synthetic source is no longer permitted.", exact=False).wait_for()
+        assert page.locator("#inspector .detail-title").count() == 0
+        assert page.locator(".task-copilot textarea").count() == 0
+    else:
+        _, task = api_fixture("task")
+        task["revision"] = overview["items"][0]["revision"]
+        fixture["task"].fulfill(status=200, content_type="application/json", body=json.dumps(task))
+        page.locator("#toast").get_by_text("Synthetic edit", exact=False).wait_for()
+        assert composer.input_value() == "My next synthetic instruction is still a draft."
+        assert page.locator('[data-detail-tab="overview"]').get_attribute("aria-pressed") == "true"
+        if scenario == "focus_elsewhere":
+            assert page.locator("#theme-toggle").evaluate("(node) => node === document.activeElement")
+        else:
+            assert composer.evaluate("(node) => node === document.activeElement")
+            assert composer.evaluate("(node) => [node.selectionStart, node.selectionEnd]") == [3, 9]
+        assert abs(page.locator("#inspector").evaluate("(node) => node.scrollTop") - scroll) <= 1
+    context.close()
+
+
+@pytest.mark.parametrize("scheme", ["dark", "light"])
+def test_real_browser_studio_contrast(workspace_url, chromium, scheme):
+    context = chromium.new_context()
+    page = context.new_page()
+    page.goto(workspace_url + "?mock=1")
+    page.locator("#command-open").wait_for()
+    if scheme == "light":
+        page.locator("#theme-toggle").click()
+    colors = page.evaluate("""() => Object.fromEntries(
+      ['ink','muted','page','paper','accent','soft','danger','danger-bg','warning','warning-bg','control-line']
+        .map(key => [key, getComputedStyle(document.documentElement).getPropertyValue('--' + key).trim()])
+    )""")
+
+    def luminance(hex_color):
+        channels = [int(hex_color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+        linear = [value / 12.92 if value <= .04045 else ((value + .055) / 1.055) ** 2.4 for value in channels]
+        return sum(value * weight for value, weight in zip(linear, [.2126, .7152, .0722]))
+
+    for foreground, background, minimum in [
+        ("ink", "page", 4.5), ("muted", "page", 4.5), ("muted", "paper", 4.5),
+        ("accent", "soft", 4.5), ("danger", "danger-bg", 4.5), ("warning", "warning-bg", 4.5),
+        ("control-line", "paper", 3),
+    ]:
+        light, dark = sorted([luminance(colors[foreground]), luminance(colors[background])], reverse=True)
+        contrast = (light + .05) / (dark + .05)
+        assert contrast >= minimum, (scheme, foreground, background, contrast)
+    context.close()
+
+
+@pytest.mark.parametrize("width,locale,scheme,motion", [
+    (1440, "en-US", "dark", "no-preference"), (1440, "ru-RU", "light", "reduce"),
+    (390, "ru-RU", "dark", "reduce"), (390, "en-US", "light", "no-preference"),
+])
+def test_real_browser_studio_reader_focus_source_text_and_failure(workspace_url, chromium, width, locale, scheme, motion):
+    context = chromium.new_context(viewport={"width": width, "height": 1000 if width > 1000 else 844},
+                                   locale=locale, reduced_motion=motion)
+    page = context.new_page()
+    quote = "Synthetic exact evidence: <strong>not executable markup</strong> / Точная тестовая цитата."
+    source = {
+        "id": "1" * 64, "revision": "a" * 40, "kind": "wiki",
+        "path": "wiki/sources/synthetic-evidence.md", "title": "Synthetic evidence",
+        "source_dates": {"captured": "2026-10-13"}, "bounded": False,
+        "text": "# Synthetic evidence\n\n" + quote + "\n\n" + "\n\n".join(
+            f"Synthetic paragraph {i}. This is labelled, public-style test content, not a personal source. "
+            "The reader must preserve the original text and expose its source status." for i in range(20)
+        ),
+    }
+    review = {
+        "id": "2" * 64, "revision": "b" * 40, "kind": "daily_review",
+        "path": "reviews/synthetic.json", "title": "Synthetic daily review", "as_of": "2026-10-13",
+        "findings": [{"id": "F1", "basis": "observed", "statement": "Synthetic finding / Тестовый вывод",
+                      "next_step": "Inspect the synthetic original.", "evidence": [{**source, "quote": quote}]}],
+        "feedback": {"available": False},
+    }
+    fixture = {"deny": False}
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        if operation.startswith("dashboard/inbox"):
+            status, body = 200, {"items": [review], "next_offset": None, "canonical_revision": "c" * 40, "issues": []}
+        elif operation == "dashboard/read":
+            if fixture["deny"]:
+                status, body = 409, {"error": "source_changed", "message": "Synthetic source changed; refresh before continuing."}
+            else:
+                status, body = 200, source if route.request.post_data_json["id"] == source["id"] else review
+        else:
+            status, body = api_fixture(operation)
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    page.route("**/api/tasks/api/**", respond)
+    page.goto(workspace_url + "#knowledge")
+    page.locator("#knowledge-list .source-row").wait_for()
+    label_fixture(page)
+    if scheme == "light":
+        page.locator("#theme-toggle").click()
+    row = page.locator("#knowledge-list .source-row")
+    row.click()
+    page.locator("#knowledge-reader blockquote").wait_for()
+    assert page.locator("#knowledge-reader blockquote").inner_text() == quote
+    assert page.locator("#knowledge-reader blockquote strong").count() == 0
+    assert page.locator("#knowledge-reader").evaluate("(node) => node === document.activeElement")
+    assert page.locator("#knowledge-reader").bounding_box()["y"] >= page.locator(".app-header").bounding_box()["height"] - 1
+    assert page.locator("#knowledge-reader").bounding_box()["y"] < 160
+    page.locator("#knowledge-reader .evidence-block button").click()
+    page.locator(".source-prose").wait_for()
+    assert quote in page.locator(".source-prose").inner_text()
+    assert page.locator(".source-prose strong").count() == 0
+    if width == 1440 and motion != "reduce" and page.evaluate("CSS.supports('animation-timeline: scroll()')"):
+        page.wait_for_function("new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.reader-progress')).transform).a < .01")
+        page.locator("#knowledge-reader").evaluate("(node) => { node.scrollTop = node.scrollHeight; }")
+        page.wait_for_function("new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.reader-progress')).transform).a > .99")
+        page.locator("#knowledge-reader").evaluate("(node) => { node.scrollTop = 0; }")
+    if motion == "reduce":
+        assert page.locator(".reader-progress").is_hidden()
+    assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    screenshot(page, f"reader-{width}-{scheme}-{locale[:2]}-{motion}")
+    page.locator(".reader-back").click()
+    assert row.evaluate("(node) => node === document.activeElement")
+    fixture["deny"] = True
+    row.click()
+    page.locator("#knowledge-reader [role=alert]").wait_for()
+    assert page.locator("#knowledge-reader .source-prose").count() == 0
+    page.keyboard.press("Escape")
+    assert row.evaluate("(node) => node === document.activeElement")
+    page.locator('[data-view="tasks"]').click()
+    settle(page)
+    assert ("День задач" if locale.startswith("ru") else "Task day") in page.locator("#snapshot").inner_text()
+    context.close()
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+@pytest.mark.parametrize("dismiss", ["knowledge", "today", "back", "escape"])
+def test_real_browser_initial_task_load_cannot_outlive_selection(workspace_url, chromium, width, dismiss):
+    context = chromium.new_context(viewport={"width": width, "height": 844 if width == 390 else 1000}, reduced_motion="reduce")
+    page = context.new_page()
+    fixture = {"held": None, "hold": True}
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        if operation == "task" and fixture["hold"]:
+            fixture["held"] = route
+            return
+        status, body = api_fixture(operation)
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    page.route("**/api/tasks/api/**", respond)
+    page.goto(workspace_url + "#tasks")
+    page.wait_for_function("!document.getElementById('command-open').hidden")
+    with page.expect_request("**/api/tasks/api/task"):
+        page.locator("#task-list .task-row").click()
+    page.wait_for_timeout(30)
+    assert fixture["held"] is not None
+    assert page.locator("#inspector").get_attribute("aria-busy") == "true"
+    assert page.locator("#inspector .mobile-back").is_visible()
+    assert page.locator("#inspector").evaluate("(node) => node === document.activeElement")
+    if dismiss in {"knowledge", "today"}:
+        page.locator(f'[data-view="{dismiss}"]').click()
+        page.locator('[data-view="tasks"]').click()
+    elif dismiss == "back":
+        page.locator("#inspector .mobile-back").click()
+    else:
+        page.keyboard.press("Escape")
+    assert "task-selected" not in (page.locator("#tasks-section").get_attribute("class") or "")
+    status, body = api_fixture("task")
+    with page.expect_response("**/api/tasks/api/task"):
+        fixture["held"].fulfill(status=status, content_type="application/json", body=json.dumps(body))
+    page.wait_for_load_state("networkidle")
+    assert visible_panels(page) == ["tasks"]
+    assert page.locator("#inspector .detail-title").count() == 0
+    assert page.locator("#inspector").get_attribute("aria-busy") is None
+    fixture["hold"] = False
+    page.locator("#task-list .task-row").click()
+    page.locator(".task-copilot textarea").wait_for()
+    assert page.locator("#inspector .detail-title").inner_text() == body["title"]
+    page.locator('[data-view="knowledge"]').click()
+    page.locator('[data-view="tasks"]').click()
+    assert page.locator("#inspector .detail-title").inner_text() == body["title"], "A fully loaded selection remains available on return"
+    context.close()
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+def test_real_browser_voice_stop_keeps_recording_binding_after_navigation(workspace_url, chromium, width):
+    context = chromium.new_context(viewport={"width": width, "height": 844 if width == 390 else 1000}, reduced_motion="reduce")
+    page = context.new_page()
+    calls = []
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        calls.append((operation, route.request))
+        status, body = api_fixture(operation)
+        if operation == "assist/voice":
+            body = {"text": "A synthetic instruction for the original task.", "language": "en", "duration_s": 1}
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    page.route("**/api/tasks/api/**", respond)
+    page.goto(workspace_url + "#tasks")
+    page.wait_for_function("!document.getElementById('command-open').hidden")
+    page.locator("#task-list .task-row").click()
+    page.locator(".task-copilot .mic-button").click()
+    page.locator('.task-copilot .mic-button[aria-pressed="true"]').wait_for()
+    page.locator('[data-view="today"]').click()
+    page.wait_for_timeout(1100)  # One fake Chromium media timeslice; no real microphone/audio.
+    stop = page.locator("#quick-mic" if width == 390 else "#header-mic")
+    assert stop.get_attribute("aria-label") == "Stop recording"
+    with page.expect_request("**/api/tasks/api/assist/chat"):
+        stop.click()
+    page.wait_for_function("!document.querySelector('.task-copilot button[type=submit]').disabled")
+    assert sum(operation == "assist/voice" for operation, _ in calls) == 1
+    chat = [request for operation, request in calls if operation == "assist/chat"]
+    assert len(chat) == 1
+    assert chat[0].post_data_json["task"] == {"path": "tasks/synthetic.md", "revision": "a" * 40}
+    assert chat[0].post_data_json["voice"] is True
+    assert stop.get_attribute("aria-pressed") == "false"
+    assert not page.locator("#copilot-dialog").is_visible(), "Stopping a task recording must not switch it into global chat"
     context.close()
