@@ -95,7 +95,8 @@ const tests = `
   ];
   dashboard.renderToday();
   const todayText = textTree($("today-work"));
-  assert.match(todayText, /Server-selected synthetic task/);
+  assert.match(textTree($("today-priorities")), /Server-selected synthetic task/);
+  assert.doesNotMatch(todayText, /Server-selected synthetic task/);
   assert.doesNotMatch(todayText, /Unselected synthetic task/);
   assert.match(todayText, /Waiting, not automatically due/);
   assert.match(todayText, /Task day 2026-10-10 \\/ UTC/);

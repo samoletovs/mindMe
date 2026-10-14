@@ -25,6 +25,12 @@ waiting into urgency. Pending proposals, unreviewed preparation and loaded
 waiting tasks remain separate from calendar attention. A loaded page is not the
 entire backlog; the existing 96-definition assessment and twelve-task pagination
 remain unchanged.
+The up-to-three Next moves use one shared priority selection. Each loaded task is
+shown once across priorities, additional calendar attention and waiting context.
+Priority entries retain exact deadlines, review/focus dates, stage, dependencies
+and definition warnings; consolidation does not discard a date or infer urgency.
+The secondary section keeps decisions/results and a route to all loaded Flow
+work. Partial coverage and source-status warnings remain visible.
 
 Eligible `wiki/sources/` captures and canonical research are compared with a
 previous immutable Git tree. New/updated means a new path/changed blob, not a date

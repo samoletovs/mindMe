@@ -280,6 +280,10 @@ Today highlights up to three loaded, server-eligible tasks with their recorded
 attention reasons; it is not a new commitment or a claim of complete coverage.
 Missing/partial task coverage is not called a quiet day. A combined estimate
 names the number of tasks with recorded estimates, not an invented full workload.
+One shared priority selection avoids repeated Today cards. Exact task dates,
+waiting dependencies and definition warnings stay attached to the displayed task;
+remaining loaded attention and waiting work appear below, alongside decisions
+and results. Counts and coverage remain bounded, not a whole-backlog claim.
 Flow offers a list and six-stage board; dragging uses deterministic, source-bound
 `assist/change` (or the existing exact refinement when AI is unavailable). Done
 still opens evidence-based closure rather than accepting a drag as verification.
@@ -295,7 +299,15 @@ available on phones. Only one view is shown after rapid navigation; transitions
 are limited to the work area, never the fixed chrome. All entrance/movement
 animations respect reduced motion, and loading states have no endless shimmer.
 Its English/Russian controls follow the browser language,
-with an in-memory toggle. Assist uses the existing same-origin API, session,
+with an in-memory toggle. Manual edit, date, preparation, verified closure,
+clarification, capture and project controls use the same local copy catalog.
+Canonical text, quotes, user/model output, backend messages, protocol values,
+field names and ISO dates are not automatically translated.
+The header, phone action bar and forms reflow at 200% **text resizing** without
+reducing the requested text size. This is not a browser-zoom claim. Operational
+metadata uses a shared 0.75rem role. The phone bar's measured height determines
+reserved bottom space, as the header's height already determines drawer offsets.
+Assist uses the existing same-origin API, session,
 CSRF and uncertain-request recovery boundary. Applied cards distinguish pending
 publication from confirmed canonical saving, show exact diffs and receipt-bound
 Undo. Proposal cards retain exact server-bound approval; spoken yes/approve/да
@@ -312,10 +324,22 @@ selection remains available on return.
 Voice/API errors are repeated inside the copilot so a modal never hides the
 failure behind its backdrop. Keyboard/touch information controls are dismissable.
 Background receipt reads retain the same-source composer and selected tab.
+Manual form drafts for the current selection also retain values, checkboxes,
+selected options and focus/caret across locale changes, tab changes and same-source
+rerenders. Only this selected task's path+revision is retained in memory; answers
+additionally bind the current clarification question token. Changed/withheld
+sources visibly discard manual drafts rather than applying old input to a new
+revision. Explicit close/new selection and sign-out/expiry clear them. No
+cross-task draft store or browser persistence is added.
 Changed source content is still invalidated immediately; draft/caret/scroll
 restoration requires a fresh permitted task and unchanged selection intent.
 Closing/navigating away while a request is returning cannot reopen the detail;
 moving keyboard focus elsewhere cannot pull it back into the composer.
+Deliberate view navigation establishes the heading or retained selected-detail
+context. Locale-only rendering, receipt polling and background refresh do not
+perform that arrival action. Normal signed-out/expired sessions offer Sign in,
+not a second Retry action; genuine network/server failures still offer recovery.
+Existing expiry and uncertain-operation guidance remains explicit.
 
 `applied` does not mean saved: canonical saving requires `saved: true`,
 `status: completed`, `publication_status: merged` and `source_status: current`. Submitted/executing

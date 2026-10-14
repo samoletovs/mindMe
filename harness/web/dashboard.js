@@ -109,7 +109,9 @@ export class Dashboard {
   renderToday() {
     const { state, element, append, button, writeButton, empty, infoTip, openTask, renderTaskRow } = this.ui;
     const work = $("today-work");
-    this.renderPriorities();
+    const priorities = this.priorityTasks();
+    this.renderPriorities(priorities);
+    const shown = new Set(priorities.map((task) => task.path));
     work.replaceChildren();
     if (!state.overview) {
       empty(work, copy("Tasks are not available yet.", "Задачи пока недоступны."), copy("Source failures are not an empty backlog.", "Ошибка источника не означает пустой список задач."));
@@ -123,18 +125,22 @@ export class Dashboard {
         work.append(button(copy("Review decisions and results", "Проверить решения и результаты"), () => this.ui.setView("activity")));
       }
 
-      const attention = state.items.filter((item) => item.attention_eligible);
-      work.append(element("h3", copy("Dates and follow-ups", "Сроки и пересмотры")));
-      if (!attention.length) empty(work, copy("No due tasks in this loaded set.", "В загруженной выборке нет задач со сроком на сегодня."),
+      const attention = state.items.filter((item) => item.attention_eligible && !shown.has(item.path));
+      if (attention.length) work.append(element("h3", copy("More dates and follow-ups", "Другие сроки и пересмотры")));
+      else if (priorities.length) work.append(element("p", copy(
+        "The loaded tasks needing attention are in Next moves above, with their dates and dependencies.",
+        "Загруженные задачи, требующие внимания, показаны выше — со сроками и зависимостями."), "hint"));
+      else empty(work, copy("No due tasks in this loaded set.", "В загруженной выборке нет задач со сроком на сегодня."),
         copy("Only loaded tasks are checked.", "Проверены только загруженные задачи."));
-      for (const task of attention.slice(0, 5)) {
+      for (const task of attention) {
         const row = renderTaskRow(task, () => openTask(task.path));
         work.append(row);
+        shown.add(task.path);
       }
-      const waiting = state.items.filter((item) => item.waiting_for || item.stage === "waiting");
+      const waiting = state.items.filter((item) => (item.waiting_for || item.stage === "waiting") && !shown.has(item.path));
       if (waiting.length) {
         work.append(element("h3", copy("Waiting, not automatically due", "Ожидают, но не обязательно требуют внимания")));
-        for (const task of waiting.slice(0, 3)) work.append(renderTaskRow(task, () => openTask(task.path)));
+        for (const task of waiting) work.append(renderTaskRow(task, () => openTask(task.path)));
       }
       const day = element("p", `${copy("Task day", "День задач")} ${state.overview.attention.calendar_date} / ${state.overview.attention.timezone} `, "hint");
       day.append(infoTip(copy("Uses the task service's dates and eligibility, not your browser clock.", "Используются даты и условия сервиса задач, а не часы браузера.")));
@@ -142,7 +148,7 @@ export class Dashboard {
       if (state.overview.attention_complete === false || state.overview.next_offset != null) {
         work.append(element("p", copy("More tasks or source issues remain. Check Tasks before concluding that nothing needs attention.", "Остались другие задачи или проблемы источников. Проверьте «Поток», прежде чем считать, что ничего не требует внимания."), "review-due"));
       }
-      work.append(button(copy("Open Tasks", "Открыть задачи"), () => this.ui.setView("needs")));
+      work.append(button(copy("Open all loaded work in Flow", "Открыть все загруженные задачи в «Потоке»"), () => this.ui.setView("tasks")));
     }
     if (!this.today) return;
     const focus = $("today-focus");
@@ -190,22 +196,18 @@ export class Dashboard {
       button(copy("Open Knowledge inbox", "Открыть входящие знаний"), () => this.ui.setView("knowledge"))));
   }
 
-  renderPriorities() {
-    const { state, element, append, button, openTask } = this.ui;
+  priorityTasks() {
+    const rank = (task) => (task.attention_reasons || []).reduce((score, reason) =>
+      score + (({ deadline_due: 16, deadline_soon: 8, focus_today: 4, review_due: 2 })[reason] || 0), 0);
+    return this.ui.state.items.filter((task) => task.attention_eligible)
+      .sort((a, b) => rank(b) - rank(a)).slice(0, 3);
+  }
+
+  renderPriorities(top = this.priorityTasks()) {
+    const { state, element, append, button, openTask, taskTiming, statusBadge } = this.ui;
     const target = $("today-priorities");
     target.replaceChildren();
     const ru = document.documentElement?.lang === "ru";
-    const labels = {
-      focus_today: ru ? "Выбрано на сегодня" : "Selected for today",
-      deadline_due: ru ? "Наступил срок" : "Deadline due",
-      deadline_soon: ru ? "Срок приближается" : "Deadline approaching",
-      review_due: ru ? "Пора пересмотреть" : "Review due",
-    };
-    const tasks = state.items.filter((task) => task.attention_eligible);
-    const rank = (task) => (task.attention_reasons || []).reduce((score, reason) =>
-      score + (({ deadline_due: 16, deadline_soon: 8, focus_today: 4, review_due: 2 })[reason] || 0), 0);
-    tasks.sort((a, b) => rank(b) - rank(a));
-    const top = tasks.slice(0, 3);
     const estimated = top.filter((task) => Number.isFinite(task.estimate_min) && task.estimate_min >= 0);
     const minutes = estimated.reduce((sum, task) => sum + task.estimate_min, 0);
     const duration = minutes >= 60
@@ -225,7 +227,7 @@ export class Dashboard {
           : partial ? copy("Only loaded tasks are shown. Unchecked work may still need attention.", "Показаны только загруженные задачи. Непроверенная работа ещё может требовать внимания.")
             : copy("No due or selected tasks in this loaded snapshot. Choose a task when you are ready.", "В загруженном снимке нет задач со сроком на сегодня или выбранным фокусом. Выберите задачу, когда будете готовы.");
     }
-    if (!tasks.length) {
+    if (!top.length) {
       this.ui.empty(target, copy("No next moves to show yet.", "Пока нет следующих шагов для показа."),
         copy("Open Flow to inspect the task inventory and its source status.", "Откройте «Поток», чтобы проверить задачи и состояние источников."));
       return;
@@ -237,7 +239,8 @@ export class Dashboard {
       append(card, number,
         element("strong", task.title),
         element("p", task.next_action || (ru ? "Уточните следующий шаг." : "Clarify the next step.")),
-        element("p", (task.attention_reasons || []).map((reason) => labels[reason] || reason).join(" · "), "priority-reason"));
+        append(element("div", null, "priority-reason"),
+          statusBadge(task.stage), taskTiming(task)));
       if (task.estimate_min != null) card.append(element("span", `${task.estimate_min} ${copy("min", "мин")}`, "status"));
       target.append(card);
     });
