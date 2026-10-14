@@ -1,57 +1,99 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
   <meta name="referrer" content="no-referrer">
-  <title>mindMe — Your AI workspace</title>
+  <title>mindMe — Personal vault</title>
   <link rel="stylesheet" href="/api/tasks/assets/tasks.css">
   <script type="module" src="/api/tasks/assets/tasks.js"></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to workspace</a>
+  <!--
+    THESIS: A personal working studio, not a dashboard of invented progress.
+    OWN-WORLD: Graphite, warm ivory, chartreuse; folded linework, open space and precise rules.
+    STORY: Enter as the configured owner. Find a next move, inspect evidence, decide deliberately.
+    FIRST VIEWPORT: Sign-in pairs expressive type with an original unfolding study.
+    The working view replaces the illustration with source-bound tasks and approved focus.
+    FORM: User-selected dark kinetic studio. Motion reveals structure, never implies completion.
+  -->
+  <a class="skip-link" href="#main" data-i18n="skipWorkspace">Skip to workspace</a>
   <header class="app-header">
-    <a class="brand" href="/api/tasks" aria-label="mindMe vault home"><span class="brand-symbol" aria-hidden="true">m</span>mind<span>Me</span><span class="brand-divider"></span><span class="brand-section">Personal intelligence</span></a>
+    <a class="brand" href="/api/tasks" aria-label="mindMe vault home"><span class="brand-symbol" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M5 25V7l11 6L27 7v18l-11-6L5 25Z"/><path d="M16 13v6M5 7l11-4 11 4"/></svg></span>mind<span>Me</span><span class="brand-divider"></span><span class="brand-section" data-i18n="vaultLabel">Personal vault</span></a>
     <div class="header-actions">
-      <span id="connection" class="connection">Checking sign-in</span>
-      <button id="command-open" class="quiet ai-feature" type="button" hidden aria-label="Open copilot command bar">Copilot <kbd>⌘ K</kbd></button>
-      <button id="header-mic" class="mic-button header-mic ai-feature" type="button" hidden aria-label="Record voice instruction">●</button>
+      <span id="connection" class="connection" role="status">Checking sign-in</span>
+      <button id="command-open" class="quiet ai-feature" type="button" hidden data-i18n-aria="openCopilot" aria-label="Open copilot command bar"><span data-i18n="copilot">Copilot</span><kbd id="command-shortcut" aria-hidden="true">Ctrl K</kbd></button>
+      <button id="header-mic" class="mic-button header-mic ai-feature" type="button" hidden aria-label="Record voice instruction"><span class="mic-glyph" aria-hidden="true"></span></button>
       <button id="language-toggle" class="quiet" type="button" aria-label="Switch language">EN</button>
-      <button id="theme-toggle" class="quiet" type="button" aria-label="Switch color theme">◐</button>
-      <button id="refresh" class="quiet" type="button" hidden data-i18n="refresh">Refresh</button>
+      <button id="theme-toggle" class="quiet icon-button" type="button" aria-label="Use light theme"><span class="theme-glyph" aria-hidden="true"></span></button>
+      <button id="refresh" class="quiet icon-button" type="button" hidden aria-label="Refresh" data-i18n-aria="refresh"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 8a8 8 0 1 0 0 8M20 3v5h-5"/></svg></button>
       <button id="capture-open" class="primary" type="button" hidden data-i18n="capture">+ Capture a task</button>
       <button id="sign-out" class="quiet" type="button" hidden data-i18n="signOut">Sign out</button>
     </div>
   </header>
+  <p id="demo-banner" class="mock-banner" hidden></p>
 
   <main id="main" tabindex="-1">
     <section id="access" class="access-panel" aria-labelledby="access-title">
-      <div class="access-mark" aria-hidden="true">m</div>
-      <h1 id="access-title">Less managing.<br>More moving forward.</h1>
-      <p id="access-message">Checking your personal workspace. No private content is stored in this browser.</p>
-      <div class="actions">
-        <a id="sign-in" class="button primary" href="/api/tasks/auth/login" hidden>Sign in with Microsoft</a>
-        <button id="access-retry" type="button" hidden>Try again</button>
+      <div class="access-copy">
+        <h1 id="access-title"><span data-i18n="accessThink">Room to think.</span><span class="display-offset" data-i18n="accessAct">Space to act.</span></h1>
+        <p class="access-intro" data-i18n="accessIntro">Your tasks, ideas and evidence. One personal space to move them forward.</p>
+        <div class="access-entry">
+          <p id="access-message" role="status" aria-live="polite">Checking your personal workspace. No private content is stored in this browser.</p>
+          <div class="actions">
+            <a id="sign-in" class="button primary" href="/api/tasks/auth/login" hidden><svg class="microsoft-mark" viewBox="0 0 20 20" aria-hidden="true"><path d="M1 1h8v8H1zm10 0h8v8h-8zM1 11h8v8H1zm10 0h8v8h-8z"/></svg><span data-i18n="signIn">Sign in with Microsoft</span><span aria-hidden="true">↗</span></a>
+            <button id="access-retry" class="quiet" type="button" hidden data-i18n="tryAgain">Try again</button>
+          </div>
+        </div>
+        <p class="fine-print" data-i18n="ownerOnly">For the configured personal owner only. Your tasks stay in their existing vault; this is a view and an authorized way to work with them.</p>
       </div>
-      <p class="fine-print">For the configured personal owner only. Your tasks stay in their existing vault; this is a view and an authorized way to work with them.</p>
+      <figure class="access-art" aria-hidden="true">
+        <div class="art-caption"><span data-i18n="artCaption">From possibility to a next move.</span><span class="art-cross">+</span></div>
+        <svg class="studio-graphic" viewBox="0 0 520 540" fill="none">
+          <defs><pattern id="studio-grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0v40" class="art-grid"/></pattern></defs>
+          <rect x="20" y="20" width="480" height="480" fill="url(#studio-grid)"/>
+          <path class="art-axis" d="M20 260h480M260 20v480M20 20h12m-6-6v12M488 500h12m-6-6v12"/>
+          <g class="fold-lines">
+            <path d="M66 406V130L260 44l194 86v276l-194 90L66 406Z"/>
+            <path d="M78 397V141L260 61l182 80v256l-182 84-182-84Z"/>
+            <path d="M90 388V152l170-74 170 74v236l-170 78-170-78Z"/>
+            <path d="M102 379V163l158-68 158 68v216l-158 72-158-72Z"/>
+            <path d="M114 370V174l146-62 146 62v196l-146 66-146-66Z"/>
+            <path d="M126 361V185l134-56 134 56v176l-134 60-134-60Z"/>
+            <path d="M138 352V196l122-50 122 50v156l-122 54-122-54Z"/>
+            <path d="M150 343V207l110-44 110 44v136l-110 48-110-48Z"/>
+            <path d="M162 334V218l98-38 98 38v116l-98 42-98-42Z"/>
+            <path d="M174 325v-96l86-32 86 32v96l-86 36-86-36Z"/>
+            <path d="M186 316v-76l74-26 74 26v76l-74 30-74-30Z"/>
+          </g>
+          <g class="fold-opening">
+            <path d="M66 130l194 92 194-92M260 222v274"/>
+            <path d="M66 406l194-91 194 91"/>
+          </g>
+          <path class="fold-signal" pathLength="1" d="M66 406V130l194 92v274"/>
+          <path class="fold-tab" d="m260 222 48-23v46l-48 24z"/>
+          <path class="art-axis" d="M20 522h480"/>
+        </svg>
+        <figcaption><span data-i18n="artFoot">A little structure. More possibility.</span><span aria-hidden="true">↗</span></figcaption>
+      </figure>
     </section>
 
     <div id="workspace" class="workspace" hidden>
-      <nav class="navigation" aria-label="Workspace views">
-        <div class="nav-eyebrow">YOUR WORKSPACE</div>
-        <button type="button" data-view="today" aria-current="page"><span data-i18n="today">Today</span><span aria-hidden="true">◉</span></button>
-        <button type="button" data-view="tasks"><span data-i18n="flow">Flow</span><span id="tasks-count"></span></button>
-        <button type="button" data-view="knowledge" data-i18n="knowledgeNav">Knowledge</button>
-        <button type="button" data-view="areas" data-i18n="areasNav">Areas &amp; projects</button>
-        <button type="button" data-view="activity"><span data-i18n="activityNav">Activity</span><span id="activity-count"></span></button>
-        <button id="nav-copilot" class="ai-feature" type="button" hidden><span data-i18n="copilot">Copilot</span><span aria-hidden="true">✦</span></button>
-        <div class="nav-note"><strong>Grounded in your vault.</strong><p>AI helps you move. Your canonical record stays the source of truth.</p><span id="assist-usage"></span></div>
+      <nav class="navigation" aria-label="Workspace views" data-i18n-aria="workspaceViews">
+        <div class="nav-title" data-i18n="workspaceLabel">Workspace</div>
+        <button type="button" data-view="today" aria-current="page"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1 1m12 12 1 1M5 19l1-1M18 6l1-1"/></svg><span class="nav-label" data-i18n="today">Today</span></button>
+        <button type="button" data-view="tasks"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v16M12 4v10M20 4v16M2 8h4m4 3h4m4 5h4"/></svg><span class="nav-label" data-i18n="flow">Flow</span><span id="tasks-count" class="nav-count"></span></button>
+        <button type="button" data-view="knowledge"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h6l3 3 3-3h6v15h-6l-3 2-3-2H3V4Zm9 3v14"/></svg><span class="nav-label" data-i18n="knowledgeNav">Knowledge</span></button>
+        <button type="button" data-view="areas"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z"/></svg><span class="nav-label" data-i18n="areasNav">Areas &amp; projects</span></button>
+        <button type="button" data-view="activity"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h11M4 19h7"/><circle cx="19" cy="19" r="2"/></svg><span class="nav-label" data-i18n="activityNav">Activity</span><span id="activity-count" class="nav-count"></span></button>
+        <button id="nav-copilot" class="ai-feature" type="button" hidden><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5L12 3Z"/></svg><span class="nav-label" data-i18n="copilot">Copilot</span><span aria-hidden="true">↗</span></button>
+        <div class="nav-note"><strong data-i18n="grounded">Grounded in your vault.</strong><p data-i18n="groundedDetail">AI helps you move. Your canonical record stays the source of truth.</p><span id="assist-usage"></span></div>
       </nav>
 
       <div class="work-content">
         <div class="page-heading">
-          <div><h1 id="view-title">Today</h1><p id="view-description">Approved focus, current work and something worth revisiting.</p></div>
+          <div><h1 id="view-title" tabindex="-1">Today</h1><p id="view-description">Approved focus, current work and something worth revisiting.</p></div>
           <span id="snapshot" class="snapshot"></span>
         </div>
         <nav id="canonical-links" class="actions" aria-label="Canonical vault pages" hidden></nav>
@@ -65,43 +107,45 @@
 
         <section id="capture-section" class="capture-section" aria-labelledby="capture-title" hidden>
           <div class="section-heading"><h2 id="capture-title" data-i18n="captureTitle">Get it out of your head</h2><button id="capture-cancel" class="quiet" type="button" data-i18n="closeCapture">Close capture</button></div>
-          <p>One rough request is enough. Missing details can stay in Clarify. Keep sensitive details in their private record.</p>
+          <p data-i18n="captureIntro">One rough request is enough. Missing details can stay in Clarify. Keep sensitive details in their private record.</p>
           <p id="capture-context" class="notice" hidden></p>
           <form id="capture-form">
             <label for="capture-text" data-i18n="captureQuestion">What do you need to do?</label>
-            <textarea id="capture-text" name="text" rows="3" maxlength="2000" required placeholder="Describe the outcome or the question you want to resolve."></textarea>
-            <label for="capture-title-input">Title <span class="optional">optional</span></label>
-            <input id="capture-title-input" name="title" maxlength="120" placeholder="Leave blank to use the first line of your request">
+            <textarea id="capture-text" name="text" rows="3" maxlength="2000" required placeholder="Describe the outcome or the question you want to resolve." data-i18n-placeholder="capturePlaceholder"></textarea>
+            <label for="capture-title-input" data-i18n="optionalTitle">Title (optional)</label>
+            <input id="capture-title-input" name="title" maxlength="120" placeholder="Leave blank to use the first line of your request" data-i18n-placeholder="titlePlaceholder">
             <details><summary data-i18n="captureDetails">Add the details you already know</summary><div id="capture-details" class="form-grid"></div></details>
-            <div class="form-footer"><p class="hint">First review the proposed record. Capturing it will not start research or an agent.</p><button class="primary" type="submit" data-i18n="reviewCapture">Review capture</button></div>
+            <div class="form-footer"><p class="hint" data-i18n="captureHint">First review the proposed record. Capturing it will not start research or an agent.</p><button class="primary" type="submit" data-i18n="reviewCapture">Review capture</button></div>
           </form>
         </section>
 
         <section id="proposal-section" aria-labelledby="proposal-heading" hidden>
-          <div class="section-heading"><h2 id="proposal-heading">Review before acting</h2><button id="proposal-close" class="quiet" type="button">Return to workspace</button></div>
+          <div class="section-heading"><h2 id="proposal-heading" tabindex="-1" data-i18n="reviewBefore">Review before acting</h2><button id="proposal-close" class="quiet" type="button" data-i18n="returnWorkspace">Return to workspace</button></div>
           <div id="proposal-preview"></div>
         </section>
 
         <section id="today-section" data-view-panel="today" aria-label="Today in your vault">
           <section class="today-hero">
-            <div class="hero-copy"><span class="eyebrow" data-i18n="personal">PERSONAL INTELLIGENCE</span><h2 id="hero-line">Your day, ready in a moment.</h2><p id="hero-detail">Top priorities, next steps and a copilot to move them.</p><button id="briefing-open" class="primary ai-feature" type="button" hidden data-i18n="briefing">✦ Plan my day</button></div>
-            <div class="intelligence-orb" aria-hidden="true"><span></span><span></span><span></span><b>✦</b></div>
+            <div class="hero-copy"><h2 id="hero-line">Finding your next move.</h2><p id="hero-detail">Reading the current task snapshot.</p></div>
+            <div class="today-action"><span class="studio-mark" aria-hidden="true"><svg viewBox="0 0 80 80" fill="none"><path d="M12 62V18l28 14 28-14v44L40 48 12 62Z"/><path d="M20 58V22m8 32V26m24 28V26m8 32V22M40 32v16M12 18 40 8l28 10"/></svg></span><button id="briefing-open" class="primary ai-feature" type="button" hidden data-i18n="briefing">Plan my day ↗</button></div>
           </section>
-          <div id="today-priorities" class="priority-grid"></div>
-          <div id="today-focus" class="focus-summary"></div>
+          <div class="today-deck">
+            <section class="priority-section" aria-labelledby="next-moves-title"><div class="section-heading"><h2 id="next-moves-title" data-i18n="nextMoves">Next moves</h2><span class="hint" data-i18n="loadedPriorities">From loaded work</span></div><div id="today-priorities" class="priority-grid"></div></section>
+            <section id="today-focus" class="focus-summary" aria-label="Approved focus" data-i18n-aria="approvedFocus"></section>
+          </div>
           <div class="today-columns">
-            <section aria-labelledby="today-work-title"><h2 id="today-work-title">Work to look at</h2><div id="today-work"></div></section>
-            <section aria-labelledby="today-new-title"><h2 id="today-new-title">New since last visit</h2><div id="today-new"></div></section>
+            <section aria-labelledby="today-work-title"><h2 id="today-work-title" data-i18n="workToLookAt">Work to look at</h2><div id="today-work"></div></section>
+            <section aria-labelledby="today-new-title"><h2 id="today-new-title" data-i18n="newSince">New since last visit</h2><div id="today-new"></div></section>
           </div>
         </section>
 
         <section id="knowledge-section" data-view-panel="knowledge" aria-labelledby="knowledge-title" hidden>
-          <div class="section-heading"><h2 id="knowledge-title">Inbox</h2><span class="hint">Findings first. Evidence one step away.</span></div>
-          <p class="hint">Canonical daily reviews and weekly digests. Their interpretations and possible next steps are not approved work.</p>
+          <div class="section-heading"><h2 id="knowledge-title" data-i18n="knowledgeInbox">Inbox</h2><span class="hint" data-i18n="knowledgeHint">Findings first. Evidence one step away.</span></div>
+          <p class="hint" data-i18n="knowledgeIntro">Canonical daily reviews and weekly digests. Their interpretations and possible next steps are not approved work.</p>
           <div id="knowledge-status" role="status" aria-live="polite"></div>
           <div class="knowledge-layout">
-            <div id="knowledge-list-pane"><div id="knowledge-list" class="knowledge-list"></div><button id="knowledge-more" type="button" hidden>Load earlier reviews</button></div>
-            <aside id="knowledge-reader" class="knowledge-reader inspector" aria-label="Evidence reader">
+            <div id="knowledge-list-pane"><div id="knowledge-list" class="knowledge-list"></div><button id="knowledge-more" type="button" hidden data-i18n="earlierReviews">Load earlier reviews</button></div>
+            <aside id="knowledge-reader" class="knowledge-reader inspector" tabindex="-1" aria-label="Evidence reader" data-i18n-aria="evidenceReader">
               <div class="inspector-empty"><h2>Start with the evidence.</h2><p>Open a finding to see its original quotations. Useful is feedback, not permission to act.</p></div>
             </aside>
           </div>
@@ -128,56 +172,57 @@
           <div class="task-layout">
             <div id="list-pane">
               <div id="task-list" class="task-list" aria-live="polite"></div>
-              <div class="list-footer"><p id="page-status" class="hint"></p><button id="load-more" type="button" hidden>Load more tasks</button></div>
+              <div class="list-footer"><p id="page-status" class="hint"></p><button id="load-more" type="button" hidden data-i18n="moreTasks">Load more tasks</button></div>
             </div>
-            <aside id="inspector" class="inspector" aria-label="Selected task">
+            <aside id="inspector" class="inspector" tabindex="-1" aria-label="Selected task" data-i18n-aria="selectedTask">
               <div class="inspector-empty"><h2>A next step, not another list.</h2><p>Open a task to clarify its outcome, plan the next action, or review what AI can prepare.</p><p class="hint">Completion always needs evidence.</p></div>
             </aside>
           </div>
         </section>
 
         <section id="areas-section" data-view-panel="areas" aria-labelledby="areas-title" hidden>
-          <h2 id="areas-title">Responsibilities and selected projects</h2>
-          <p>Areas are ongoing responsibilities. A project has an outcome; an inventory entry is not automatically an active commitment.</p>
+          <h2 id="areas-title" data-i18n="responsibilities">Responsibilities and selected projects</h2>
+          <p data-i18n="areasIntro">Areas are ongoing responsibilities. A project has an outcome; an inventory entry is not automatically an active commitment.</p>
           <div id="area-list" class="area-list"></div>
           <form id="projects-form" class="section-block">
-            <h3>Select projects for planning</h3>
-            <p class="hint">Choose up to eight existing projects. Changing this selection turns off standing AI permission until you review it again.</p>
+            <h3 data-i18n="selectProjects">Select projects for planning</h3>
+            <p class="hint" data-i18n="projectsHint">Choose up to eight existing projects. Changing this selection turns off standing AI permission until you review it again.</p>
             <div id="project-options" class="check-list"></div>
             <p id="project-page-status" class="hint"></p>
-            <div class="actions"><button id="projects-more" type="button" hidden>Load more projects</button><button type="submit">Save project selection</button><button id="projects-clear" type="button" class="danger-quiet">Clear project selection</button></div>
+            <div class="actions"><button id="projects-more" type="button" hidden data-i18n="moreProjects">Load more projects</button><button type="submit" data-i18n="saveProjects">Save project selection</button><button id="projects-clear" type="button" class="danger-quiet" data-i18n="clearProjects">Clear project selection</button></div>
           </form>
           <form id="standing-form" class="section-block">
-            <h3>Let AI prepare, within clear limits</h3>
-            <p>Optionally authorize private draft preparation for up to three fully defined Ready tasks in your selected projects. Changes to their source invalidate that scope.</p>
-            <label class="checkbox"><input id="standing-enabled" type="checkbox"> Enable standing preparation for the tasks selected below</label>
+            <h3 data-i18n="standingTitle">Let AI prepare, within clear limits</h3>
+            <p data-i18n="standingIntro">Optionally authorize private draft preparation for up to three fully defined Ready tasks in your selected projects. Changes to their source invalidate that scope.</p>
+            <label class="checkbox"><input id="standing-enabled" type="checkbox"><span data-i18n="standingEnable">Enable standing preparation for the tasks selected below</span></label>
             <div id="standing-options" class="check-list"></div>
-            <p class="hint">This does not authorize public research, new commitments, messages, purchases, or verified completion.</p>
-            <div class="actions"><button type="submit">Save standing permission</button><button id="standing-stop" type="button" class="danger-quiet">Stop standing preparation</button></div>
+            <p class="hint" data-i18n="standingHint">This does not authorize public research, new commitments, messages, purchases, or verified completion.</p>
+            <div class="actions"><button type="submit" data-i18n="saveStanding">Save standing permission</button><button id="standing-stop" type="button" class="danger-quiet" data-i18n="stopStanding">Stop standing preparation</button></div>
           </form>
-          <details class="section-block"><summary>Preparation limits and usage</summary><pre id="budget-details"></pre><p class="hint">These are operational limits, not a guarantee of a provider's bill. Unconfirmed work is never treated as a refund.</p></details>
+          <details class="section-block"><summary data-i18n="preparationLimits">Preparation limits and usage</summary><pre id="budget-details"></pre><p class="hint" data-i18n="limitsHint">These are operational limits, not a guarantee of a provider's bill. Unconfirmed work is never treated as a refund.</p></details>
         </section>
 
         <section id="activity-section" data-view-panel="activity" aria-labelledby="activity-title" hidden>
-          <h2 id="activity-title">Decisions and results</h2>
-          <p>Follow the same request from proposal to canonical record. A prepared draft is not a verified outcome.</p>
+          <h2 id="activity-title" data-i18n="decisionsResults">Decisions and results</h2>
+          <p data-i18n="activityIntro">Follow the same request from proposal to canonical record. A prepared draft is not a verified outcome.</p>
           <div id="activity-list"></div>
-          <button id="history-more" type="button" hidden>Load more activity</button>
+          <button id="history-more" type="button" hidden data-i18n="moreActivity">Load more activity</button>
         </section>
       </div>
     </div>
   </main>
   <div id="quick-bar" class="quick-bar" hidden>
     <button id="quick-capture" type="button" class="quiet" data-i18n="capture">+ Capture</button>
-    <button id="quick-mic" type="button" class="mic-button ai-feature" hidden aria-label="Record voice instruction">●</button>
+    <button id="quick-mic" type="button" class="mic-button ai-feature" hidden aria-label="Record voice instruction"><span class="mic-glyph" aria-hidden="true"></span></button>
     <button id="quick-chat" type="button" class="quiet ai-feature" hidden data-i18n="copilot">✦ Copilot</button>
   </div>
   <dialog id="copilot-dialog" class="copilot-dialog" aria-labelledby="copilot-title">
-    <div class="copilot-heading"><div><span class="eyebrow">MINDME AI</span><h2 id="copilot-title" data-i18n="copilot">Copilot</h2></div><button id="copilot-close" type="button" class="quiet" aria-label="Close copilot">✕</button></div>
+    <div class="copilot-heading"><h2 id="copilot-title" data-i18n="copilot">Copilot</h2><button id="copilot-close" type="button" class="quiet icon-button" aria-label="Close copilot" data-i18n-aria="closeCopilot">✕</button></div>
+    <p id="copilot-notice" class="notice" role="status" aria-live="polite" hidden></p>
     <div id="global-chat"></div>
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <footer class="app-footer">mindMe <span aria-hidden="true">/</span> Personal work, grounded in your vault.</footer>
+  <footer class="app-footer"><span>mindMe <span aria-hidden="true">/</span> <span data-i18n="footer">Personal work, grounded in your vault.</span></span><span class="footer-note" data-i18n="footerNote">Think clearly. Move deliberately.</span></footer>
   <noscript><p class="notice">JavaScript is required for this workspace. No task action has been taken.</p></noscript>
 </body>
 </html>

@@ -166,6 +166,16 @@ browser-selected recovery token, and publication-phase controls after uncertaint
 It intercepts all data routes; it neither logs into nor mutates production.
 The loopback-only helper and browser stop before it returns.
 
+The kinetic-studio reader keeps exact source quotations and feedback semantics
+unchanged while adding EN/RU interface copy, explicit keyboard focus/return, a
+coherent dark/light surface and an optional CSS scroll-position line. That line
+does not save reading history or imply comprehension. Reduced motion removes it.
+Today names missing and partial task/source coverage rather than inventing a
+quiet day. `DESIGN.md` records the implemented visual system and public references.
+The additional `test_task_workspace_ui.py` browser fixtures cover sign-in,
+themes/locales/motion and the task/copilot interaction frame; exported screenshots
+are synthetic local evidence, not successful production authentication.
+
 Full connected library, ideas triage, Save as idea, new research UI and curation
 remain future releases. Domain/DNS cutover, infrastructure, identities, secrets,
 configuration, merge and deployment are outside this implementation's scope.

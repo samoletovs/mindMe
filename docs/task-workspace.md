@@ -271,10 +271,15 @@ across those routes.
 
 ### Owner workspace UI
 
-The static shell uses a deep-ink/violet dark theme and a cool light theme
-(system preference plus an in-memory toggle), with reduced-motion support.
+The static shell uses the **Dark kinetic studio** identity: graphite, warm ivory,
+chartreuse and an original inline-SVG folding study on sign-in. Dark is the default
+regardless of OS theme; the coherent warm-light counterpart is an in-memory
+toggle. Native display/system fonts need no downloads. See `DESIGN.md` for the
+actual tokens, composition and public design/platform references.
 Today highlights up to three loaded, server-eligible tasks with their recorded
 attention reasons; it is not a new commitment or a claim of complete coverage.
+Missing/partial task coverage is not called a quiet day. A combined estimate
+names the number of tasks with recorded estimates, not an invented full workload.
 Flow offers a list and six-stage board; dragging uses deterministic, source-bound
 `assist/change` (or the existing exact refinement when AI is unavailable). Done
 still opens evidence-based closure rather than accepting a drag as verification.
@@ -284,8 +289,12 @@ The task copilot has outcome/done conditions, a seven-step AI rail, and an
 in-memory instruction thread. The global copilot opens with Ctrl/Cmd+K, the
 header (desktop) or the phone's bottom action bar; the bar is hidden at 1024px
 and wider so it never covers tasks. Between 1101 and 1599px an open task becomes
-a right-hand drawer over the horizontally scrolling board. Only one view is shown
-after a transition. Its English/Russian controls follow the browser language,
+a right-hand drawer below the measured header, over the horizontally scrolling
+board. At 1100px and below the detail replaces the task list. Refresh remains
+available on phones. Only one view is shown after rapid navigation; transitions
+are limited to the work area, never the fixed chrome. All entrance/movement
+animations respect reduced motion, and loading states have no endless shimmer.
+Its English/Russian controls follow the browser language,
 with an in-memory toggle. Assist uses the existing same-origin API, session,
 CSRF and uncertain-request recovery boundary. Applied cards distinguish pending
 publication from confirmed canonical saving, show exact diffs and receipt-bound
@@ -293,6 +302,16 @@ Undo. Proposal cards retain exact server-bound approval; spoken yes/approve/да
 confirms only a single pending card in the current thread. Plan checkboxes track
 this session's draft, not canonical completion. AI-disabled responses hide AI
 controls and leave the manual task workflow available.
+
+Task/reader focus and back/Escape return are explicit; navigation supports arrow,
+Home and End keys. Capture restores its actual trigger, including the phone bar.
+Voice/API errors are repeated inside the copilot so a modal never hides the
+failure behind its backdrop. Keyboard/touch information controls are dismissable.
+Background receipt reads retain the same-source composer and selected tab.
+Changed source content is still invalidated immediately; draft/caret/scroll
+restoration requires a fresh permitted task and unchanged selection intent.
+Closing/navigating away while a request is returning cannot reopen the detail;
+moving keyboard focus elsewhere cannot pull it back into the composer.
 
 `applied` does not mean saved: canonical saving requires `saved: true`,
 `status: completed`, `publication_status: merged` and `source_status: current`. Submitted/executing
@@ -313,6 +332,15 @@ and stops microphone tracks. No external assets, analytics or service worker.
 For synthetic development only, serve this shell on localhost with `?mock=1`.
 Mock responses never call the real API and fail explicitly for unsupported
 operations; this flag cannot bypass authentication on the deployed origin.
+
+`python -m pytest harness\tests\test_task_workspace_ui.py` runs offline Node
+contracts and, when Python Playwright/Chromium are installed, real-browser
+fixtures for the owner boundary, voice/errors, stable receipt UUIDs and Undo,
+keyboard/focus restoration, source invalidation, sign-out and rapid navigation.
+The viewport/theme/locale/motion cases include desktop, 390px phone, 320px narrow
+screens and the 1024/1101/1599/1600px layout boundaries. Set
+`MINDME_UI_SCREENSHOTS` to a session-artifact directory for labelled synthetic
+screenshots; do not point it into the repository or use real tasks/audio.
 
 ## Routes
 

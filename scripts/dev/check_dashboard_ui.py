@@ -132,6 +132,8 @@ def check(artifacts: Path) -> None:
                             }
                         elif operation == "task":
                             body = TASK
+                        elif operation == "assist/usage":
+                            status, body = 404, {"error": "disabled", "message": "AI disabled in this synthetic manual-workflow fixture."}
                         elif operation == "dashboard/today":
                             body = {
                                 "items": [{**NOTE, "change": "new"}], "first_visit": False,
@@ -198,10 +200,9 @@ def check(artifacts: Path) -> None:
                     page.route("**/*", route)
                     page.goto(base + "/api/tasks", wait_until="networkidle")
                     page.evaluate("""() => {
-                      const banner = document.createElement('p');
+                      const banner = document.getElementById('demo-banner');
                       banner.textContent = 'Synthetic UI fixture - no production data or identity';
-                      banner.style.cssText = 'margin:0;padding:8px 16px;background:#e5f1eb;color:#20352f';
-                      document.body.prepend(banner);
+                      banner.hidden = false;
                     }""")
                     page.get_by_text("Expired window", exact=True).wait_for()
                     assert page.get_by_text("The North Star is a draft, not approved focus.", exact=True).is_visible()
@@ -216,7 +217,7 @@ def check(artifacts: Path) -> None:
                     page.get_by_role("blockquote").wait_for()
                     assert page.get_by_role("blockquote").inner_text() == QUOTE
                     assert page.locator("html").evaluate("(node) => node.scrollWidth <= innerWidth") is True
-                    page.screenshot(path=str(artifacts / f"knowledge-{width}.png"), full_page=True)
+                    page.screenshot(path=str(artifacts / f"knowledge-{width}.png"), full_page=False)
                     page.get_by_role("button", name="Useful", exact=True).click()
                     page.get_by_text("Saved: Useful.", exact=False).wait_for()
                     assert fixture["writes"] == ["dashboard/feedback"]
@@ -234,7 +235,7 @@ def check(artifacts: Path) -> None:
                     assert fixture["writes"].count("dashboard/capture") == 1
                     assert fixture["writes"].count("decide") == 1
                     page.get_by_role("button", name="Return to workspace", exact=True).click()
-                    page.get_by_role("button", name="Tasks", exact=False).filter(has=page.locator("#tasks-count")).click()
+                    page.locator('[data-view="tasks"]').click()
                     page.locator("#task-list .task-row").click()
                     page.locator("#inspector .detail-title").wait_for()
                     page.screenshot(path=str(artifacts / f"tasks-{width}.png"), full_page=True)

@@ -78,12 +78,13 @@ const $ = (id) => document.getElementById(id);
 const state = {
   csrf: "", view: "today", layout: "board", items: [], overview: null, selected: null,
   tab: "overview", busy: false, unknown: null, proposal: null, clarification: null,
-  loading: false, detailGeneration: 0, sessionGeneration: 0, authExpires: 0, expiryTimer: null,
-  captureSource: null,
+  loading: false, detailGeneration: 0, detailIntent: 0, sessionGeneration: 0, authExpires: 0, expiryTimer: null,
+  captureSource: null, snapshotCheckedAt: 0,
 };
+const focusOrigins = { task: null, capture: null, proposal: null, copilot: null };
 const dashboard = new Dashboard({
   state, element, append, button, writeButton, empty, infoTip, api, mutate, showNotice, setBusy,
-  renderTaskRow, setView, beginSourceCapture,
+  renderTaskRow, setView, beginSourceCapture, restoreFocus,
   openTask: (path) => { setView("tasks"); openTask(path); },
 });
 
@@ -105,7 +106,7 @@ function button(text, action, className = "") {
 }
 function statusBadge(value, label) {
   const key = typeof value === "string" ? value : "unknown";
-  return element("span", label || LABELS[key] || key.replaceAll("_", " "), `status ${STAGES.includes(key) || Object.hasOwn(LABELS, key) ? key : ""}`);
+  return element("span", label || (assist.language === "ru" && COPY.ru[key]) || LABELS[key] || key.replaceAll("_", " "), `status ${STAGES.includes(key) || Object.hasOwn(LABELS, key) ? key : ""}`);
 }
 function prettyId(value) {
   return String(value || "").replace(/^\d{4}-/, "").replaceAll("-", " ");
@@ -137,6 +138,22 @@ function showNotice(message, kind = "") {
   $("notice").textContent = message;
   $("notice").className = `notice ${kind}`;
   $("notice").hidden = !message;
+  const dialogNotice = $("copilot-notice");
+  dialogNotice.textContent = $("copilot-dialog").open ? message : "";
+  dialogNotice.className = `notice ${kind}`;
+  dialogNotice.hidden = !dialogNotice.textContent;
+}
+function restoreFocus(preferred, fallback) {
+  const target = preferred?.isConnected && preferred.getClientRects().length ? preferred : fallback;
+  if (target?.isConnected && target.getClientRects().length) target.focus({ preventScroll: true });
+}
+function setConnection(key) {
+  $("connection").dataset.i18n = key;
+  $("connection").textContent = t(key);
+}
+function setAccessMessage(key, message = "") {
+  $("access-message").dataset.statusKey = key;
+  $("access-message").textContent = key ? t(key) : message;
 }
 function setBusy(value) {
   state.busy = value;
@@ -153,7 +170,7 @@ function setBusy(value) {
     }
   });
   $("recover-request").disabled = value;
-  $("connection").textContent = value ? "Working on your request" : (state.csrf ? "Personal workspace" : "Signed out");
+  setConnection(value ? "workingRequest" : state.csrf ? (isMockMode() ? "mock" : "personalWorkspace") : "signedOut");
 }
 function writeButton(text, action, className = "") {
   const node = button(text, action, className);
@@ -279,16 +296,40 @@ function field(parent, name, label, options = {}) {
 }
 let infoTipCount = 0;
 function infoTip(text) {
-  const node = element("span", null, "info-tip");
-  node.tabIndex = 0;
-  node.setAttribute("role", "note");
-  node.setAttribute("aria-label", "More information");
+  const node = element("button", null, "info-tip");
+  node.type = "button";
+  node.setAttribute("aria-label", t("moreInformation"));
   const tip = element("span", text, "tip-text");
   tip.id = `info-tip-${++infoTipCount}`;
   tip.setAttribute("role", "tooltip");
   node.setAttribute("aria-describedby", tip.id);
   const mark = element("span", "i", "info-mark");
   mark.setAttribute("aria-hidden", "true");
+  const position = () => {
+    const rect = node.getBoundingClientRect();
+    const width = Math.min(280, innerWidth - 32);
+    tip.style.width = `${width}px`;
+    tip.style.left = `${Math.max(16, Math.min(innerWidth - width - 16, rect.left))}px`;
+    const height = tip.getBoundingClientRect().height;
+    tip.style.top = `${rect.bottom + height + 12 < innerHeight ? rect.bottom + 8 : Math.max(12, rect.top - height - 8)}px`;
+  };
+  node.addEventListener("focus", position);
+  node.addEventListener("pointerenter", position);
+  node.addEventListener("click", () => {
+    if (node.dataset.open) {
+      delete node.dataset.open; node.dataset.dismissed = "true";
+    } else {
+      delete node.dataset.dismissed; node.dataset.open = "true"; position();
+    }
+  });
+  node.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault(); event.stopPropagation();
+    delete node.dataset.open; node.dataset.dismissed = "true";
+  });
+  for (const name of ["blur", "pointerleave"]) node.addEventListener(name, () => {
+    delete node.dataset.open; delete node.dataset.dismissed;
+  });
   return append(node, mark, tip);
 }
 function empty(parent, title, message) {
@@ -310,6 +351,10 @@ function pendingProposals() {
 }
 function setView(view, load = true) {
   if (!["today", "needs", "tasks", "knowledge", "areas", "activity"].includes(view)) view = "today";
+  if (["tasks", "needs"].includes(state.view) && !["tasks", "needs"].includes(view)) {
+    state.detailIntent += 1;
+    if (state.selected && !state.selected.revision) closeDetail({ reason: "navigation", restore: false });
+  }
   state.view = view;
   const titles = {
     today: [t("today"), t("todayDescription")],
@@ -343,18 +388,18 @@ function renderTaskRow(task, action = () => openTask(task.path)) {
   row.dataset.path = task.path;
   row.setAttribute("aria-pressed", String(state.selected?.path === task.path));
   const top = element("div", null, "row-top");
-  append(top, statusBadge(task.stage), element("span", task.area ? prettyId(task.area) : "Area not clarified"));
-  append(row, top, element("h3", task.title), element("p", task.next_action || "Clarify the next action.", "row-next"));
+  append(top, statusBadge(task.stage), element("span", task.area ? prettyId(task.area) : t("areaUnclear")));
+  append(row, top, element("h3", task.title), element("p", task.next_action || t("clarifyNext"), "row-next"));
   const timing = element("div", null, "row-timing");
   const day = attentionDate();
-  if (day && task.focus_on === day) timing.append(element("span", "Selected for today", "status ready"));
-  if (task.deadline) timing.append(element("span", `Deadline ${task.deadline}`, day && task.deadline <= day ? "deadline" : ""));
-  if (task.review_on) timing.append(element("span", `Review ${task.review_on}`, day && task.review_on <= day ? "review-due" : ""));
-  if (task.attention_reasons?.includes("deadline_soon")) timing.append(element("span", "Approaching deadline", "review-due"));
-  if (task.waiting_for) timing.append(element("span", "Waiting on a dependency"));
-  if (task.definition?.missing?.length) timing.append(element("span", "Definition needs work"));
+  if (day && task.focus_on === day) timing.append(element("span", t("selectedToday"), "status ready"));
+  if (task.deadline) timing.append(element("span", `${t("deadlineLabel")} ${task.deadline}`, day && task.deadline <= day ? "deadline" : ""));
+  if (task.review_on) timing.append(element("span", `${t("reviewLabel")} ${task.review_on}`, day && task.review_on <= day ? "review-due" : ""));
+  if (task.attention_reasons?.includes("deadline_soon")) timing.append(element("span", t("deadlineApproaching"), "review-due"));
+  if (task.waiting_for) timing.append(element("span", t("waitingDependency")));
+  if (task.definition?.missing?.length) timing.append(element("span", t("definitionNeedsWork")));
   row.append(timing);
-  if (task.estimate_min != null) timing.append(element("span", `${task.estimate_min} min`, "status"));
+  if (task.estimate_min != null) timing.append(element("span", `${task.estimate_min} ${t("minutes")}`, "status"));
   if (task.ai_hint) row.append(element("p", `✦ ${task.ai_hint}`, "row-ai"));
   if (state.layout === "board") {
     row.draggable = true;
@@ -385,20 +430,21 @@ function renderTasks() {
   $("tasks-section").classList.toggle("layout-board", state.layout === "board");
   $("tasks-section").classList.toggle("task-selected", Boolean(state.selected));
   if (state.loading && !state.items.length) {
-    list.setAttribute("aria-label", "Loading tasks");
+    list.setAttribute("aria-label", t("loadingTasks"));
+    list.setAttribute("aria-busy", "true");
     for (let i = 0; i < 4; i += 1) list.append(element("div", null, "skeleton"));
     return;
   }
+  list.removeAttribute("aria-busy");
   list.removeAttribute("aria-label");
   const tasks = filteredTasks();
   if (!state.overview) {
-    empty(list, "Your sources are not available yet.", "Refresh to load them. Unavailable is not an empty backlog.");
+    empty(list, t("sourcesUnavailable"), t("sourcesUnavailableDetail"));
   } else if (!tasks.length) {
     const incompleteAttention = state.view === "needs" && state.overview.attention_complete === false;
-    empty(list, incompleteAttention ? "The attention check is incomplete." :
-      (state.view === "needs" ? "No matching due or selected tasks on this page." : "No matching tasks on this page."),
-    incompleteAttention ? "More task sources or source errors remain. Load more or resolve the reported issue before concluding that nothing is due." :
-      "Check the filters, load more tasks, or capture a new request. Nothing has been completed or discarded.");
+    empty(list, incompleteAttention ? t("attentionIncomplete") :
+      (state.view === "needs" ? t("noMatchingAttention") : t("noMatchingTasks")),
+    incompleteAttention ? t("attentionIncompleteDetail") : t("noMatchingDetail"));
   } else if (state.layout === "board") {
     list.tabIndex = 0;
     list.setAttribute("aria-label", t("boardHelp"));
@@ -423,7 +469,7 @@ function renderTasks() {
         if (task) moveTask(task, stage);
       });
       laneTasks.forEach((task) => lane.append(renderTaskRow(task)));
-      if (!laneTasks.length) lane.append(element("p", "No loaded tasks", "empty"));
+      if (!laneTasks.length) lane.append(element("p", t("noLoadedTasks"), "empty"));
       list.append(lane);
     }
   } else {
@@ -432,9 +478,9 @@ function renderTasks() {
   }
   const candidateCount = state.overview?.candidate_count;
   if (state.overview) {
-    $("page-status").replaceChildren(`${state.items.length} tasks${Number.isInteger(candidateCount) ? ` of ${candidateCount}` : ""} `,
-      infoTip("Filters and counts cover loaded, permitted tasks only."));
-  } else $("page-status").textContent = "Source availability has not been confirmed.";
+    $("page-status").replaceChildren(`${t("loadedTasks")}: ${state.items.length}${Number.isInteger(candidateCount) ? ` / ${candidateCount}` : ""} `,
+      infoTip(t("loadedOnly")));
+  } else $("page-status").textContent = t("availabilityUnconfirmed");
   $("load-more").hidden = state.overview?.next_offset === null || state.overview?.next_offset === undefined;
   $("load-more").disabled = state.loading;
   for (const row of list.querySelectorAll?.(".task-row") || []) {
@@ -442,7 +488,7 @@ function renderTasks() {
     if (!before || !row.animate || matchMedia("(prefers-reduced-motion: reduce)").matches) continue;
     const after = row.getBoundingClientRect();
     const dx = before.left - after.left, dy = before.top - after.top;
-    if (Math.abs(dx) + Math.abs(dy) > 2) row.animate([
+    if (before.width && after.width && Math.abs(dx) + Math.abs(dy) > 2) row.animate([
       { transform: `translate(${dx}px, ${dy}px)`, opacity: .6 }, { transform: "translate(0, 0)", opacity: 1 },
     ], { duration: 400, easing: "cubic-bezier(.2,.85,.25,1)" });
   }
@@ -479,8 +525,14 @@ function render() {
   if (state.view === "today") dashboard.renderToday();
   if (state.view === "knowledge") {
     $("snapshot").textContent = dashboard.inbox
-      ? `Canonical review snapshot ${dashboard.inbox.canonical_revision.slice(0, 7)}`
-      : "Review sources checked separately from tasks";
+      ? `${t("reviewSnapshot")} ${dashboard.inbox.canonical_revision.slice(0, 7)}`
+      : t("reviewSnapshotSeparate");
+  } else if (state.overview) {
+    const { calendar_date: day, timezone } = state.overview.attention;
+    const checked = state.snapshotCheckedAt ? new Date(state.snapshotCheckedAt).toLocaleTimeString(assist.language, { hour: "2-digit", minute: "2-digit" }) : "";
+    $("snapshot").textContent = `${t("taskDay")} ${day} / ${timezone}${checked ? `. ${t("snapshotChecked")} ${checked}` : ""}`;
+  } else {
+    $("snapshot").textContent = "";
   }
 }
 function sourceIssueMessage(code) {
@@ -534,7 +586,7 @@ function renderCanonicalLinks() {
     target.append(element("p", "Opens canonical pages on GitHub; vault access requires your GitHub account.", "hint"));
   }
 }
-async function loadOverview(appendPage = false) {
+async function loadOverview(appendPage = false, refreshContext = null) {
   if (state.loading) return;
   state.loading = true;
   const generation = state.sessionGeneration;
@@ -569,17 +621,33 @@ async function loadOverview(appendPage = false) {
     renderCanonicalLinks();
     if (!appendPage && state.selected?.revision && !data.items.some((task) =>
       task.path === state.selected.path && task.revision === state.selected.revision
-    )) closeDetail();
+    )) {
+      const permitted = refreshContext && refreshContext.intent === state.detailIntent
+        && refreshContext.path === state.selected.path && data.items.some((task) => task.path === refreshContext.path);
+      if (permitted) refreshContext.ui = captureDetailContext();
+      closeDetail({ reason: "source", restore: false });
+      if (permitted) {
+        // Drop stale source content immediately; only the explicit selection and UI context survive.
+        state.selected = { path: refreshContext.path };
+        $("inspector").replaceChildren(button(t("back"), () => closeDetail(), "mobile-back quiet"),
+          element("p", t("loadingCanonical"), "empty"));
+        renderTasks();
+        if (refreshContext.ui.focused) {
+          restoreFocus($("inspector"));
+          refreshContext.ui.parked = true;
+        }
+      }
+    }
     if (state.proposal) {
       state.proposal = data.history.find((record) => record.id === state.proposal.id) || null;
       $("proposal-preview").replaceChildren(...(state.proposal ? [renderProposal(state.proposal)] : []));
       $("proposal-section").hidden = !state.proposal;
     }
     renderActivity();
-    $("snapshot").textContent = `Task day ${data.attention.calendar_date} / ${data.attention.timezone}. Snapshot checked ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    state.snapshotCheckedAt = Date.now();
     const area = $("area-filter").value;
     $("area-filter").replaceChildren();
-    for (const [value, text] of [["", "All areas"], ...data.areas.map((id) => [id, prettyId(id)])]) {
+    for (const [value, text] of [["", t("allAreas")], ...data.areas.map((id) => [id, prettyId(id)])]) {
       const option = element("option", text); option.value = value; $("area-filter").append(option);
     }
     $("area-filter").value = area;
@@ -658,34 +726,96 @@ async function loadHistory() {
     $("history-more").disabled = false;
   }
 }
-async function openTask(path) {
+async function openTask(path, focus = true) {
+  if (!focus && state.selected?.path !== path) return;
+  if (focus) { focusOrigins.task = document.activeElement; state.detailIntent += 1; }
   const generation = ++state.detailGeneration;
-  state.selected = { path };
-  state.clarification = null;
-  $("inspector").replaceChildren(element("p", "Loading the canonical task...", "empty"));
+  const intent = state.detailIntent;
+  if (focus) {
+    state.selected = { path };
+    state.clarification = null;
+    $("inspector").replaceChildren(element("p", t("loadingCanonical"), "empty"));
+  }
+  $("inspector").setAttribute("aria-busy", "true");
   renderTasks();
   try {
     const task = await api("task", { path });
-    if (generation !== state.detailGeneration) return;
-    if (!task.path || !task.revision || typeof task.title !== "string") throw new Error("The canonical task response is incomplete.");
+    if (generation !== state.detailGeneration || intent !== state.detailIntent || state.selected?.path !== path) return;
+    if (task.path !== path || !task.revision || typeof task.title !== "string") throw new Error("The canonical task response is incomplete.");
     state.selected = task;
-    state.tab = assist.available ? "chat" : "overview";
+    if (focus) state.tab = assist.available ? "chat" : "overview";
     renderDetail();
     renderTasks();
-    if (matchMedia("(max-width: 690px)").matches) $("inspector").scrollIntoView({ block: "start" });
+    if (focus && ["tasks", "needs"].includes(state.view)) {
+      $("inspector").scrollTop = 0;
+      restoreFocus($("inspector"));
+      if (matchMedia("(max-width: 1100px)").matches) $("inspector").scrollIntoView({ block: "start" });
+    }
   } catch (error) {
     if (generation !== state.detailGeneration) return;
-    $("inspector").replaceChildren(button("Back to tasks", closeDetail), element("p", errorMessage(error), "empty"));
+    if (focus) {
+      $("inspector").replaceChildren(button(t("back"), () => closeDetail()), element("p", errorMessage(error), "notice error"));
+      if (["tasks", "needs"].includes(state.view)) restoreFocus($("inspector"));
+    } else {
+      if (!state.selected?.revision || [403, 404, 409].includes(error.status)) closeDetail({ reason: "source", restore: false });
+      showNotice(`${errorMessage(error)} ${t("refreshFailed")}`, "error");
+    }
+  } finally {
+    if (generation === state.detailGeneration) $("inspector").removeAttribute("aria-busy");
   }
 }
-function closeDetail() {
+function closeDetail({ reason = "user", restore = true } = {}) {
+  const path = state.selected?.path;
+  if (reason === "user") state.detailIntent += 1;
+  if (path && assist.voiceKey === path) { cancelVoice(); renderChats(); }
   state.detailGeneration += 1;
   state.selected = null;
   state.clarification = null;
   $("inspector").replaceChildren(append(element("div", null, "inspector-empty"),
-    element("h2", "A next step, not another list."),
-    element("p", "Open a task to clarify its outcome, plan the next action, or review what AI can prepare.")));
+    element("h2", t("detailEmptyTitle")),
+    element("p", t("detailEmptyDetail"))));
+  $("inspector").removeAttribute("aria-busy");
   renderTasks();
+  if (restore && path && ["tasks", "needs"].includes(state.view)) {
+    const row = Array.from($("task-list").querySelectorAll(".task-row")).find((node) => node.dataset.path === path);
+    restoreFocus(focusOrigins.task, row || $("view-title"));
+    row?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+  focusOrigins.task = null;
+}
+function captureDetailContext() {
+  const target = $("inspector");
+  const active = target.contains?.(document.activeElement) ? document.activeElement : null;
+  const chat = active?.closest?.(".chat-form");
+  const messages = target.querySelector(".chat-messages");
+  return {
+    tab: state.tab, focused: Boolean(active), scroll: target.scrollTop,
+    control: chat ? (active.tagName === "TEXTAREA" ? "textarea" : active.classList.contains("mic-button") ? ".mic-button" : active.type === "submit" ? "button[type=submit]" : null) : null,
+    start: active?.selectionStart, end: active?.selectionEnd,
+    messageScroll: messages?.scrollTop,
+    followMessages: messages ? messages.scrollHeight - messages.scrollTop - messages.clientHeight < 48 : true,
+  };
+}
+function restoreDetailContext(context, focus = true) {
+  const target = $("inspector");
+  target.scrollTop = context.scroll;
+  const messages = target.querySelector(".chat-messages");
+  if (messages && context.messageScroll != null) messages.scrollTop = context.followMessages ? messages.scrollHeight : context.messageScroll;
+  const control = context.control && target.querySelector(`.chat-form ${context.control}`);
+  if (focus && control && context.focused) {
+    restoreFocus(control);
+    if (typeof context.start === "number") control.setSelectionRange(context.start, context.end);
+  }
+}
+async function refreshTaskProjection(key) {
+  const session = state.sessionGeneration;
+  const context = state.selected?.path === key ? { path: key, intent: state.detailIntent, ui: null } : null;
+  await loadOverview(false, context);
+  if (session !== state.sessionGeneration || !context || context.intent !== state.detailIntent || state.selected?.path !== key) return;
+  const restore = context.ui?.parked && document.activeElement === $("inspector");
+  await openTask(key, false);
+  if (session !== state.sessionGeneration || context.intent !== state.detailIntent || state.selected?.path !== key || !state.selected.revision) return;
+  if (context.ui) restoreDetailContext(context.ui, restore && document.activeElement === $("inspector"));
 }
 function detailBase() {
   const task = state.selected;
@@ -710,7 +840,11 @@ function detailBase() {
     ...(assist.available ? [["chat", t("chatTab")]] : []),
     ["overview", t("overviewTab")], ["edit", t("editTab")], ["ai", t("aiTab")], ["close", t("closeTab")],
   ]) {
-    const node = button(title, () => { state.tab = id; renderDetail(); });
+    const node = button(title, () => {
+      state.tab = id; renderDetail();
+      restoreFocus($("inspector").querySelector(`[data-detail-tab="${id}"]`));
+    });
+    node.dataset.detailTab = id;
     node.setAttribute("aria-pressed", String(state.tab === id));
     tabs.append(node);
   }
@@ -719,6 +853,7 @@ function detailBase() {
 }
 function renderDetail() {
   if (!state.selected?.revision) return;
+  const context = captureDetailContext();
   const panel = detailBase();
   const task = state.selected;
   if (state.tab === "chat") {
@@ -761,6 +896,7 @@ function renderDetail() {
     chat.append(host); panel.append(chat);
     renderChat(host, task.path);
   }
+  restoreDetailContext(context);
 }
 function renderEdit(panel, task) {
   const form = element("form"); form.id = "definition-form";
@@ -1050,12 +1186,14 @@ function showProposal(record) {
   if (!/^[a-f0-9]{24}$/.test(record.id || "") || !record.status || (!record.action && !redacted)) {
     throw new Error("No complete proposal receipt was returned. Inspect Activity before starting another request.");
   }
+  if ($("proposal-section").hidden) focusOrigins.proposal = document.activeElement;
   state.proposal = record;
   $("proposal-section").hidden = false;
   $("proposal-preview").replaceChildren(renderProposal(record));
   showNotice(redacted ? (record.text || "Source content is unavailable; only the operation receipt remains.") : proposalStatusText(record),
     record.status === "pending" && !redacted ? "" : "pending");
   $("proposal-section").scrollIntoView({ block: "start" });
+  restoreFocus($("proposal-heading"));
 }
 async function updateProposal(record) {
   showProposal(record);
@@ -1066,8 +1204,8 @@ function renderActivity() {
   const target = $("activity-list");
   target.replaceChildren();
   const history = state.overview?.history || [];
-  if (!state.overview) empty(target, "History is unavailable.", "Refresh before inferring that no work ran.");
-  else if (!history.length) empty(target, "No task-workspace operations yet.", "Capture a task or prepare an action. Its proposals and receipts will appear here.");
+  if (!state.overview) empty(target, t("historyUnavailable"), t("historyUnavailableDetail"));
+  else if (!history.length) empty(target, t("activityEmpty"), t("activityEmptyDetail"));
   else history.forEach((record) => target.append(renderProposal(record)));
   $("history-more").hidden = state.overview?.history_next_offset === null || state.overview?.history_next_offset === undefined;
 }
@@ -1077,12 +1215,12 @@ function renderAreas() {
   $("area-list").replaceChildren();
   for (const area of data.areas) {
     const count = state.items.filter((task) => task.area === area).length;
-    $("area-list").append(button(`${prettyId(area)} (${count} loaded)`, () => {
+    $("area-list").append(button(`${prettyId(area)} (${count} ${t("loaded")})`, () => {
       $("area-filter").value = area; setView("tasks");
     }));
   }
   $("project-options").replaceChildren();
-  if (!data.projects.length) empty($("project-options"), "No permitted projects returned.", "This is not permission to create or activate a project automatically.");
+  if (!data.projects.length) empty($("project-options"), t("noProjects"), t("noProjectsDetail"));
   for (const project of data.projects) {
     const label = element("label", null, "checkbox");
     const input = element("input"); input.type = "checkbox"; input.name = "project"; input.value = project.id;
@@ -1091,12 +1229,12 @@ function renderAreas() {
     $("project-options").append(label);
   }
   const unseen = Object.keys(data.active_projects || {}).filter((id) => !data.projects.some((project) => project.id === id));
-  $("project-page-status").textContent = `${data.projects.length} permitted projects loaded.${data.project_excluded_count ? ` ${data.project_excluded_count} checked candidates excluded by scope/privacy policy.` : ""}${data.project_next_offset !== null && data.project_next_offset !== undefined ? " More candidates remain; load more to inspect permitted projects." : ""}${unseen.length ? ` ${unseen.length} existing selection(s) outside this page will be retained. Load more to review them, or explicitly clear the selection.` : ""}`;
+  $("project-page-status").textContent = `${t("projectsLoaded")}: ${data.projects.length}.${data.project_excluded_count ? ` ${t("projectsExcluded")}: ${data.project_excluded_count}.` : ""}${data.project_next_offset !== null && data.project_next_offset !== undefined ? ` ${t("moreCandidates")}` : ""}${unseen.length ? ` ${t("unseenProjects")}: ${unseen.length}. ${t("reviewUnseenProjects")}` : ""}`;
   $("projects-more").hidden = data.project_next_offset === null || data.project_next_offset === undefined;
   $("standing-enabled").checked = Boolean(data.standing?.enabled);
   $("standing-options").replaceChildren();
   const eligible = state.items.filter((task) => task.stage === "ready" && task.definition?.complete && Object.hasOwn(data.active_projects || {}, task.project));
-  if (!eligible.length) empty($("standing-options"), "No eligible loaded tasks.", "Select a project and explicitly ready a fully defined task. Load more tasks if needed.");
+  if (!eligible.length) empty($("standing-options"), t("noEligibleTasks"), t("noEligibleTasksDetail"));
   for (const task of eligible) {
     const label = element("label", null, "checkbox");
     const input = element("input"); input.type = "checkbox"; input.name = "standing-task"; input.value = task.path;
@@ -1119,9 +1257,11 @@ function clearData() {
   state.authExpires = 0;
   state.sessionGeneration += 1;
   state.detailGeneration += 1;
+  state.detailIntent += 1;
   state.csrf = ""; state.items = []; state.overview = null; state.selected = null;
   state.proposal = null; state.clarification = null; state.unknown = null;
-  state.captureSource = null;
+  state.captureSource = null; state.snapshotCheckedAt = 0;
+  for (const key of Object.keys(focusOrigins)) focusOrigins[key] = null;
   $("capture-context").textContent = "";
   $("capture-context").hidden = true;
   renderCanonicalLinks();
@@ -1142,9 +1282,10 @@ function expireSession() {
   $("access").hidden = false;
   $("sign-in").hidden = false;
   $("access-retry").hidden = false;
-  $("access-message").textContent = "Sign in again with your personal account. Inspect Activity before repeating any unconfirmed operation.";
+  setAccessMessage("sessionExpired");
   for (const id of ["refresh", "capture-open", "sign-out"]) $(id).hidden = true;
-  $("connection").textContent = "Signed out";
+  setConnection("signedOut");
+  restoreFocus($("sign-in"));
 }
 function checkSessionExpiry() {
   clearTimeout(state.expiryTimer);
@@ -1163,7 +1304,8 @@ async function start() {
   $("workspace").hidden = true;
   $("sign-in").hidden = true;
   $("access-retry").hidden = true;
-  $("access-message").textContent = "Checking your personal workspace. No private content is stored in this browser.";
+  setAccessMessage("checkingWorkspace");
+  setConnection("checkingSignIn");
   try {
     const session = await api("session");
     if (session.authenticated !== true || typeof session.csrf !== "string" || !session.csrf
@@ -1173,9 +1315,8 @@ async function start() {
     $("access").hidden = true;
     $("workspace").hidden = false;
     for (const id of ["refresh", "capture-open", "sign-out"]) $(id).hidden = false;
-    $("connection").textContent = "Personal workspace";
+    setConnection(isMockMode() ? "mock" : "personalWorkspace");
     $("quick-bar").hidden = false;
-    if (isMockMode()) $("connection").textContent = t("mock");
     checkSessionExpiry();
     await loadOverview();
     if (!state.selected) closeDetail();
@@ -1183,12 +1324,10 @@ async function start() {
     await loadAssist();
   } catch (error) {
     state.csrf = "";
-    $("access-message").textContent = error.status === 401
-      ? "Sign in with your configured personal Microsoft account to see your work."
-      : errorMessage(error);
+    setAccessMessage(error.status === 401 ? "signInPrompt" : "", errorMessage(error));
     $("sign-in").hidden = ![401, 403].includes(error.status);
     $("access-retry").hidden = false;
-    $("connection").textContent = error.status === 401 ? "Signed out" : "Access unavailable";
+    setConnection(error.status === 401 ? "signedOut" : "accessUnavailable");
   }
 }
 
@@ -1231,6 +1370,7 @@ function beginSourceCapture(source, finding) {
   openCapture();
 }
 function openCapture() {
+  if ($("capture-section").hidden) focusOrigins.capture = document.activeElement;
   $("capture-section").hidden = false;
   $("capture-text").focus();
   $("capture-section").scrollIntoView({ block: "start" });
@@ -1241,13 +1381,19 @@ $("capture-open").addEventListener("click", () => {
   $("capture-context").hidden = true;
   openCapture();
 });
-$("capture-cancel").addEventListener("click", () => {
+function closeCapture() {
   if (state.captureSource) $("capture-form").reset();
   state.captureSource = null;
   $("capture-context").hidden = true;
-  $("capture-section").hidden = true; $("capture-open").focus();
+  $("capture-section").hidden = true;
+  restoreFocus(focusOrigins.capture, matchMedia("(max-width: 690px)").matches ? $("quick-capture") : $("capture-open"));
+  focusOrigins.capture = null;
+}
+$("capture-cancel").addEventListener("click", closeCapture);
+$("proposal-close").addEventListener("click", () => {
+  $("proposal-section").hidden = true; state.proposal = null;
+  restoreFocus(focusOrigins.proposal, $("view-title")); focusOrigins.proposal = null;
 });
-$("proposal-close").addEventListener("click", () => { $("proposal-section").hidden = true; state.proposal = null; });
 $("recover-request").addEventListener("click", () => {
   if (state.unknown && !state.busy) performMutation(state.unknown);
 });
@@ -1315,7 +1461,7 @@ $("sign-out").addEventListener("click", async () => {
     clearData();
     for (const id of ["capture-open", "refresh", "sign-out"]) $(id).hidden = true;
     await start();
-    if (unconfirmed) $("access-message").textContent = "Signed out. One earlier request was unconfirmed; inspect Activity after signing in before creating a replacement.";
+    if (unconfirmed) setAccessMessage("signedOutUnconfirmed");
   } catch (error) {
     showNotice(errorMessage(error), "error");
   } finally {
@@ -1327,10 +1473,75 @@ const assist = {
   available: false, initialized: false, language: "en", threads: new Map(),
   dragPath: null, recorder: null, stream: null, voiceKey: null, voiceTimer: null,
   voiceGeneration: 0, processingVoice: false, acquiringVoice: false, speak: false, toastTimer: null,
-  polls: new Map(),
+  polls: new Map(), usage: null,
 };
 const COPY = {
   en: {
+    skipWorkspace: "Skip to workspace", vaultLabel: "Personal vault", workspaceLabel: "Workspace", workspaceViews: "Workspace views",
+    accessThink: "Room to think.", accessAct: "Space to act.",
+    accessIntro: "Your tasks, ideas and evidence. One personal space to move them forward.",
+    signIn: "Sign in with Microsoft", tryAgain: "Try again",
+    ownerOnly: "For the configured personal owner only. Your tasks stay in their existing vault; this is a view and an authorized way to work with them.",
+    artCaption: "From possibility to a next move.", artFoot: "A little structure. More possibility.",
+    checkingWorkspace: "Checking your personal workspace. No private content is stored in this browser.",
+    checkingSignIn: "Checking sign-in", signInPrompt: "Sign in with your configured personal Microsoft account to see your work.",
+    sessionExpired: "Sign in again with your personal account. Inspect Activity before repeating any unconfirmed operation.",
+    signedOutUnconfirmed: "Signed out. One earlier request was unconfirmed; inspect Activity after signing in before creating a replacement.",
+    personalWorkspace: "Personal workspace", signedOut: "Signed out", accessUnavailable: "Access unavailable", workingRequest: "Working on your request",
+    openCopilot: "Open copilot command bar", closeCopilot: "Close copilot",
+    useDark: "Use dark theme", useLight: "Use light theme", useRussian: "Switch to Russian", useEnglish: "Switch to English",
+    grounded: "Grounded in your vault.", groundedDetail: "AI helps you move. Your canonical record stays the source of truth.",
+    footer: "Personal work, grounded in your vault.", footerNote: "Think clearly. Move deliberately.",
+    nextMoves: "Next moves", loadedPriorities: "From loaded work", approvedFocus: "Approved focus",
+    workToLookAt: "Work to look at", newSince: "New since last visit",
+    knowledgeInbox: "Inbox", knowledgeHint: "Findings first. Evidence one step away.",
+    knowledgeIntro: "Canonical daily reviews and weekly digests. Their interpretations and possible next steps are not approved work.",
+    earlierReviews: "Load earlier reviews", evidenceReader: "Evidence reader", selectedTask: "Selected task",
+    captureIntro: "One rough request is enough. Missing details can stay in Clarify. Keep sensitive details in their private record.",
+    capturePlaceholder: "Describe the outcome or the question you want to resolve.",
+    optionalTitle: "Title (optional)", titlePlaceholder: "Leave blank to use the first line of your request",
+    captureHint: "First review the proposed record. Capturing it will not start research or an agent.",
+    reviewBefore: "Review before acting", returnWorkspace: "Return to workspace",
+    responsibilities: "Responsibilities and selected projects",
+    areasIntro: "Areas are ongoing responsibilities. A project has an outcome; an inventory entry is not automatically an active commitment.",
+    selectProjects: "Select projects for planning",
+    projectsHint: "Choose up to eight existing projects. Changing this selection turns off standing AI permission until you review it again.",
+    moreProjects: "Load more projects", saveProjects: "Save project selection", clearProjects: "Clear project selection",
+    standingTitle: "Let AI prepare, within clear limits",
+    standingIntro: "Optionally authorize private draft preparation for up to three fully defined Ready tasks in your selected projects. Changes to their source invalidate that scope.",
+    standingEnable: "Enable standing preparation for the tasks selected below",
+    standingHint: "This does not authorize public research, new commitments, messages, purchases, or verified completion.",
+    saveStanding: "Save standing permission", stopStanding: "Stop standing preparation",
+    preparationLimits: "Preparation limits and usage",
+    limitsHint: "These are operational limits, not a guarantee of a provider's bill. Unconfirmed work is never treated as a refund.",
+    decisionsResults: "Decisions and results",
+    activityIntro: "Follow the same request from proposal to canonical record. A prepared draft is not a verified outcome.",
+    moreActivity: "Load more activity", moreTasks: "Load more tasks", moreInformation: "More information",
+    detailEmptyTitle: "A next step, not another list.",
+    detailEmptyDetail: "Open a task to clarify its outcome, plan the next action, or review what AI can prepare.",
+    areaUnclear: "Area not clarified", clarifyNext: "Clarify the next action.", selectedToday: "Selected for today",
+    deadlineLabel: "Deadline", reviewLabel: "Review", deadlineApproaching: "Approaching deadline",
+    waitingDependency: "Waiting on a dependency", definitionNeedsWork: "Definition needs work",
+    minutes: "min", loadingTasks: "Loading tasks", noLoadedTasks: "No loaded tasks", loadingCanonical: "Loading the canonical task...",
+    allStages: "All stages", allAreas: "All areas",
+    refreshFailed: "Task refresh was not confirmed. Inspect the source status before continuing.",
+    sourcesUnavailable: "Your sources are not available yet.", sourcesUnavailableDetail: "Refresh to load them. Unavailable is not an empty backlog.",
+    attentionIncomplete: "The attention check is incomplete.", attentionIncompleteDetail: "More task sources or source errors remain. Load more or resolve the reported issue before concluding that nothing is due.",
+    noMatchingAttention: "No matching due or selected tasks on this page.", noMatchingTasks: "No matching tasks on this page.",
+    noMatchingDetail: "Check the filters, load more tasks, or capture a new request. Nothing has been completed or discarded.",
+    loadedTasks: "Loaded tasks", loadedOnly: "Filters and counts cover loaded, permitted tasks only.", availabilityUnconfirmed: "Source availability has not been confirmed.",
+    reviewSnapshot: "Canonical review snapshot", reviewSnapshotSeparate: "Review sources checked separately from tasks",
+    taskDay: "Task day", snapshotChecked: "Snapshot checked",
+    historyUnavailable: "History is unavailable.", historyUnavailableDetail: "Refresh before inferring that no work ran.",
+    activityEmpty: "No operations on this loaded page.", activityEmptyDetail: "Capture a task or prepare an action. Its proposals and receipts will appear here.",
+    loaded: "loaded", noProjects: "No permitted projects returned.", noProjectsDetail: "This is not permission to create or activate a project automatically.",
+    projectsLoaded: "Permitted projects loaded", projectsExcluded: "Checked candidates excluded by scope/privacy policy",
+    moreCandidates: "More candidates remain; load more to inspect permitted projects.",
+    unseenProjects: "Existing selections outside this page retained", reviewUnseenProjects: "Load more to review them, or explicitly clear the selection.",
+    noEligibleTasks: "No eligible loaded tasks.", noEligibleTasksDetail: "Select a project and explicitly ready a fully defined task. Load more tasks if needed.",
+    estimatedUsage: "Estimated AI usage", aiLimits: "AI limits", monthlyLimit: "Estimated monthly AI usage and operational cap",
+    usageHint: "Operational estimate, not a provider bill.", usageToday: "Today", calls: "calls",
+    untriaged: "Untriaged", clarify: "Clarify", backlog: "Backlog",
     today: "Today", flow: "Flow", copilot: "Copilot", capture: "+ Capture",
     refresh: "Refresh", signOut: "Sign out", knowledgeNav: "Knowledge", areasNav: "Areas & projects", activityNav: "Activity",
     captureTitle: "Get it out of your head", closeCapture: "Close capture", captureQuestion: "What do you need to do?",
@@ -1338,25 +1549,25 @@ const COPY = {
     needs: "Needs you", allTasks: "All tasks", list: "List", search: "Search loaded tasks",
     searchPlaceholder: "Find an outcome or next action", stage: "Stage", area: "Area",
     back: "Back to tasks", overviewTab: "Overview", editTab: "Edit & plan", aiTab: "AI help", closeTab: "Close",
-    chatTab: "✦ Chat",
+    chatTab: "Chat",
     knowledgeDescription: "Understand the finding. Check its evidence. Choose what happens next.",
     needsDescription: "Decisions, due follow-ups and the work you selected.",
     areasDescription: "Keep responsibilities visible. Choose which outcomes to advance.",
     activityDescription: "Proposals, preparation and the evidence of follow-through.",
     personal: "PERSONAL INTELLIGENCE", hero: "Make space for what matters.",
     heroDetail: "A clear outcome. A useful next step. A copilot to get you there.",
-    briefing: "✦ Plan my day", work: "Your work, in motion", board: "Flow board",
+    briefing: "Plan my day ↗", work: "Your work, in motion", board: "Flow board",
     todayDescription: "Your focus, the next move, and intelligence to move it forward.",
     flowDescription: "From a rough idea to a verified outcome. One flow, with AI alongside.",
     inbox: "Inbox / Clarify", ready: "Ready", doing: "Doing", waiting: "Waiting", verify: "Verify", done: "Done",
     outcome: "OUTCOME", doneWhen: "DONE WHEN", notDefined: "Not defined yet. Let's make it concrete.",
     nextAction: "Next action", taskDetails: "Dates, execution & source details",
-    taskCopilot: "✦ Task copilot", welcome: "What shall we move forward?",
+    taskCopilot: "Task copilot", welcome: "What shall we move forward?",
     welcomeDetail: "Describe an outcome, untangle a task, or ask for a next step. English or Russian, text or voice.",
     taskWelcome: "Let's make this task easier.",
     taskWelcomeDetail: "Ask me to sharpen the outcome, estimate the work, build a plan, or prepare the next action.",
     placeholder: "Ask, capture, or give an instruction…", send: "Send ↗", you: "YOU", ai: "MINDME",
-    thinking: "✦ Working with your canonical sources…", speak: "Read replies",
+    thinking: "Working with your canonical sources…", speak: "Read replies",
     globalContext: "Across your tasks · Changes follow the server's approval and publication rules.",
     taskContext: "This task only · Exact source version · Conversation stays in memory.",
     refine: "Sharpen the outcome", refinePrompt: "Make the outcome and done condition concrete.",
@@ -1392,6 +1603,74 @@ const COPY = {
     showTask: "Open task", confidence: "Confidence", permission: "This proposal has no usable approval binding. Refresh Activity.",
   },
   ru: {
+    skipWorkspace: "К рабочему пространству", vaultLabel: "Личное хранилище", workspaceLabel: "Рабочее пространство", workspaceViews: "Разделы рабочего пространства",
+    accessThink: "Место для мысли.", accessAct: "Простор для дела.",
+    accessIntro: "Ваши задачи, идеи и источники. Одно личное пространство, чтобы двигаться вперёд.",
+    signIn: "Войти с Microsoft", tryAgain: "Попробовать снова",
+    ownerOnly: "Только для настроенного личного владельца. Задачи остаются в вашем хранилище; это интерфейс для просмотра и разрешённой работы с ними.",
+    artCaption: "От возможности к следующему шагу.", artFoot: "Немного структуры. Больше возможностей.",
+    checkingWorkspace: "Проверяем ваше личное пространство. Личные данные не сохраняются в браузере.",
+    checkingSignIn: "Проверяем вход", signInPrompt: "Войдите с настроенной личной учётной записью Microsoft, чтобы увидеть свои задачи.",
+    sessionExpired: "Войдите снова с личной учётной записью. Проверьте историю, прежде чем повторять неподтверждённый запрос.",
+    signedOutUnconfirmed: "Вы вышли. Исход одного запроса неизвестен; после входа проверьте историю, прежде чем создавать новый.",
+    personalWorkspace: "Личное пространство", signedOut: "Вход не выполнен", accessUnavailable: "Доступ недоступен", workingRequest: "Обрабатываем ваш запрос",
+    openCopilot: "Открыть копилот", closeCopilot: "Закрыть копилот",
+    useDark: "Включить тёмную тему", useLight: "Включить светлую тему", useRussian: "Переключить на русский", useEnglish: "Switch to English",
+    grounded: "Опора на ваше хранилище.", groundedDetail: "ИИ помогает двигаться. Каноническая запись остаётся источником истины.",
+    footer: "Личные дела с опорой на ваше хранилище.", footerNote: "Ясность в мыслях. Осознанность в действиях.",
+    nextMoves: "Следующие шаги", loadedPriorities: "Из загруженных задач", approvedFocus: "Утверждённый фокус",
+    workToLookAt: "Требует внимания", newSince: "Новое с прошлого визита",
+    knowledgeInbox: "Входящие", knowledgeHint: "Сначала вывод. Доказательства рядом.",
+    knowledgeIntro: "Канонические ежедневные обзоры и недельные дайджесты. Интерпретации и возможные шаги не являются разрешённой работой.",
+    earlierReviews: "Загрузить ранние обзоры", evidenceReader: "Просмотр доказательств", selectedTask: "Выбранная задача",
+    captureIntro: "Достаточно чернового запроса. Недостающие детали можно уточнить позже. Чувствительные сведения оставляйте в личной записи.",
+    capturePlaceholder: "Опишите желаемый результат или вопрос, который хотите решить.",
+    optionalTitle: "Название (необязательно)", titlePlaceholder: "Оставьте пустым, чтобы использовать первую строку запроса",
+    captureHint: "Сначала проверьте предлагаемую запись. Ввод задачи не запускает исследование или агента.",
+    reviewBefore: "Проверьте перед действием", returnWorkspace: "Вернуться к работе",
+    responsibilities: "Обязанности и выбранные проекты",
+    areasIntro: "Сферы — постоянные обязанности. У проекта есть результат; запись в списке не означает активного обязательства.",
+    selectProjects: "Выбрать проекты для планирования",
+    projectsHint: "Выберите до восьми существующих проектов. Изменение выбора отключает постоянное разрешение ИИ до повторной проверки.",
+    moreProjects: "Загрузить ещё проекты", saveProjects: "Сохранить выбор проектов", clearProjects: "Снять выбор проектов",
+    standingTitle: "Подготовка с ИИ в ясных границах",
+    standingIntro: "Можно разрешить личную подготовку черновиков для трёх полностью определённых задач на этапе «Готово к работе» в выбранных проектах. Изменение источника отменяет этот объём разрешения.",
+    standingEnable: "Включить постоянное разрешение на подготовку выбранных ниже задач",
+    standingHint: "Это не разрешает публичные исследования, новые обязательства, сообщения, покупки или подтверждённое завершение.",
+    saveStanding: "Сохранить разрешение", stopStanding: "Остановить подготовку",
+    preparationLimits: "Лимиты и использование подготовки",
+    limitsHint: "Это рабочие лимиты, а не гарантия счёта провайдера. Неподтверждённая работа не считается возвратом средств.",
+    decisionsResults: "Решения и результаты",
+    activityIntro: "Проследите тот же запрос от предложения до канонической записи. Подготовленный черновик не является проверенным результатом.",
+    moreActivity: "Загрузить ещё историю", moreTasks: "Загрузить ещё задачи", moreInformation: "Подробнее",
+    detailEmptyTitle: "Следующий шаг, а не ещё один список.",
+    detailEmptyDetail: "Откройте задачу, чтобы уточнить результат, спланировать следующий шаг или проверить, что может подготовить ИИ.",
+    areaUnclear: "Сфера не уточнена", clarifyNext: "Уточните следующий шаг.", selectedToday: "Выбрано на сегодня",
+    deadlineLabel: "Крайний срок", reviewLabel: "Пересмотр", deadlineApproaching: "Срок приближается",
+    waitingDependency: "Ожидание зависимости", definitionNeedsWork: "Нужно уточнить описание",
+    minutes: "мин", loadingTasks: "Загружаем задачи", noLoadedTasks: "Нет загруженных задач", loadingCanonical: "Загружаем каноническую задачу...",
+    allStages: "Все этапы", allAreas: "Все сферы",
+    refreshFailed: "Обновление задачи не подтверждено. Проверьте состояние источника, прежде чем продолжать.",
+    sourcesUnavailable: "Ваши источники пока недоступны.", sourcesUnavailableDetail: "Обновите их. Недоступность не означает пустой список задач.",
+    attentionIncomplete: "Проверка внимания неполная.", attentionIncompleteDetail: "Остались другие источники задач или ошибки чтения. Загрузите ещё или устраните проблему, прежде чем считать, что ничего не требует внимания.",
+    noMatchingAttention: "На этой странице нет подходящих задач со сроком или выбранным фокусом.", noMatchingTasks: "На этой странице нет подходящих задач.",
+    noMatchingDetail: "Проверьте фильтры, загрузите ещё задачи или запишите новый запрос. Ничего не завершено и не отброшено.",
+    loadedTasks: "Загружено задач", loadedOnly: "Фильтры и счётчики относятся только к загруженным разрешённым задачам.", availabilityUnconfirmed: "Доступность источников не подтверждена.",
+    reviewSnapshot: "Канонический снимок обзоров", reviewSnapshotSeparate: "Источники обзоров проверяются отдельно от задач",
+    taskDay: "День задач", snapshotChecked: "Снимок проверен",
+    historyUnavailable: "История недоступна.", historyUnavailableDetail: "Обновите, прежде чем считать, что работа не выполнялась.",
+    activityEmpty: "На загруженной странице нет операций.", activityEmptyDetail: "Запишите задачу или подготовьте действие. Его предложения и квитанции появятся здесь.",
+    loaded: "загружено", noProjects: "Нет разрешённых проектов.", noProjectsDetail: "Это не разрешает автоматически создавать или активировать проект.",
+    projectsLoaded: "Загружено разрешённых проектов", projectsExcluded: "Проверенных записей исключено правилами доступа и приватности",
+    moreCandidates: "Остались другие записи; загрузите ещё, чтобы проверить разрешённые проекты.",
+    unseenProjects: "Сохранено выбранных проектов вне этой страницы", reviewUnseenProjects: "Загрузите ещё, чтобы проверить их, или явно снимите выбор.",
+    noEligibleTasks: "Нет подходящих загруженных задач.", noEligibleTasksDetail: "Выберите проект и явно переведите полностью определённую задачу в готовые к работе. При необходимости загрузите ещё задачи.",
+    estimatedUsage: "Оценка использования ИИ", aiLimits: "Лимиты ИИ", monthlyLimit: "Оценка использования ИИ за месяц и рабочий лимит",
+    usageHint: "Рабочая оценка, не счёт провайдера.", usageToday: "Сегодня", calls: "вызовов",
+    untriaged: "Не разобрано", clarify: "Уточнить", backlog: "Запас",
+    pending: "Нужно подтверждение", submitted: "Ожидает публикации", executing: "В процессе",
+    uncertain: "Не подтверждено", completed: "Проверенная операция", invalidated: "Источник изменился",
+    failed: "Не выполнено", declined: "Отклонено", expired: "Истекло", merged: "Каноническая запись",
     today: "Сегодня", flow: "Поток", copilot: "Копилот", capture: "+ Задача",
     refresh: "Обновить", signOut: "Выйти", knowledgeNav: "Знания", areasNav: "Сферы и проекты", activityNav: "История",
     captureTitle: "Освободите голову", closeCapture: "Закрыть ввод", captureQuestion: "Что нужно сделать?",
@@ -1399,25 +1678,25 @@ const COPY = {
     needs: "Требует вас", allTasks: "Все задачи", list: "Список", search: "Поиск среди загруженных задач",
     searchPlaceholder: "Найти результат или следующий шаг", stage: "Этап", area: "Сфера",
     back: "К задачам", overviewTab: "Обзор", editTab: "Правки и план", aiTab: "Помощь ИИ", closeTab: "Завершение",
-    chatTab: "✦ Чат",
+    chatTab: "Чат",
     knowledgeDescription: "Разберите вывод. Проверьте доказательства. Выберите следующий шаг.",
     needsDescription: "Решения, сроки пересмотра и выбранная вами работа.",
     areasDescription: "Держите обязанности в поле зрения. Выберите результат для продвижения.",
     activityDescription: "Предложения, подготовка и подтверждения результата.",
     personal: "ЛИЧНЫЙ ИНТЕЛЛЕКТ", hero: "Освободите место для важного.",
     heroDetail: "Ясный результат. Полезный следующий шаг. Копилот, который поможет.",
-    briefing: "✦ Спланировать день", work: "Ваши задачи в движении", board: "Доска",
+    briefing: "Спланировать день ↗", work: "Ваши задачи в движении", board: "Доска",
     todayDescription: "Ваш фокус, следующий шаг и помощь ИИ в работе.",
     flowDescription: "От идеи до проверенного результата. Один поток, вместе с ИИ.",
     inbox: "Входящие / Уточнить", ready: "Готово к работе", doing: "В работе", waiting: "Ожидание", verify: "Проверить", done: "Завершено",
     outcome: "РЕЗУЛЬТАТ", doneWhen: "КРИТЕРИЙ ГОТОВНОСТИ", notDefined: "Пока не определено. Давайте уточним.",
     nextAction: "Следующий шаг", taskDetails: "Даты, выполнение и источник",
-    taskCopilot: "✦ Копилот задачи", welcome: "Что будем продвигать?",
+    taskCopilot: "Копилот задачи", welcome: "Что будем продвигать?",
     welcomeDetail: "Опишите результат, разберите задачу или попросите следующий шаг. Текстом или голосом, по-русски или по-английски.",
     taskWelcome: "Сделаем эту задачу проще.",
     taskWelcomeDetail: "Попросите уточнить результат, оценить работу, составить план или подготовить следующий шаг.",
     placeholder: "Вопрос, идея или поручение…", send: "Отправить ↗", you: "ВЫ", ai: "MINDME",
-    thinking: "✦ Работаю с каноническими источниками…", speak: "Читать ответы",
+    thinking: "Работаю с каноническими источниками…", speak: "Читать ответы",
     globalContext: "Все задачи · Изменения подчиняются правилам подтверждения и публикации сервера.",
     taskContext: "Только эта задача · Точная версия источника · Чат хранится только в памяти.",
     refine: "Уточнить результат", refinePrompt: "Сделай результат и критерий готовности конкретными.",
@@ -1481,16 +1760,25 @@ function initWorkspace() {
   if (assist.initialized) return;
   assist.initialized = true;
   assist.language = navigator.language?.toLowerCase().startsWith("ru") ? "ru" : "en";
+  const header = document.querySelector(".app-header");
+  const measureHeader = () => document.documentElement.style.setProperty("--header-height", `${Math.ceil(header.getBoundingClientRect().height)}px`);
+  measureHeader();
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(measureHeader).observe(header);
+  $("command-shortcut").textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘ K" : "Ctrl K";
+  $("demo-banner").hidden = !isMockMode();
+  $("demo-banner").dataset.i18n = "mock";
   $("theme-toggle").addEventListener("click", () => {
-    const dark = document.documentElement.dataset.theme
-      ? document.documentElement.dataset.theme === "dark" : !matchMedia("(prefers-color-scheme: light)").matches;
+    const dark = document.documentElement.dataset.theme !== "light";
     document.documentElement.dataset.theme = dark ? "light" : "dark";
-    $("theme-toggle").setAttribute("aria-label", dark ? "Use dark theme" : "Use light theme");
+    $("theme-toggle").setAttribute("aria-label", t(dark ? "useDark" : "useLight"));
   });
   $("language-toggle").addEventListener("click", () => {
     assist.language = assist.language === "en" ? "ru" : "en";
     translateWorkspace(); setView(state.view, false);
     if (state.selected?.revision) renderDetail();
+    if (dashboard.inbox) dashboard.renderInbox();
+    if (dashboard.reader) dashboard.renderReader();
+    if (assist.usage) renderAssistUsage();
     renderChats();
   });
   for (const id of ["command-open", "nav-copilot", "quick-chat"]) $(id).addEventListener("click", () => openCopilot());
@@ -1502,11 +1790,26 @@ function initWorkspace() {
     if (key === "global") openCopilot();
     toggleVoice(key);
   });
-  $("copilot-dialog").addEventListener("close", () => { if (assist.voiceKey === "global") cancelVoice(); });
+  $("copilot-dialog").addEventListener("close", () => {
+    if (assist.voiceKey === "global" || assist.acquiringVoice) { cancelVoice(); renderChats(); }
+    $("copilot-notice").textContent = ""; $("copilot-notice").hidden = true;
+    restoreFocus(focusOrigins.copilot, matchMedia("(max-width: 1023px)").matches ? $("quick-chat") : $("command-open"));
+    focusOrigins.copilot = null;
+  });
+  document.querySelector(".navigation").addEventListener("keydown", (event) => {
+    const keys = ["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft", "Home", "End"];
+    if (!keys.includes(event.key) || !event.target.matches("[data-view]")) return;
+    const views = Array.from(document.querySelectorAll("[data-view]"));
+    const index = views.indexOf(event.target);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? views.length - 1
+      : (index + (["ArrowDown", "ArrowRight"].includes(event.key) ? 1 : -1) + views.length) % views.length;
+    event.preventDefault(); views[next].focus();
+  });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.selected && !$("copilot-dialog").open
-      && $("tasks-section").classList.contains("layout-board") && matchMedia("(min-width: 1101px) and (max-width: 1599px)").matches) {
-      closeDetail();
+    if (event.key === "Escape" && !$("copilot-dialog").open) {
+      if (!$("capture-section").hidden && $("capture-section").contains(document.activeElement)) closeCapture();
+      else if (state.selected && ["tasks", "needs"].includes(state.view)) closeDetail();
+      else if (state.view === "knowledge" && $("knowledge-section").classList.contains("knowledge-selected")) dashboard.closeReader(true);
     }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k" && state.csrf && assist.available) {
       event.preventDefault(); openCopilot();
@@ -1524,7 +1827,28 @@ function translateWorkspace() {
   $("language-toggle").textContent = assist.language.toUpperCase();
   document.querySelectorAll("[data-i18n]").forEach((node) => { node.textContent = t(node.dataset.i18n); });
   document.querySelectorAll("[data-i18n-placeholder]").forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
-  for (const id of ["quick-mic", "header-mic"]) $(id).setAttribute("aria-label", t("record"));
+  document.querySelectorAll("[data-i18n-aria]").forEach((node) => { node.setAttribute("aria-label", t(node.dataset.i18nAria)); });
+  $("language-toggle").setAttribute("aria-label", t(assist.language === "en" ? "useRussian" : "useEnglish"));
+  $("theme-toggle").setAttribute("aria-label", t(document.documentElement.dataset.theme === "light" ? "useDark" : "useLight"));
+  if ($("access-message").dataset.statusKey) setAccessMessage($("access-message").dataset.statusKey);
+  for (const option of $("stage-filter").options) option.textContent = option.value ? t(option.value) : t("allStages");
+  if ($("area-filter").options[0]) $("area-filter").options[0].textContent = t("allAreas");
+  for (const id of ["quick-mic", "header-mic"]) $(id).setAttribute("aria-label", t(assist.recorder ? "stop" : "record"));
+}
+function renderAssistUsage() {
+  const usage = assist.usage;
+  if (!usage) return;
+  delete $("assist-usage").dataset.i18n;
+  $("assist-usage").replaceChildren(element("span", `${t("estimatedUsage")} · €${usage.month_eur.toFixed(2)} / €${usage.month_cap_eur.toFixed(2)}`));
+  const meter = element("meter", null, "usage-meter");
+  meter.min = 0; meter.max = Math.max(usage.month_cap_eur, 0.01); meter.value = usage.month_eur;
+  meter.setAttribute("aria-label", t("monthlyLimit"));
+  const details = element("details");
+  append(details, element("summary", t("aiLimits")),
+    element("p", `${t("usageToday")} · €${usage.today_eur} / €${usage.today_cap_eur} · ${usage.calls_today} ${t("calls")}`),
+    element("p", Object.entries(usage.models || {}).map(([role, model]) => `${role}: ${model}`).join(" · ")),
+    element("p", t("usageHint")));
+  $("assist-usage").append(meter, details);
 }
 async function loadAssist() {
   const generation = state.sessionGeneration;
@@ -1533,19 +1857,12 @@ async function loadAssist() {
     if (generation !== state.sessionGeneration) return;
     if (!Number.isFinite(usage.month_eur) || !Number.isFinite(usage.month_cap_eur)) throw new Error(t("unavailable"));
     assist.available = true;
-    $("assist-usage").replaceChildren(element("span", `AI · €${usage.month_eur.toFixed(2)} / €${usage.month_cap_eur.toFixed(2)}`));
-    const meter = element("meter", null, "usage-meter");
-    meter.min = 0; meter.max = Math.max(usage.month_cap_eur, 0.01); meter.value = usage.month_eur;
-    meter.setAttribute("aria-label", "Monthly AI budget");
-    $("assist-usage").append(meter);
-    const details = element("details");
-    append(details, element("summary", assist.language === "ru" ? "Лимиты ИИ" : "AI limits"),
-      element("p", `Today · €${usage.today_eur} / €${usage.today_cap_eur} · ${usage.calls_today} calls`),
-      element("p", Object.entries(usage.models || {}).map(([role, model]) => `${role}: ${model}`).join(" · ")));
-    $("assist-usage").append(details);
+    assist.usage = usage;
+    renderAssistUsage();
   } catch (error) {
     if (generation !== state.sessionGeneration) return;
-    assist.available = false;
+    assist.available = false; assist.usage = null;
+    $("assist-usage").dataset.i18n = "unavailable";
     $("assist-usage").textContent = t("unavailable");
     if (error.status !== 404) showNotice(errorMessage(error), "error");
   }
@@ -1554,7 +1871,7 @@ async function loadAssist() {
 }
 function clearAssist() {
   cancelVoice();
-  assist.available = false; assist.threads.clear(); assist.dragPath = null;
+  assist.available = false; assist.usage = null; assist.threads.clear(); assist.dragPath = null;
   clearTimeout(assist.toastTimer);
   for (const poll of assist.polls.values()) clearTimeout(poll.timer);
   assist.polls.clear();
@@ -1564,11 +1881,13 @@ function clearAssist() {
   $("today-priorities").replaceChildren();
   $("toast").replaceChildren(); $("toast").hidden = true;
   $("assist-usage").replaceChildren();
+  delete $("assist-usage").dataset.i18n;
   $("quick-bar").hidden = true;
   document.querySelectorAll(".ai-feature").forEach((node) => { node.hidden = true; });
 }
 function openCopilot() {
   if (!assist.available || !state.csrf) return;
+  if (!$("copilot-dialog").open) focusOrigins.copilot = document.activeElement;
   $("global-chat").dataset.chatKey = "global";
   renderChat($("global-chat"), "global");
   if (!$("copilot-dialog").open) $("copilot-dialog").showModal();
@@ -1593,7 +1912,10 @@ function buildStepRail(task) {
   return rail;
 }
 function renderChats() {
-  for (const id of ["quick-mic", "header-mic"]) $(id).setAttribute("aria-pressed", String(Boolean(assist.recorder)));
+  for (const id of ["quick-mic", "header-mic"]) {
+    $(id).setAttribute("aria-pressed", String(Boolean(assist.recorder)));
+    $(id).setAttribute("aria-label", t(assist.recorder ? "stop" : "record"));
+  }
   if (!assist.available) return;
   document.querySelectorAll("[data-chat-key]").forEach((host) => renderChat(host, host.dataset.chatKey));
 }
@@ -1601,6 +1923,11 @@ function renderChat(host, key) {
   const thread = threadFor(key);
   const active = host.querySelector("textarea") === document.activeElement;
   const start = active ? document.activeElement.selectionStart : null;
+  const end = active ? document.activeElement.selectionEnd : null;
+  const micFocused = host.contains(document.activeElement) && document.activeElement.classList.contains("mic-button");
+  const previousMessages = host.querySelector(".chat-messages");
+  const followMessages = !previousMessages || previousMessages.scrollHeight - previousMessages.scrollTop - previousMessages.clientHeight < 48;
+  const previousScroll = previousMessages?.scrollTop || 0;
   const shell = element("div", null, "chat-shell");
   shell.append(element("p", t(key === "global" ? "globalContext" : "taskContext"), "chat-context"));
   const messages = element("div", null, "chat-messages");
@@ -1618,7 +1945,10 @@ function renderChat(host, key) {
     }
     for (const card of message.cards || []) messages.append(renderAssistCard(card, key));
   }
-  if (thread.pending) messages.append(element("div", t("thinking"), "thinking"));
+  if (thread.pending) {
+    const pending = element("div", t("thinking"), "thinking"); pending.setAttribute("role", "status");
+    messages.append(pending);
+  }
   if (state.unknown) messages.append(element("p", t("unknown"), "notice pending"));
   shell.append(messages);
   const suggestions = element("div", null, "chat-suggestions");
@@ -1630,7 +1960,10 @@ function renderChat(host, key) {
   if (assist.voiceKey === key || (assist.processingVoice && assist.processingVoice === key)) {
     const waveform = element("span", null, "waveform"); waveform.setAttribute("aria-hidden", "true");
     for (let i = 0; i < 7; i += 1) waveform.append(element("span"));
-    shell.append(append(element("div", null, "voice-status"), waveform, element("span", t(assist.recorder ? "recording" : "transcribing"))));
+    const status = element("div", null, "voice-status");
+    status.dataset.recording = String(Boolean(assist.recorder));
+    status.setAttribute("role", "status"); status.setAttribute("aria-live", "polite");
+    shell.append(append(status, waveform, element("span", t(assist.recorder ? "recording" : "transcribing"))));
   }
   const form = element("form", null, "chat-form");
   const input = element("textarea"); input.rows = 2; input.maxLength = 4000;
@@ -1644,7 +1977,8 @@ function renderChat(host, key) {
     }
   });
   const actions = element("div", null, "chat-compose-actions");
-  const mic = button(assist.voiceKey === key ? "■" : "●", () => toggleVoice(key), "mic-button");
+  const mic = button("", () => toggleVoice(key), "mic-button");
+  const glyph = element("span", null, "mic-glyph"); glyph.setAttribute("aria-hidden", "true"); mic.append(glyph);
   mic.disabled = (state.busy || Boolean(state.unknown) || Boolean(assist.processingVoice)) && assist.voiceKey !== key;
   mic.setAttribute("aria-label", t(assist.voiceKey === key ? "stop" : "record"));
   mic.setAttribute("aria-pressed", String(assist.voiceKey === key));
@@ -1657,8 +1991,9 @@ function renderChat(host, key) {
   append(actions, mic, speech, submit); append(form, input, actions);
   form.addEventListener("submit", (event) => { event.preventDefault(); sendChat(key, input.value); });
   shell.append(form); host.replaceChildren(shell);
-  if (active) { input.focus({ preventScroll: true }); input.setSelectionRange(start, start); }
-  messages.scrollTop = messages.scrollHeight;
+  if (active) { input.focus({ preventScroll: true }); input.setSelectionRange(start, end); }
+  else if (micFocused) mic.focus({ preventScroll: true });
+  messages.scrollTop = followMessages ? messages.scrollHeight : previousScroll;
 }
 function safeCardValue(value) {
   if (value == null) return "—";
@@ -1748,10 +2083,7 @@ async function receiveAssist(key, response, operation = "assist/chat") {
     }
   }
   if (response.cards.some((card) => ["applied", "task"].includes(card.kind))) {
-    const wasSelected = state.selected?.path === key;
-    await loadOverview();
-    if (generation !== state.sessionGeneration) return;
-    if (key !== "global" && wasSelected && (!state.selected || state.selected.path === key)) await openTask(key);
+    await refreshTaskProjection(key);
   } else if (key !== "global" && state.selected?.path === key && state.selected?.revision) renderDetail();
   if (generation !== state.sessionGeneration) return;
   if (response.reply && assist.speak && window.speechSynthesis && typeof SpeechSynthesisUtterance !== "undefined") {
@@ -1812,10 +2144,7 @@ async function pollReceipt(poll) {
     }
     if (isCardSaved(card)) {
       assist.polls.delete(card.receipt_id);
-      const wasSelected = state.selected?.path === poll.key;
-      await loadOverview();
-      if (poll.generation !== state.sessionGeneration) return;
-      if (wasSelected && (!state.selected || state.selected.path === poll.key)) await openTask(poll.key);
+      await refreshTaskProjection(poll.key);
       if (poll.generation !== state.sessionGeneration) return;
       showToast(`${card.title || t("applied")} · ${t("saved")}`, card.undo_available ? () => undoAssist(poll.key, card.receipt_id) : null);
     } else if (["submitted", "executing"].includes(card.status)) scheduleReceiptPoll(poll);
@@ -1878,10 +2207,7 @@ async function undoAssist(key, receiptId) {
     for (const thread of assist.threads.values()) for (const message of thread.messages) {
       for (const card of message.cards || []) if (card.receipt_id === receiptId) card.undo_available = false;
     }
-    const wasSelected = state.selected?.path === key;
-    await loadOverview();
-    if (generation !== state.sessionGeneration) return;
-    if (wasSelected && (!state.selected || state.selected.path === key)) await openTask(key);
+    if (generation === state.sessionGeneration) await refreshTaskProjection(key);
   });
 }
 async function decideAssist(key, card, decision) {
