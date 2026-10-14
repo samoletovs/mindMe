@@ -10,81 +10,30 @@ const LABELS = {
   failed: "Not completed", declined: "Declined", expired: "Expired", merged: "Canonical",
 };
 const CLOSURE_CONFLICTS = {
-  source_changed: {
-    label: "Source changed", text: "The approved source or pinned revision changed. This closure was not completed.",
-  },
-  task_closure_source_changed: {
-    label: "Source changed", text: "The approved source or pinned revision changed. This closure was not completed.",
-  },
-  source_closed: {
-    label: "Source already closed", text: "The source is already done, closed or cancelled. This receipt does not confirm that this request closed it.",
-  },
-  task_linked_path: {
-    label: "Reference blocked", text: "A required path is linked or is not a regular directory. The safety check blocked closure.",
-  },
-  task_source_invalid: {
-    label: "Reference invalid", text: "A required reference has invalid text or metadata. The closure was not completed.",
-  },
-  task_source_not_allowed: {
-    label: "Privacy refusal", text: "A required reference is not permitted by privacy or source-safety rules. It was not skipped; closure was blocked.",
-  },
-  task_links_require_repair: {
-    label: "Link repair required", text: "Required links could not be safely repaired. The closure was not completed.",
-  },
-  task_publication_proof_missing: {
-    label: "Proof incomplete", text: "Required closure proof is missing or incomplete. No completed closure is confirmed.",
-  },
-  task_context_limit: {
-    label: "Context limit", text: "A bounded reading or finalization limit blocked closure. The closure was not completed.",
-  },
-  task_closure_inventory_changed: {
-    label: "Inventory changed", text: "The pinned reference inventory or ignore rules changed. The closure was not completed.",
-  },
-  task_closure_inventory_invalid: {
-    label: "Inventory invalid", text: "The required reference inventory could not be validated. The closure was not completed.",
-  },
-  task_closure_inventory_limit: {
-    label: "Inventory limit", text: "The required reference inventory exceeds the allowed limit. The closure was not completed.",
-  },
-  task_closure_continuation_invalid: {
-    label: "Checkpoint conflict", text: "The continuation did not match this approved closure request. No completed closure is confirmed.",
-  },
-  task_closure_scan_exhausted: {
-    label: "Closure check limit", text: "The bounded closure checks are exhausted. The closure was not completed.",
-  },
-  destination_exists: {
-    label: "Destination exists", text: "The closed-task destination already exists. This request did not overwrite it.",
-  },
-  action_id_reused: {
-    label: "Request conflict", text: "This operation ID already belongs to a different approved request. No new closure is confirmed.",
-  },
-  task_closure_scan_unconfirmed: {
-    label: "Closure unconfirmed", text: "The closure outcome could not be confirmed. No completed closure is confirmed.",
-  },
-  task_closure_checkpoint_unavailable: {
-    label: "Closure unconfirmed", text: "The saved closure checkpoint could not be confirmed. No completed closure is confirmed.",
-  },
-  receipt_unavailable: {
-    label: "Closure unconfirmed", text: "The saved closure receipt could not be confirmed. No completed closure is confirmed.",
-  },
-  remote_outcome_unknown: {
-    label: "Closure unconfirmed", text: "The closure outcome could not be confirmed. No completed closure is confirmed.",
-  },
-  task_closure_conflict: {
-    label: "Closure conflict", text: "The saved receipt does not identify a specific supported reason. No completed closure is confirmed.",
-  },
+  source_changed: "closureSourceChanged", task_closure_source_changed: "closureSourceChanged",
+  source_closed: "closureSourceClosed", task_linked_path: "closureLinkedPath",
+  task_source_invalid: "closureSourceInvalid", task_source_not_allowed: "closurePrivacy",
+  task_links_require_repair: "closureLinkRepair", task_publication_proof_missing: "closureProof",
+  task_context_limit: "closureContext", task_closure_inventory_changed: "closureInventoryChanged",
+  task_closure_inventory_invalid: "closureInventoryInvalid", task_closure_inventory_limit: "closureInventoryLimit",
+  task_closure_continuation_invalid: "closureContinuation", task_closure_scan_exhausted: "closureExhausted",
+  destination_exists: "closureDestination", action_id_reused: "closureRequestConflict",
+  task_closure_scan_unconfirmed: "closureUnconfirmed", remote_outcome_unknown: "closureUnconfirmed",
+  task_closure_checkpoint_unavailable: "closureCheckpoint", receipt_unavailable: "closureReceipt",
+  task_closure_conflict: "closureConflict",
 };
 const $ = (id) => document.getElementById(id);
 const state = {
   csrf: "", view: "today", layout: "board", items: [], overview: null, selected: null,
   tab: "overview", busy: false, unknown: null, proposal: null, clarification: null,
   loading: false, detailGeneration: 0, detailIntent: 0, sessionGeneration: 0, authExpires: 0, expiryTimer: null,
-  captureSource: null, snapshotCheckedAt: 0,
+  captureSource: null, snapshotCheckedAt: 0, manualDraft: null, manualDraftInvalidated: false,
 };
+const MANUAL_FORMS = ["definition-form", "date-form", "prepare-form", "completion-form", "clarification-form"];
 const focusOrigins = { task: null, capture: null, proposal: null, copilot: null };
 const dashboard = new Dashboard({
   state, element, append, button, writeButton, empty, infoTip, api, mutate, showNotice, setBusy,
-  renderTaskRow, setView, beginSourceCapture, restoreFocus,
+  renderTaskRow, taskTiming, statusBadge, setView, beginSourceCapture, restoreFocus,
   openTask: (path) => { setView("tasks"); openTask(path); },
 });
 
@@ -235,7 +184,7 @@ async function performMutation(attempt) {
   const generation = state.sessionGeneration;
   let confirmed = false;
   setBusy(true);
-  showNotice("Working on this exact request. Please wait for its receipt.");
+  showNotice(t("workingExactRequest"));
   try {
     const result = await api(attempt.operation, attempt.payload);
     if (generation !== state.sessionGeneration) return;
@@ -261,7 +210,7 @@ async function performMutation(attempt) {
       if (state.selected?.revision) renderDetail();
     }
     if (error.status === 401) {
-      $("access-message").textContent = "Your sign-in expired. Sign in again, then inspect Activity before repeating a request.";
+      setAccessMessage("sessionExpired");
     }
   } finally {
     setBusy(false);
@@ -280,17 +229,23 @@ function field(parent, name, label, options = {}) {
   if (options.max) control.maxLength = options.max;
   control.required = Boolean(options.required);
   if (options.options) {
-    for (const [value, text] of options.options) {
-      const option = element("option", text);
+    for (const [value, text, localized] of options.options) {
+      const option = element("option", localized ? t(text) : text);
+      if (localized) option.dataset.i18n = text;
       option.value = value;
       control.append(option);
     }
   }
   control.value = options.value ?? options.options?.[0]?.[0] ?? "";
-  const labelNode = element("label", label);
+  const labelNode = element("label", t(label));
+  labelNode.dataset.i18n = label;
   labelNode.htmlFor = id;
   append(wrapper, labelNode, control);
-  if (options.hint) wrapper.append(element("p", options.hint, "hint"));
+  if (options.hint) {
+    const hint = element("p", t(options.hint), "hint");
+    hint.dataset.i18n = options.hint;
+    wrapper.append(hint);
+  }
   parent.append(wrapper);
   return control;
 }
@@ -338,10 +293,14 @@ function empty(parent, title, message) {
   parent.append(node);
 }
 function areaOptions() {
-  return [["", "Choose an area"], ...(state.overview?.areas || []).map((area) => [area, prettyId(area)])];
+  return [["", "chooseArea", true], ...(state.overview?.areas || []).map((area) => [area, prettyId(area)])];
 }
 function projectOptions() {
-  return [["", "No project selected"], ...(state.overview?.projects || []).map((project) => [project.id, prettyId(project.id)])];
+  return [["", "noProjectSelected", true], ...(state.overview?.projects || []).map((project) => [project.id, prettyId(project.id)])];
+}
+function executionOptions() {
+  return [["", "notDecided", true], ["human", "executionHuman", true],
+    ["assisted", "executionAssisted", true], ["agent", "executionAgent", true]];
 }
 function isAttention(task) {
   return task.attention_eligible === true;
@@ -349,7 +308,7 @@ function isAttention(task) {
 function pendingProposals() {
   return (state.overview?.history || []).filter((record) => record.status === "pending" && record.action && record.approval_digest);
 }
-function setView(view, load = true) {
+function setView(view, { load = true, arrival = false } = {}) {
   if (!["today", "needs", "tasks", "knowledge", "areas", "activity"].includes(view)) view = "today";
   if (["tasks", "needs"].includes(state.view) && !["tasks", "needs"].includes(view)) {
     state.detailIntent += 1;
@@ -379,9 +338,34 @@ function setView(view, load = true) {
   $("warnings").hidden = view === "knowledge";
   $("scope-needs").setAttribute("aria-pressed", String(view === "needs"));
   $("scope-all").setAttribute("aria-pressed", String(view !== "needs"));
-  render();
+  render(!load);
   if (load && state.csrf && view === "today" && !dashboard.today) dashboard.loadToday();
   if (load && state.csrf && view === "knowledge" && !dashboard.inbox) dashboard.loadInbox();
+  if (arrival) {
+    const target = ["tasks", "needs"].includes(view) && state.selected?.revision ? $("inspector")
+      : view === "knowledge" && dashboard.reader ? $("knowledge-reader") : $("view-title");
+    restoreFocus(target);
+    const position = matchMedia("(max-width: 930px)").matches ? document.querySelector(".navigation") : target;
+    position.scrollIntoView({ block: "start", behavior: "instant" });
+  }
+}
+function taskTiming(task) {
+  const timing = element("div", null, "row-timing");
+  const day = attentionDate();
+  const reasons = new Set(task.attention_reasons || []);
+  if (task.focus_on) timing.append(element("span", `${t(day && task.focus_on === day ? "selectedToday" : "focusOn")} ${task.focus_on}`, day && task.focus_on === day ? "status ready" : ""));
+  if (task.deadline) timing.append(element("span",
+    `${t(reasons.has("deadline_due") ? "deadlineDue" : reasons.has("deadline_soon") ? "deadlineApproaching" : "deadlineLabel")} ${task.deadline}`,
+    day && task.deadline <= day ? "deadline" : reasons.has("deadline_soon") ? "review-due" : ""));
+  if (task.review_on) timing.append(element("span", `${t(reasons.has("review_due") ? "reviewDue" : "reviewLabel")} ${task.review_on}`, day && task.review_on <= day ? "review-due" : ""));
+  const datedReasons = { focus_today: task.focus_on, deadline_due: task.deadline, deadline_soon: task.deadline, review_due: task.review_on };
+  const reasonLabels = { focus_today: "selectedToday", deadline_due: "deadlineDue", deadline_soon: "deadlineApproaching", review_due: "reviewDue" };
+  for (const reason of reasons) {
+    if (!datedReasons[reason]) timing.append(element("span", reasonLabels[reason] ? t(reasonLabels[reason]) : reason));
+  }
+  if (task.waiting_for) timing.append(element("span", `${t("waitingDependency")}: ${task.waiting_for}`));
+  if (task.definition?.missing?.length) timing.append(element("span", t("definitionNeedsWork")));
+  return timing;
 }
 function renderTaskRow(task, action = () => openTask(task.path)) {
   const row = button("", action, "task-row");
@@ -390,14 +374,7 @@ function renderTaskRow(task, action = () => openTask(task.path)) {
   const top = element("div", null, "row-top");
   append(top, statusBadge(task.stage), element("span", task.area ? prettyId(task.area) : t("areaUnclear")));
   append(row, top, element("h3", task.title), element("p", task.next_action || t("clarifyNext"), "row-next"));
-  const timing = element("div", null, "row-timing");
-  const day = attentionDate();
-  if (day && task.focus_on === day) timing.append(element("span", t("selectedToday"), "status ready"));
-  if (task.deadline) timing.append(element("span", `${t("deadlineLabel")} ${task.deadline}`, day && task.deadline <= day ? "deadline" : ""));
-  if (task.review_on) timing.append(element("span", `${t("reviewLabel")} ${task.review_on}`, day && task.review_on <= day ? "review-due" : ""));
-  if (task.attention_reasons?.includes("deadline_soon")) timing.append(element("span", t("deadlineApproaching"), "review-due"));
-  if (task.waiting_for) timing.append(element("span", t("waitingDependency")));
-  if (task.definition?.missing?.length) timing.append(element("span", t("definitionNeedsWork")));
+  const timing = taskTiming(task);
   row.append(timing);
   if (task.estimate_min != null) timing.append(element("span", `${task.estimate_min} ${t("minutes")}`, "status"));
   if (task.ai_hint) row.append(element("p", `✦ ${task.ai_hint}`, "row-ai"));
@@ -510,9 +487,9 @@ function renderAttention() {
   if (state.overview.attention_complete === false) {
     target.append(element("p", "Attention coverage is incomplete. Unchecked or unavailable tasks may still have deadlines; load more and review source warnings.", "review-due"));
   }
-  if (pending || unreviewed) target.append(button("Review decisions and results", () => setView("activity")));
+  if (pending || unreviewed) target.append(button("Review decisions and results", () => setView("activity", { arrival: true })));
 }
-function render() {
+function render(preserveForms = false) {
   $("layout-list").setAttribute("aria-pressed", String(state.layout === "list"));
   $("layout-board").setAttribute("aria-pressed", String(state.layout === "board"));
   $("needs-count").textContent = String(state.items.filter(isAttention).length + pendingProposals().length);
@@ -520,7 +497,7 @@ function render() {
   $("activity-count").textContent = String(pendingProposals().length);
   renderAttention();
   renderTasks();
-  if (state.view === "areas") renderAreas();
+  if (state.view === "areas") renderAreas(preserveForms);
   if (state.view === "activity") renderActivity();
   if (state.view === "today") dashboard.renderToday();
   if (state.view === "knowledge") {
@@ -682,13 +659,15 @@ async function loadProjects() {
     state.overview.project_excluded_count = (state.overview.project_excluded_count || 0) + (data.excluded_count || 0);
     state.overview.project_candidate_count = data.candidate_count;
     renderSourceWarnings();
-    renderAreas();
+    renderAreas(true);
     const select = $("capture-details").querySelector("[name='project']");
     if (select) {
       const previous = select.value;
       select.replaceChildren();
-      for (const [value, text] of projectOptions()) {
-        const option = element("option", text); option.value = value; select.append(option);
+      for (const [value, text, localized] of projectOptions()) {
+        const option = element("option", localized ? t(text) : text);
+        if (localized) option.dataset.i18n = text;
+        option.value = value; select.append(option);
       }
       select.value = previous;
     }
@@ -701,12 +680,12 @@ async function loadProjects() {
 function renderCaptureFields() {
   const target = $("capture-details");
   if (target.children.length) return;
-  field(target, "area", "Area", { options: areaOptions() });
-  field(target, "project", "Project", { options: projectOptions() });
-  field(target, "execution", "Who performs the next action?", { options: [["", "Not decided"], ["human", "Me"], ["assisted", "Me, with AI help"], ["agent", "Agent (requires authorization)"]] });
-  field(target, "outcome", "Desired outcome", { multiline: true, max: 2000, wide: true });
-  field(target, "next_action", "Next action", { multiline: true, max: 500, wide: true });
-  field(target, "done_when", "Done when", { multiline: true, max: 2000, wide: true, hint: "An observable result you can actually check." });
+  field(target, "area", "area", { options: areaOptions() });
+  field(target, "project", "project", { options: projectOptions() });
+  field(target, "execution", "whoActs", { options: executionOptions() });
+  field(target, "outcome", "desiredOutcome", { multiline: true, max: 2000, wide: true });
+  field(target, "next_action", "nextAction", { multiline: true, max: 500, wide: true });
+  field(target, "done_when", "doneWhenField", { multiline: true, max: 2000, wide: true, hint: "doneWhenHint" });
 }
 async function loadHistory() {
   const offset = state.overview?.history_next_offset;
@@ -732,6 +711,7 @@ async function openTask(path, focus = true) {
   const generation = ++state.detailGeneration;
   const intent = state.detailIntent;
   if (focus) {
+    clearManualDraft();
     state.selected = { path };
     state.clarification = null;
     $("inspector").replaceChildren(button(t("back"), () => closeDetail(), "mobile-back quiet"),
@@ -771,12 +751,15 @@ function closeDetail({ reason = "user", restore = true } = {}) {
   if (reason === "user") state.detailIntent += 1;
   if (path && assist.voiceKey === path) { cancelVoice(); renderChats(); }
   state.detailGeneration += 1;
+  clearManualDraft(reason === "source");
   state.selected = null;
   state.clarification = null;
   $("inspector").replaceChildren(append(element("div", null, "inspector-empty"),
     element("h2", t("detailEmptyTitle")),
     element("p", t("detailEmptyDetail"))));
   $("inspector").removeAttribute("aria-busy");
+  delete $("inspector").dataset.path;
+  delete $("inspector").dataset.revision;
   renderTasks();
   if (restore && path && ["tasks", "needs"].includes(state.view)) {
     const row = Array.from($("task-list").querySelectorAll(".task-row")).find((node) => node.dataset.path === path);
@@ -789,25 +772,69 @@ function captureDetailContext() {
   const target = $("inspector");
   const active = target.contains?.(document.activeElement) ? document.activeElement : null;
   const chat = active?.closest?.(".chat-form");
+  const form = active?.closest?.("form");
+  const manual = MANUAL_FORMS.includes(form?.id);
   const messages = target.querySelector(".chat-messages");
   return {
+    path: target.dataset.path, revision: target.dataset.revision, manual,
     tab: state.tab, focused: Boolean(active), scroll: target.scrollTop,
-    control: chat ? (active.tagName === "TEXTAREA" ? "textarea" : active.classList.contains("mic-button") ? ".mic-button" : active.type === "submit" ? "button[type=submit]" : null) : null,
-    start: active?.selectionStart, end: active?.selectionEnd,
+    control: manual ? `#${form.id} ${active.name ? `[name="${active.name}"]` : "button[type=submit]"}`
+      : chat ? (active.tagName === "TEXTAREA" ? ".chat-form textarea" : active.classList.contains("mic-button") ? ".chat-form .mic-button" : active.type === "submit" ? ".chat-form button[type=submit]" : null)
+        : active?.dataset.detailTab ? `[data-detail-tab="${active.dataset.detailTab}"]` : null,
+    start: active?.selectionStart, end: active?.selectionEnd, direction: active?.selectionDirection,
+    pageX: window.scrollX, pageY: window.scrollY,
     messageScroll: messages?.scrollTop,
     followMessages: messages ? messages.scrollHeight - messages.scrollTop - messages.clientHeight < 48 : true,
   };
 }
 function restoreDetailContext(context, focus = true) {
   const target = $("inspector");
+  const sameSource = context.path === state.selected?.path && context.revision === state.selected?.revision;
   target.scrollTop = context.scroll;
   const messages = target.querySelector(".chat-messages");
   if (messages && context.messageScroll != null) messages.scrollTop = context.followMessages ? messages.scrollHeight : context.messageScroll;
-  const control = context.control && target.querySelector(`.chat-form ${context.control}`);
+  const control = context.control && (!context.manual || sameSource) && target.querySelector(context.control);
   if (focus && control && context.focused) {
     restoreFocus(control);
-    if (typeof context.start === "number") control.setSelectionRange(context.start, context.end);
+    if (typeof context.start === "number") control.setSelectionRange(context.start, context.end, context.direction);
   }
+  if (sameSource) window.scrollTo?.({ left: context.pageX, top: context.pageY, behavior: "instant" });
+}
+function clearManualDraft(invalidated = false) {
+  if (invalidated && state.manualDraft) {
+    state.manualDraftInvalidated = true;
+    showNotice(t("manualDraftInvalidated"), "pending");
+  } else if (!invalidated) state.manualDraftInvalidated = false;
+  state.manualDraft = null;
+}
+function bindManualForms(task) {
+  if (state.manualDraft && (state.manualDraft.path !== task.path || state.manualDraft.revision !== task.revision)) clearManualDraft(true);
+  for (const id of MANUAL_FORMS) {
+    const form = $(id);
+    if (!form || !$("inspector").contains(form)) continue;
+    const binding = form.dataset.binding || "";
+    const saved = state.manualDraft?.forms[id];
+    if (saved && saved.binding !== binding) delete state.manualDraft.forms[id];
+    else if (saved) for (const control of form.elements) {
+      if (!control.name || !Object.hasOwn(saved.values, control.name)) continue;
+      if (control.type === "checkbox") control.checked = saved.values[control.name];
+      else control.value = saved.values[control.name];
+    }
+    const remember = () => {
+      if (!state.csrf || state.selected?.path !== task.path || state.selected?.revision !== task.revision) return;
+      state.manualDraft ||= { path: task.path, revision: task.revision, forms: {} };
+      state.manualDraft.forms[id] = { binding, values: Object.fromEntries(
+        Array.from(form.elements).filter((control) => control.name)
+          .map((control) => [control.name, control.type === "checkbox" ? control.checked : control.value])
+      ) };
+    };
+    form.addEventListener("input", remember);
+    form.addEventListener("change", remember);
+  }
+  const dates = $("date-form");
+  if (dates) dates.elements.value.disabled = dates.elements.remove_date.checked;
+  const preparation = $("prepare-form");
+  if (preparation) $("preparation-hint").textContent = t(preparation.elements.kind.value === "research" ? "publicResearchLimits" : "privatePreparationLimits");
 }
 async function refreshTaskProjection(key) {
   const session = state.sessionGeneration;
@@ -823,12 +850,15 @@ function detailBase() {
   const task = state.selected;
   const target = $("inspector");
   target.replaceChildren();
+  target.dataset.path = task.path;
+  target.dataset.revision = task.revision;
   target.append(button(t("back"), closeDetail, "mobile-back quiet"));
+  if (state.manualDraftInvalidated) target.append(element("p", t("manualDraftInvalidated"), "notice pending"));
   const header = element("div", null, "detail-header");
   append(header, statusBadge(task.stage), element("h2", task.title, "detail-title"),
-    element("p", `${task.area ? prettyId(task.area) : "Area not clarified"}${task.project ? ` / ${prettyId(task.project)}` : ""}`, "hint"));
+    element("p", `${task.area ? prettyId(task.area) : t("areaUnclear")}${task.project ? ` / ${prettyId(task.project)}` : ""}`, "hint"));
   const links = element("div", null, "meta-line");
-  append(links, safeLink("Open canonical source", task.url), element("span", `Revision ${task.revision.slice(0, 7)}`));
+  append(links, safeLink(t("openCanonical"), task.url), element("span", `${t("revision")} ${task.revision.slice(0, 7)}`));
   header.append(links);
   target.append(header);
   const outcome = element("section", null, "outcome-block");
@@ -837,7 +867,7 @@ function detailBase() {
   target.append(outcome);
   if (assist.available) target.append(buildStepRail(task));
   const tabs = element("nav", null, "detail-tabs");
-  tabs.setAttribute("aria-label", "Task actions");
+  tabs.setAttribute("aria-label", t("taskActions"));
   for (const [id, title] of [
     ...(assist.available ? [["chat", t("chatTab")]] : []),
     ["overview", t("overviewTab")], ["edit", t("editTab")], ["ai", t("aiTab")], ["close", t("closeTab")],
@@ -855,6 +885,7 @@ function detailBase() {
 }
 function renderDetail() {
   if (!state.selected?.revision) return;
+  if (state.manualDraft && (state.manualDraft.path !== state.selected.path || state.manualDraft.revision !== state.selected.revision)) clearManualDraft(true);
   const context = captureDetailContext();
   const panel = detailBase();
   const task = state.selected;
@@ -863,24 +894,24 @@ function renderDetail() {
   } else if (state.tab === "overview") {
     const description = element("dl", null, "detail-section");
     for (const [label, value] of [[t("nextAction"), task.next_action]]) {
-      append(description, element("dt", label), element("dd", value || "Not recorded"));
+      append(description, element("dt", label), element("dd", value || t("notRecorded")));
     }
     panel.append(description);
     const metadata = element("details", null, "task-metadata");
     metadata.append(element("summary", t("taskDetails")));
     const dates = element("dl", null, "detail-section");
-    for (const [label, value] of [["Execution", task.execution], ["Review on", task.review_on], ["Deadline", task.deadline], ["Focus on", task.focus_on], ["Waiting for", task.waiting_for]]) {
-      append(dates, element("dt", label), element("dd", value || "Not recorded"));
+    for (const [label, value] of [["executionMode", task.execution ? t(`execution_${task.execution}`) : ""], ["reviewOn", task.review_on], ["deadlineLabel", task.deadline], ["focusOn", task.focus_on], ["waitingFor", task.waiting_for]]) {
+      append(dates, element("dt", t(label)), element("dd", value || t("notRecorded")));
     }
     metadata.append(dates);
     if (task.definition?.missing?.length) {
-      metadata.append(element("p", `Needs clarification: ${task.definition.missing.join(", ")}. These are structural checks, not approval.`, "hint"));
+      metadata.append(element("p", t("needsClarification", { fields: task.definition.missing.join(", ") }), "hint"));
     }
-    metadata.append(writeButton("Clarify this task", () => mutate("clarify", { path: task.path, revision: task.revision }, showClarification)));
+    metadata.append(writeButton(t("clarifyTask"), () => mutate("clarify", { path: task.path, revision: task.revision }, showClarification)));
     panel.append(metadata);
     if (task.text) {
       const details = element("details", null, "section-block");
-      append(details, element("summary", "Read the full source"), element("pre", task.text));
+      append(details, element("summary", t("readFullSource")), element("pre", task.text));
       panel.append(details);
     }
     if (state.clarification) renderClarification(panel);
@@ -891,6 +922,8 @@ function renderDetail() {
   } else {
     renderClose(panel, task);
   }
+  bindManualForms(task);
+  setBusy(state.busy);
   if (assist.available) {
     const chat = element("section", null, "task-copilot section-block");
     chat.append(element("h3", t("taskCopilot")));
@@ -902,22 +935,22 @@ function renderDetail() {
 }
 function renderEdit(panel, task) {
   const form = element("form"); form.id = "definition-form";
-  append(panel, element("h3", "Clarify the record"), element("p", "Review exact changes before saving. A stage or execution label does not start an agent.", "hint"));
+  append(panel, element("h3", t("clarifyRecord")), element("p", t("definitionHint"), "hint"));
   const fields = element("div", null, "form-grid"); fields.id = "edit-fields";
-  field(fields, "title", "Title", { value: task.title, max: 120, wide: true, required: true });
-  field(fields, "area", "Area", { value: task.area, options: areaOptions() });
+  field(fields, "title", "titleField", { value: task.title, max: 120, wide: true, required: true });
+  field(fields, "area", "area", { value: task.area, options: areaOptions() });
   const projects = projectOptions();
   if (task.project && !projects.some(([id]) => id === task.project)) projects.push([task.project, prettyId(task.project)]);
-  field(fields, "project", "Project", { value: task.project, options: projects });
-  field(fields, "stage", "Stage", { value: task.stage === "untriaged" ? "" : task.stage, options: [["", "Keep untriaged"], ...STAGES.filter((id) => id !== "untriaged").map((id) => [id, LABELS[id]])] });
-  field(fields, "execution", "Execution mode", { value: task.execution, options: [["", "Not decided"], ["human", "Me"], ["assisted", "Me, with AI help"], ["agent", "Agent (requires authorization)"]] });
-  for (const [name, label, max] of [["outcome", "Outcome", 2000], ["next_action", "Next action", 500], ["done_when", "Done when", 2000]]) {
+  field(fields, "project", "project", { value: task.project, options: projects });
+  field(fields, "stage", "stage", { value: task.stage === "untriaged" ? "" : task.stage, options: [["", "keepUntriaged", true], ...STAGES.filter((id) => id !== "untriaged").map((id) => [id, id, true])] });
+  field(fields, "execution", "executionMode", { value: task.execution, options: executionOptions() });
+  for (const [name, label, max] of [["outcome", "outcomeField", 2000], ["next_action", "nextAction", 500], ["done_when", "doneWhenField", 2000]]) {
     field(fields, name, label, { value: task[name], max, multiline: true, wide: true });
   }
-  field(fields, "waiting_for", "Waiting for", { value: task.waiting_for, max: 300, wide: true, hint: "Name the dependency, not sensitive personal details. Clear this field only when the blocker is resolved." });
-  field(fields, "review_on", "Review on", { value: task.review_on, type: "date", hint: "Agree a review date when moving started work to Waiting." });
+  field(fields, "waiting_for", "waitingFor", { value: task.waiting_for, max: 300, wide: true, hint: "waitingHint" });
+  field(fields, "review_on", "reviewOn", { value: task.review_on, type: "date", hint: "reviewOnHint" });
   form.append(fields);
-  const submit = element("button", "Review definition changes", "primary"); submit.type = "submit"; form.append(submit);
+  const submit = element("button", t("reviewDefinition"), "primary"); submit.type = "submit"; form.append(submit);
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const changes = {};
@@ -928,15 +961,15 @@ function renderEdit(panel, task) {
       if (!value && ["waiting_for", "review_on"].includes(name)) changes[name] = null;
       else if (value) changes[name] = value;
       else if (before) {
-        showNotice(`The ${name.replaceAll("_", " ")} field cannot be cleared through this form. Choose a replacement or keep it unchanged.`, "error");
+        showNotice(t("fieldCannotClear", { field: form.elements.namedItem(name)?.labels[0]?.textContent || name }), "error");
         return;
       }
     }
-    if (!Object.keys(changes).length) { showNotice("There are no definition changes to review."); return; }
+    if (!Object.keys(changes).length) { showNotice(t("noDefinitionChanges")); return; }
     if ((Object.hasOwn(changes, "waiting_for") || Object.hasOwn(changes, "review_on")) && !changes.stage) {
       const stage = String(new FormData(form).get("stage") || "");
       if (!stage) {
-        showNotice("Choose the task's stage when changing waiting details here, or use the one-date form below.", "error");
+        showNotice(t("chooseWaitingStage"), "error");
         return;
       }
       changes.stage = stage;
@@ -945,64 +978,59 @@ function renderEdit(panel, task) {
   });
   panel.append(form);
   const dates = element("form", null, "section-block"); dates.id = "date-form";
-  dates.append(element("h3", "Change one date deliberately"));
-  const kind = field(dates, "field", "Date type", { options: [["review_on", "Next review"], ["focus_on", "Selected focus date"], ["deadline", "Real deadline"]] });
-  const date = field(dates, "value", "Date", { type: "date", value: task.review_on });
+  dates.append(element("h3", t("changeOneDate")));
+  const kind = field(dates, "field", "dateType", { options: [["review_on", "nextReview", true], ["focus_on", "selectedFocusDate", true], ["deadline", "realDeadline", true]] });
+  const date = field(dates, "value", "dateField", { type: "date", value: task.review_on });
   const clearLabel = element("label", null, "checkbox");
-  const clear = element("input"); clear.type = "checkbox";
-  append(clearLabel, clear, element("span", "Explicitly remove this date"));
+  const clear = element("input"); clear.type = "checkbox"; clear.name = "remove_date";
+  append(clearLabel, clear, element("span", t("removeDate")));
   dates.append(clearLabel);
   kind.addEventListener("change", () => { date.value = task[kind.value] || ""; clear.checked = false; date.disabled = false; });
   clear.addEventListener("change", () => { date.disabled = clear.checked; });
-  dates.append(element("p", "A review is not a deadline. Snoozing a review does not change a deadline. Daily focus does not roll over automatically.", "hint"));
-  const dateSubmit = element("button", "Review date change"); dateSubmit.type = "submit"; dates.append(dateSubmit);
+  dates.append(element("p", t("dateHint"), "hint"));
+  const dateSubmit = element("button", t("reviewDateChange")); dateSubmit.type = "submit"; dates.append(dateSubmit);
   dates.addEventListener("submit", (event) => {
     event.preventDefault();
-    if (!clear.checked && !date.value) { showNotice("Choose a date or explicitly select removal.", "error"); return; }
+    if (!clear.checked && !date.value) { showNotice(t("chooseDate"), "error"); return; }
     mutate("change", { request_id: requestId(), path: task.path, revision: task.revision, change: { [kind.value]: clear.checked ? null : date.value } }, showProposal);
   });
   panel.append(dates);
-  setBusy(state.busy);
 }
 function renderPreparation(panel, task) {
-  append(panel, element("h3", "Make the next step easier"), element("p", "Choose a bounded assignment, then review its exact scope. AI output remains a draft until you verify the outcome."));
+  append(panel, element("h3", t("preparationTitle")), element("p", t("preparationIntro")));
   if (!task.definition?.complete || !["ready", "doing", "verify"].includes(task.stage)) {
-    panel.append(element("p", "This task needs a complete definition and owner-selected Ready, Doing or Verify stage before preparation.", "notice pending"));
+    panel.append(element("p", t("preparationEligibility"), "notice pending"));
     return;
   }
   const form = element("form"); form.id = "prepare-form";
-  const kind = field(form, "kind", "Work to prepare", { options: [["prepare_task", "Private draft from this task"], ["research", "Bounded public research"]] });
-  const scope = field(form, "scope", "Exact question or preparation scope", { multiline: true, max: 500, required: true });
-  const limits = element("p", "Private preparation: one model call, no external tools, at most 45 seconds. It does not perform the real-world action.", "hint");
+  const kind = field(form, "kind", "workToPrepare", { options: [["prepare_task", "privateDraft", true], ["research", "publicResearch", true]] });
+  const scope = field(form, "scope", "exactScope", { multiline: true, max: 500, required: true });
+  const limits = element("p", t("privatePreparationLimits"), "hint"); limits.id = "preparation-hint";
   form.append(limits);
   kind.addEventListener("change", () => {
-    limits.textContent = kind.value === "research"
-      ? "Use one impersonal public question. Never include private context. Research is limited to five sources, one short report and no follow-on jobs; provider costs may be separate."
-      : "Private preparation: one model call, no external tools, at most 45 seconds. It does not perform the real-world action.";
+    limits.textContent = t(kind.value === "research" ? "publicResearchLimits" : "privatePreparationLimits");
   });
-  const submit = element("button", "Review AI assignment", "primary"); submit.type = "submit"; form.append(submit);
+  const submit = element("button", t("reviewAssignment"), "primary"); submit.type = "submit"; form.append(submit);
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     mutate("prepare", { request_id: requestId(), path: task.path, revision: task.revision, kind: kind.value, scope: scope.value.trim() }, showProposal);
   });
   panel.append(form);
-  setBusy(state.busy);
 }
 function renderClose(panel, task) {
-  append(panel, element("h3", "Close the outcome, not just the run"),
-    element("p", "A draft, sent request or completed agent run is not enough. Record what actually happened and how you know."));
-  if (!task.done_when) { panel.append(element("p", "Add a concrete Done when condition before closing this task.", "notice pending")); return; }
+  append(panel, element("h3", t("closureTitle")), element("p", t("closureIntro")));
+  if (!task.done_when) { panel.append(element("p", t("closureNeedsCondition"), "notice pending")); return; }
   panel.append(element("blockquote", task.done_when));
   const form = element("form"); form.id = "completion-form";
-  const result = field(form, "result", "What was achieved?", { multiline: true, max: 1000, required: true });
-  const evidence = field(form, "evidence", "Evidence or verification", { multiline: true, max: 1000, required: true, hint: "Describe or reference the permitted evidence. Keep private details in their own record." });
-  const verifiedOn = field(form, "verified_on", "Date you verified the result", { type: "date", value: attentionDate(), required: true, hint: "This uses your configured task calendar and records verification, not an assumed date the work happened." });
-  const learning = field(form, "learning", "Useful lesson", { multiline: true, max: 1000, hint: "Optional. What should you or an agent do differently next time?" });
+  const result = field(form, "result", "resultAchieved", { multiline: true, max: 1000, required: true });
+  const evidence = field(form, "evidence", "evidenceField", { multiline: true, max: 1000, required: true, hint: "evidenceHint" });
+  const verifiedOn = field(form, "verified_on", "verifiedOn", { type: "date", value: attentionDate(), required: true, hint: "verifiedOnHint" });
+  const learning = field(form, "learning", "learningField", { multiline: true, max: 1000, hint: "learningHint" });
   const attestation = element("label", null, "checkbox");
-  const check = element("input"); check.type = "checkbox"; check.required = true;
-  append(attestation, check, element("span", "I checked the done condition against the actual result and evidence."));
+  const check = element("input"); check.type = "checkbox"; check.required = true; check.name = "checked_done_when";
+  append(attestation, check, element("span", t("ownerAttestation")));
   form.append(attestation);
-  const submit = element("button", "Review verified closure", "primary"); submit.type = "submit"; form.append(submit);
+  const submit = element("button", t("reviewClosure"), "primary"); submit.type = "submit"; form.append(submit);
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const completion = { result: result.value.trim(), evidence: evidence.value.trim(), verified_on: verifiedOn.value, verification: "owner" };
@@ -1010,30 +1038,30 @@ function renderClose(panel, task) {
     mutate("close", { request_id: requestId(), path: task.path, revision: task.revision, checked_done_when: check.checked, completion }, showProposal);
   });
   panel.append(form);
-  setBusy(state.busy);
 }
 function showClarification(record) {
   state.clarification = record;
   state.tab = "overview";
   renderDetail();
-  showNotice("Clarification is recorded separately. No task definition has been changed.");
+  showNotice(t("clarificationRecorded"));
 }
 function renderClarification(parent) {
   const record = state.clarification;
   const target = element("section", null, "clarification");
-  append(target, element("h3", "One question at a time"),
-    element("p", `${record.turns || 0} of 3 answers used for this source version. Unresolved work can stay in Clarify.`, "hint"));
+  append(target, element("h3", t("oneQuestion")),
+    element("p", t("answersUsed", { count: record.turns || 0 }), "hint"));
   if (record.question && (record.turns || 0) < 3) {
     target.append(element("p", record.question));
     if (!/^[a-f0-9]{32}$/.test(record.question_token || "")) {
-      target.append(element("p", "This question has no valid answer binding. Refresh the task and start clarification again.", "notice error"));
+      target.append(element("p", t("answerBindingMissing"), "notice error"));
       parent.append(target);
       return;
     }
     const source = { path: state.selected.path, revision: state.selected.revision };
     const form = element("form"); form.id = "clarification-form";
-    const answer = field(form, "answer", "Your answer", { multiline: true, max: 2000, required: true });
-    const submit = element("button", "Record answer"); submit.type = "submit"; form.append(submit);
+    form.dataset.binding = record.question_token;
+    const answer = field(form, "answer", "yourAnswer", { multiline: true, max: 2000, required: true });
+    const submit = element("button", t("recordAnswer")); submit.type = "submit"; form.append(submit);
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       mutate("clarify", {
@@ -1041,18 +1069,18 @@ function renderClarification(parent) {
       }, showClarification);
     });
     target.append(form);
-  } else target.append(element("p", "Review the proposed refinement or continue editing the task directly. No additional question is required."));
+  } else target.append(element("p", t("clarificationNext")));
   if (record.changes && Object.keys(record.changes).length) {
-    append(target, element("h4", "Proposed changes"), element("pre", JSON.stringify(record.changes, null, 2)),
-      writeButton("Review this refinement", () => mutate("clarify-proposal", { clarification_id: record.id }, showProposal), "primary"));
+    append(target, element("h4", t("proposedChanges")), element("pre", JSON.stringify(record.changes, null, 2)),
+      writeButton(t("reviewRefinement"), () => mutate("clarify-proposal", { clarification_id: record.id }, showProposal), "primary"));
   }
   parent.append(target);
 }
 function proposalTitle(record) {
-  return ({
-    capture_task: "Capture a task", refine_task: "Refine the definition", edit_task: "Change the task",
-    close_task: "Verify and close", prepare_task: "Prepare a private draft", research: "Research a public question",
-  })[record.kind] || "Task operation";
+  return t(({
+    capture_task: "captureOperation", refine_task: "refineOperation", edit_task: "changeOperation",
+    close_task: "closeOperation", prepare_task: "prepareOperation", research: "researchOperation",
+  })[record.kind] || "taskOperation");
 }
 function closureScanPending(record) {
   return record.kind === "close_task" && record.closure_scan_protocol === 1
@@ -1073,58 +1101,60 @@ function closureConflictCode(value) {
 function closureConflict(record) {
   if (record.kind !== "close_task" || record.status !== "invalidated") return null;
   const result = record.publish_result?.status === "conflict" ? record.publish_result : record.result;
-  return result?.status === "conflict" ? CLOSURE_CONFLICTS[closureConflictCode(result.error)] : null;
+  if (result?.status !== "conflict") return null;
+  const key = CLOSURE_CONFLICTS[closureConflictCode(result.error)];
+  return { label: t(`${key}Label`), text: t(`${key}Text`) };
 }
 function proposalStatusText(record) {
   const conflict = closureConflict(record);
-  if (conflict) return `${conflict.text} Any new attempt needs a fresh proposal and approval.`;
+  if (conflict) return `${conflict.text} ${t("freshClosureApproval")}`;
   if (confirmedClosureScan(record)) {
-    return `Closure check checkpoint confirmed (${record.result.scan_pass} of 6 scan passes recorded). The task is still open; no closure has been submitted. Continue only when you want the next bounded step.`;
+    return t("closureCheckpointConfirmed", { count: record.result.scan_pass });
   }
   if (closureScanPending(record)) {
-    return "The last closure check is not confirmed. Recover that same request to inspect its progress; do not start another closure or assume the task is saved.";
+    return t("closureCheckUnconfirmed");
   }
   if (record.status === "completed") {
-    if (record.kind === "prepare_task") return "A private draft is available. The task is still open.";
-    if (record.kind === "research") return "The research operation has a result. Verify the artifact; this does not complete the underlying task.";
-    if (record.kind === "close_task") return "The approved closure reached the canonical record.";
-    return "Saved to the canonical record. Closing the task still needs its evidence.";
+    if (record.kind === "prepare_task") return t("privateDraftAvailable");
+    if (record.kind === "research") return t("researchResultAvailable");
+    if (record.kind === "close_task") return t("closureSaved");
+    return t("operationSaved");
   }
-  if (record.status === "submitted") return "Submitted for publication. Not yet confirmed on the canonical branch.";
-  if (["uncertain", "executing"].includes(record.status)) return "The result is not confirmed. Check this existing receipt; do not submit another operation.";
-  if (record.status === "pending") return "Nothing will execute until you approve this exact scope and source version.";
-  return "No new success is claimed. Review the recorded state before taking another action.";
+  if (record.status === "submitted") return t("publicationSubmitted");
+  if (["uncertain", "executing"].includes(record.status)) return t("operationUnconfirmed");
+  if (record.status === "pending") return t("exactApprovalRequired");
+  return t("noNewSuccess");
 }
 function renderProposal(record) {
   const article = element("article", null, "proposal");
   const contentAvailable = record.action && (!record.source_status || record.source_status === "current");
   const conflict = closureConflict(record);
   append(article, statusBadge(record.status, conflict?.label), element("h3", proposalTitle(record)), element("p",
-    contentAvailable ? proposalStatusText(record) : (record.text || "Historical receipt only. Source content is unavailable and cannot authorize a new action.")));
+    contentAvailable ? proposalStatusText(record) : (record.text || t("historicalReceipt"))));
   if (conflict && !contentAvailable) article.append(element("p", proposalStatusText(record)));
   const source = element("p", null, "source");
-  append(source, element("span", `${record.created_on || ""}${record.expires_on ? ` / expires ${record.expires_on}` : ""} `), safeLink("Source", record.source_url));
+  append(source, element("span", `${record.created_on || ""}${record.expires_on ? ` / ${t("expiresLabel")} ${record.expires_on}` : ""} `), safeLink(t("sourceLabel"), record.source_url));
   article.append(source);
   if (contentAvailable) {
     const action = element("div", null, "exact-action");
-    append(action, element("h4", "Exact action to approve"), element("pre", JSON.stringify(record.action, null, 2)));
+    append(action, element("h4", t("exactAction")), element("pre", JSON.stringify(record.action, null, 2)));
     if (record.kind === "close_task" && record.closure_scan_protocol === 1) {
-      action.append(element("p", "Closure may require up to six explicitly continued checks of the pinned reference inventory. No task is submitted or closed from a partial check, and another pass never runs automatically.", "hint"));
+      action.append(element("p", t("closurePassHint"), "hint"));
     }
     article.append(action);
   }
   if (contentAvailable && record.result?.preparation) {
     const data = record.result.preparation;
     const result = element("section", null, "result");
-    append(result, element("h4", "Prepared, not verified"), element("p", data.summary));
-    for (const [heading, items] of [["Suggested steps", data.steps], ["Uncertainties", data.uncertainties]]) {
+    append(result, element("h4", t("preparedNotVerified")), element("p", data.summary));
+    for (const [heading, items] of [[t("suggestedSteps"), data.steps], [t("uncertainties"), data.uncertainties]]) {
       if (Array.isArray(items) && items.length) {
         result.append(element("h4", heading));
         const list = element("ul"); items.forEach((item) => list.append(element("li", item))); result.append(list);
       }
     }
-    append(result, element("h4", "Your next action"), element("p", data.owner_next_action));
-    if (data.source_quote) append(result, element("h4", "Source evidence"), element("blockquote", data.source_quote));
+    append(result, element("h4", t("ownerNextAction")), element("p", data.owner_next_action));
+    if (data.source_quote) append(result, element("h4", t("sourceEvidence")), element("blockquote", data.source_quote));
     article.append(result);
   }
   if (record.result || record.publish_result) {
@@ -1140,43 +1170,43 @@ function renderProposal(record) {
       return projected;
     };
     const details = element("details");
-    append(details, element("summary", "Operation and publication receipts"),
+    append(details, element("summary", t("operationReceipts")),
       element("pre", JSON.stringify({ result: receipt(record.result), publication: receipt(record.publish_result) }, null, 2)));
     const url = record.publish_result?.pr_url || record.result?.pr_url || record.result?.url;
-    append(article, details, safeLink("Open result or save status", url));
+    append(article, details, safeLink(t("openResultStatus"), url));
   }
   const actions = element("div", null, "actions");
   if (contentAvailable && record.status === "pending" && record.approval_digest) {
-    actions.append(writeButton("Approve this exact action", () => mutate("decide", {
+    actions.append(writeButton(t("approveExact"), () => mutate("decide", {
       proposal_id: record.id, approval_digest: record.approval_digest, decision: "approve",
     }, updateProposal), "primary"));
-    actions.append(writeButton("Decline", () => mutate("decide", {
+    actions.append(writeButton(t("declineAction"), () => mutate("decide", {
       proposal_id: record.id, approval_digest: record.approval_digest, decision: "decline",
     }, updateProposal)));
   }
   if (contentAvailable && confirmedClosureScan(record)) {
-    actions.append(writeButton("Continue closure check", () => mutate("continue-closure", {
+    actions.append(writeButton(t("continueClosure"), () => mutate("continue-closure", {
       proposal_id: record.id, request_id: requestId(), closure_continuation: record.result.closure_continuation,
     }, updateProposal), "primary"));
-    actions.append(element("p", "One explicit step only. It may submit the approved closure once all pinned evidence is checked; publication remains separately verified.", "hint"));
+    actions.append(element("p", t("closureStepHint"), "hint"));
   } else if (contentAvailable && closureScanPending(record)) {
-    actions.append(writeButton("Recover last closure request", () => mutate("recover-closure", {
+    actions.append(writeButton(t("recoverClosure"), () => mutate("recover-closure", {
       proposal_id: record.id, request_id: requestId(),
     }, updateProposal)));
   } else if (["submitted", "executing", "uncertain"].includes(record.status)) {
-    actions.append(writeButton("Check this existing request", () => mutate("reconcile", { proposal_id: record.id }, updateProposal)));
+    actions.append(writeButton(t("checkExistingRequest"), () => mutate("reconcile", { proposal_id: record.id }, updateProposal)));
   }
   if (contentAvailable && record.status === "completed" && ["prepare_task", "research"].includes(record.kind) && !record.reviewed) {
-    actions.append(writeButton("I've reviewed this result", () => mutate("review-result", { proposal_id: record.id }, async () => {
-      showNotice("Result marked reviewed. The underlying task remains open.");
+    actions.append(writeButton(t("reviewedResult"), () => mutate("review-result", { proposal_id: record.id }, async () => {
+      showNotice(t("resultMarkedReviewed"));
       await loadOverview();
     })));
   }
   if (!contentAvailable && record.status === "completed" && ["prepare_task", "research"].includes(record.kind) && !record.reviewed) {
-    actions.append(writeButton("Acknowledge unavailable result", () => mutate("review-result", {
+    actions.append(writeButton(t("acknowledgeUnavailable"), () => mutate("review-result", {
       proposal_id: record.id, acknowledge_unavailable: true,
     }, async () => {
-      showNotice("Unavailable result notice acknowledged. No private content was restored or task closed.");
+      showNotice(t("unavailableAcknowledged"));
       await loadOverview();
     })));
   }
@@ -1186,13 +1216,13 @@ function renderProposal(record) {
 function showProposal(record) {
   const redacted = ["changed_or_removed", "unavailable"].includes(record.source_status);
   if (!/^[a-f0-9]{24}$/.test(record.id || "") || !record.status || (!record.action && !redacted)) {
-    throw new Error("No complete proposal receipt was returned. Inspect Activity before starting another request.");
+    throw new Error(t("proposalReceiptIncomplete"));
   }
   if ($("proposal-section").hidden) focusOrigins.proposal = document.activeElement;
   state.proposal = record;
   $("proposal-section").hidden = false;
   $("proposal-preview").replaceChildren(renderProposal(record));
-  showNotice(redacted ? (record.text || "Source content is unavailable; only the operation receipt remains.") : proposalStatusText(record),
+  showNotice(redacted ? (record.text || t("sourceReceiptOnly")) : proposalStatusText(record),
     record.status === "pending" && !redacted ? "" : "pending");
   $("proposal-section").scrollIntoView({ block: "start" });
   restoreFocus($("proposal-heading"));
@@ -1211,14 +1241,18 @@ function renderActivity() {
   else history.forEach((record) => target.append(renderProposal(record)));
   $("history-more").hidden = state.overview?.history_next_offset === null || state.overview?.history_next_offset === undefined;
 }
-function renderAreas() {
+function renderAreas(preserve = false) {
   const data = state.overview;
   if (!data) return;
+  const choices = preserve ? new Map(
+    Array.from(document.querySelectorAll("#projects-form input, #standing-form input"))
+      .map((input) => [`${input.name || input.id}:${input.value}`, input.checked])
+  ) : null;
   $("area-list").replaceChildren();
   for (const area of data.areas) {
     const count = state.items.filter((task) => task.area === area).length;
     $("area-list").append(button(`${prettyId(area)} (${count} ${t("loaded")})`, () => {
-      $("area-filter").value = area; setView("tasks");
+      $("area-filter").value = area; setView("tasks", { arrival: true });
     }));
   }
   $("project-options").replaceChildren();
@@ -1246,12 +1280,17 @@ function renderAreas() {
   }
   const unloaded = Object.keys(data.standing?.sources || {}).filter((path) => !eligible.some((task) => task.path === path));
   if (unloaded.length) {
-    $("standing-options").append(element("p", `${unloaded.length} previously authorized task reference(s) are not eligible on the loaded page. Saving replaces the selection with the checked tasks shown here.`, "notice pending"));
+    $("standing-options").append(element("p", t("unloadedStanding", { count: unloaded.length }), "notice pending"));
   }
   $("budget-details").textContent = JSON.stringify({ limits: data.limits, usage: data.budget }, null, 2);
+  if (choices) for (const input of document.querySelectorAll("#projects-form input, #standing-form input")) {
+    const key = `${input.name || input.id}:${input.value}`;
+    if (choices.has(key)) input.checked = choices.get(key);
+  }
   setBusy(state.busy);
 }
 function clearData() {
+  clearManualDraft();
   clearAssist();
   dashboard.clear();
   clearTimeout(state.expiryTimer);
@@ -1269,6 +1308,8 @@ function clearData() {
   renderCanonicalLinks();
   for (const id of ["task-list", "inspector", "activity-list", "proposal-preview", "project-options",
     "standing-options", "area-list", "capture-details", "warnings", "budget-details", "snapshot", "attention"]) $(id).replaceChildren();
+  delete $("inspector").dataset.path;
+  delete $("inspector").dataset.revision;
   $("capture-form").reset();
   $("task-search").value = "";
   $("stage-filter").value = "";
@@ -1283,7 +1324,7 @@ function expireSession() {
   $("workspace").hidden = true;
   $("access").hidden = false;
   $("sign-in").hidden = false;
-  $("access-retry").hidden = false;
+  $("access-retry").hidden = true;
   setAccessMessage("sessionExpired");
   for (const id of ["refresh", "capture-open", "sign-out"]) $(id).hidden = true;
   setConnection("signedOut");
@@ -1328,7 +1369,7 @@ async function start() {
     state.csrf = "";
     setAccessMessage(error.status === 401 ? "signInPrompt" : "", errorMessage(error));
     $("sign-in").hidden = ![401, 403].includes(error.status);
-    $("access-retry").hidden = false;
+    $("access-retry").hidden = [401, 403].includes(error.status);
     setConnection(error.status === 401 ? "signedOut" : "accessUnavailable");
   }
 }
@@ -1351,9 +1392,9 @@ $("refresh").addEventListener("click", () => {
   if (state.view === "today") dashboard.loadToday();
   if (state.view === "knowledge") dashboard.loadInbox();
 });
-$("scope-needs").addEventListener("click", () => setView("needs"));
-$("scope-all").addEventListener("click", () => setView("tasks"));
-window.addEventListener("hashchange", () => setView(location.hash.slice(1)));
+$("scope-needs").addEventListener("click", () => setView("needs", { arrival: true }));
+$("scope-all").addEventListener("click", () => setView("tasks", { arrival: true }));
+window.addEventListener("hashchange", () => setView(location.hash.slice(1), { arrival: true }));
 $("load-more").addEventListener("click", () => loadOverview(true));
 $("projects-more").addEventListener("click", loadProjects);
 $("history-more").addEventListener("click", loadHistory);
@@ -1364,10 +1405,12 @@ window.addEventListener("pageshow", checkSessionExpiry);
 function beginSourceCapture(source, finding) {
   state.captureSource = { id: source.id, revision: source.revision, finding: finding?.id || null };
   $("capture-form").reset();
-  const text = finding?.next_step || `Review ${source.title} and choose a concrete next action.`;
+  const text = finding?.next_step || t("sourceCaptureRequest", { title: source.title });
   $("capture-text").value = text;
   $("capture-title-input").value = Array.from(text).slice(0, 120).join("");
-  $("capture-context").textContent = `From ${source.title}${finding ? `, ${finding.id}` : ""}. Canonical provenance and exact evidence will be retained and rechecked before approval.`;
+  const prefix = element("span", t("sourceCaptureFrom")); prefix.dataset.i18n = "sourceCaptureFrom";
+  const hint = element("span", t("sourceCaptureHint")); hint.dataset.i18n = "sourceCaptureHint";
+  $("capture-context").replaceChildren(prefix, `${source.title}${finding ? `, ${finding.id}` : ""}. `, hint);
   $("capture-context").hidden = false;
   openCapture();
 }
@@ -1425,11 +1468,11 @@ $("projects-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const unseen = Object.keys(state.overview?.active_projects || {}).filter((id) => !state.overview.projects.some((project) => project.id === id));
   const projects = [...new Set([...new FormData(event.currentTarget).getAll("project"), ...unseen])];
-  if (projects.length > 8) { showNotice("Choose at most eight projects.", "error"); return; }
-  mutate("projects", { projects }, async () => { showNotice("Project selection saved. Standing preparation is off until you approve its scope again."); await loadOverview(); });
+  if (projects.length > 8) { showNotice(t("projectLimit"), "error"); return; }
+  mutate("projects", { projects }, async () => { showNotice(t("projectsSaved")); await loadOverview(); });
 });
 $("projects-clear").addEventListener("click", () => mutate("projects", { projects: [] }, async () => {
-  showNotice("Project selection cleared. Standing preparation is off; no source project or task was removed.");
+  showNotice(t("projectsCleared"));
   await loadOverview();
 }));
 $("projects-clear").dataset.write = "true";
@@ -1437,19 +1480,19 @@ $("standing-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const enabled = $("standing-enabled").checked;
   const paths = enabled ? new FormData(event.currentTarget).getAll("standing-task") : [];
-  if (paths.length > 3 || (enabled && !paths.length)) { showNotice("Choose one to three eligible tasks before enabling preparation.", "error"); return; }
+  if (paths.length > 3 || (enabled && !paths.length)) { showNotice(t("standingLimit"), "error"); return; }
   const sources = {};
   for (const path of paths) {
     const task = state.items.find((item) => item.path === path);
-    if (!task) { showNotice("A selected source is no longer loaded. Refresh before authorizing it.", "error"); return; }
+    if (!task) { showNotice(t("standingSourceMissing"), "error"); return; }
     sources[path] = task.revision;
   }
-  mutate("standing", { enabled, sources }, async () => { showNotice(enabled ? "Standing permission saved for those exact sources. No real-world action is authorized." : "Standing preparation is off."); await loadOverview(); });
+  mutate("standing", { enabled, sources }, async () => { showNotice(t(enabled ? "standingSaved" : "standingOff")); await loadOverview(); });
 });
-$("standing-stop").addEventListener("click", () => mutate("standing", { enabled: false, sources: {} }, async () => { showNotice("Standing preparation is off. Existing results and receipts are retained."); await loadOverview(); }));
+$("standing-stop").addEventListener("click", () => mutate("standing", { enabled: false, sources: {} }, async () => { showNotice(t("standingStopped")); await loadOverview(); }));
 $("standing-stop").dataset.write = "true";
 $("sign-out").addEventListener("click", async () => {
-  if (state.busy) { showNotice("A request is still returning. Sign out as soon as its response or timeout is reported.", "pending"); return; }
+  if (state.busy) { showNotice(t("signOutBusy"), "pending"); return; }
   const unconfirmed = Boolean(state.unknown);
   setBusy(true);
   try {
@@ -1459,7 +1502,7 @@ $("sign-out").addEventListener("click", async () => {
       headers: { "Content-Type": "application/json", "X-MindMe-CSRF": state.csrf }, body: "{}",
     });
     if (response.status === 401) { expireSession(); return; }
-    if (!response.ok) throw new Error("Sign-out was not confirmed. Try again before leaving a shared device.");
+    if (!response.ok) throw new Error(t("signOutUnconfirmed"));
     clearData();
     for (const id of ["capture-open", "refresh", "sign-out"]) $(id).hidden = true;
     await start();
@@ -1489,6 +1532,8 @@ const COPY = {
     checkingSignIn: "Checking sign-in", signInPrompt: "Sign in with your configured personal Microsoft account to see your work.",
     sessionExpired: "Sign in again with your personal account. Inspect Activity before repeating any unconfirmed operation.",
     signedOutUnconfirmed: "Signed out. One earlier request was unconfirmed; inspect Activity after signing in before creating a replacement.",
+    signOutBusy: "A request is still returning. Sign out as soon as its response or timeout is reported.",
+    signOutUnconfirmed: "Sign-out was not confirmed. Try again before leaving a shared device.",
     personalWorkspace: "Personal workspace", signedOut: "Signed out", accessUnavailable: "Access unavailable", workingRequest: "Working on your request",
     openCopilot: "Open copilot command bar", closeCopilot: "Close copilot",
     useDark: "Use dark theme", useLight: "Use light theme", useRussian: "Switch to Russian", useEnglish: "Switch to English",
@@ -1523,6 +1568,7 @@ const COPY = {
     detailEmptyDetail: "Open a task to clarify its outcome, plan the next action, or review what AI can prepare.",
     areaUnclear: "Area not clarified", clarifyNext: "Clarify the next action.", selectedToday: "Selected for today",
     deadlineLabel: "Deadline", reviewLabel: "Review", deadlineApproaching: "Approaching deadline",
+    deadlineDue: "Deadline due", reviewDue: "Review due",
     waitingDependency: "Waiting on a dependency", definitionNeedsWork: "Definition needs work",
     minutes: "min", loadingTasks: "Loading tasks", noLoadedTasks: "No loaded tasks", loadingCanonical: "Loading the canonical task...",
     allStages: "All stages", allAreas: "All areas",
@@ -1541,6 +1587,107 @@ const COPY = {
     moreCandidates: "More candidates remain; load more to inspect permitted projects.",
     unseenProjects: "Existing selections outside this page retained", reviewUnseenProjects: "Load more to review them, or explicitly clear the selection.",
     noEligibleTasks: "No eligible loaded tasks.", noEligibleTasksDetail: "Select a project and explicitly ready a fully defined task. Load more tasks if needed.",
+    manualDraftInvalidated: "Unsaved manual changes were discarded because the task changed or is no longer available. Review the current source before editing again.",
+    titleField: "Title", project: "Project", executionMode: "Execution mode", outcomeField: "Outcome",
+    doneWhenField: "Done when", waitingFor: "Waiting for", reviewOn: "Review on", focusOn: "Focus on",
+    chooseArea: "Choose an area", noProjectSelected: "No project selected", keepUntriaged: "Keep untriaged",
+    notDecided: "Not decided", executionHuman: "Me", executionAssisted: "Me, with AI help", executionAgent: "Agent (requires authorization)",
+    execution_human: "Me", execution_assisted: "Me, with AI help", execution_agent: "Agent (requires authorization)",
+    whoActs: "Who performs the next action?", desiredOutcome: "Desired outcome",
+    doneWhenHint: "An observable result you can actually check.",
+    clarifyRecord: "Clarify the record", definitionHint: "Review exact changes before saving. A stage or execution label does not start an agent.",
+    waitingHint: "Name the dependency, not sensitive personal details. Clear this field only when the blocker is resolved.",
+    reviewOnHint: "Agree a review date when moving started work to Waiting.",
+    reviewDefinition: "Review definition changes", noDefinitionChanges: "There are no definition changes to review.",
+    fieldCannotClear: "The {field} field cannot be cleared through this form. Choose a replacement or keep it unchanged.",
+    chooseWaitingStage: "Choose the task's stage when changing waiting details here, or use the one-date form below.",
+    changeOneDate: "Change one date deliberately", dateType: "Date type", dateField: "Date",
+    nextReview: "Next review", selectedFocusDate: "Selected focus date", realDeadline: "Real deadline",
+    removeDate: "Explicitly remove this date", reviewDateChange: "Review date change",
+    dateHint: "A review is not a deadline. Snoozing a review does not change a deadline. Daily focus does not roll over automatically.",
+    chooseDate: "Choose a date or explicitly select removal.",
+    preparationTitle: "Make the next step easier",
+    preparationIntro: "Choose a bounded assignment, then review its exact scope. AI output remains a draft until you verify the outcome.",
+    preparationEligibility: "This task needs a complete definition and owner-selected Ready, Doing or Verify stage before preparation.",
+    workToPrepare: "Work to prepare", privateDraft: "Private draft from this task", publicResearch: "Bounded public research",
+    exactScope: "Exact question or preparation scope", reviewAssignment: "Review AI assignment",
+    privatePreparationLimits: "Private preparation: one model call, no external tools, at most 45 seconds. It does not perform the real-world action.",
+    publicResearchLimits: "Use one impersonal public question. Never include private context. Research is limited to five sources, one short report and no follow-on jobs; provider costs may be separate.",
+    closureTitle: "Close the outcome, not just the run",
+    closureIntro: "A draft, sent request or completed agent run is not enough. Record what actually happened and how you know.",
+    closureNeedsCondition: "Add a concrete Done when condition before closing this task.",
+    resultAchieved: "What was achieved?", evidenceField: "Evidence or verification", verifiedOn: "Date you verified the result",
+    evidenceHint: "Describe or reference the permitted evidence. Keep private details in their own record.",
+    verifiedOnHint: "This uses your configured task calendar and records verification, not an assumed date the work happened.",
+    learningField: "Useful lesson", learningHint: "Optional. What should you or an agent do differently next time?",
+    ownerAttestation: "I checked the done condition against the actual result and evidence.", reviewClosure: "Review verified closure",
+    openCanonical: "Open canonical source", revision: "Revision", taskActions: "Task actions", notRecorded: "Not recorded",
+    taskAttentionFilter: "Task attention filter", taskLayout: "Task layout",
+    needsClarification: "Needs clarification: {fields}. These are structural checks, not approval.",
+    clarifyTask: "Clarify this task", readFullSource: "Read the full source",
+    clarificationRecorded: "Clarification is recorded separately. No task definition has been changed.",
+    oneQuestion: "One question at a time", answersUsed: "{count} of 3 answers used for this source version. Unresolved work can stay in Clarify.",
+    answerBindingMissing: "This question has no valid answer binding. Refresh the task and start clarification again.",
+    yourAnswer: "Your answer", recordAnswer: "Record answer", proposedChanges: "Proposed changes", reviewRefinement: "Review this refinement",
+    clarificationNext: "Review the proposed refinement or continue editing the task directly. No additional question is required.",
+    sourceCaptureRequest: "Review {title} and choose a concrete next action.", sourceCaptureFrom: "From ",
+    sourceCaptureHint: "Canonical provenance and exact evidence will be retained and rechecked before approval.",
+    unloadedStanding: "{count} previously authorized task reference(s) are not eligible on the loaded page. Saving replaces the selection with the checked tasks shown here.",
+    projectLimit: "Choose at most eight projects.",
+    projectsSaved: "Project selection saved. Standing preparation is off until you approve its scope again.",
+    projectsCleared: "Project selection cleared. Standing preparation is off; no source project or task was removed.",
+    standingLimit: "Choose one to three eligible tasks before enabling preparation.",
+    standingSourceMissing: "A selected source is no longer loaded. Refresh before authorizing it.",
+    standingSaved: "Standing permission saved for those exact sources. No real-world action is authorized.",
+    standingOff: "Standing preparation is off.", standingStopped: "Standing preparation is off. Existing results and receipts are retained.",
+    workingExactRequest: "Working on this exact request. Please wait for its receipt.",
+    requestUnconfirmed: "This request has not been confirmed.",
+    requestUnconfirmedHint: "It may already have reached the server. Keep this page open, inspect Activity, or recover this exact request. Do not create a replacement.",
+    recoverSameRequest: "Recover the same request",
+    captureOperation: "Capture a task", refineOperation: "Refine the definition", changeOperation: "Change the task",
+    closeOperation: "Verify and close", prepareOperation: "Prepare a private draft", researchOperation: "Research a public question", taskOperation: "Task operation",
+    freshClosureApproval: "Any new attempt needs a fresh proposal and approval.",
+    closureCheckpointConfirmed: "Closure check checkpoint confirmed ({count} of 6 scan passes recorded). The task is still open; no closure has been submitted. Continue only when you want the next bounded step.",
+    closureCheckUnconfirmed: "The last closure check is not confirmed. Recover that same request to inspect its progress; do not start another closure or assume the task is saved.",
+    privateDraftAvailable: "A private draft is available. The task is still open.",
+    researchResultAvailable: "The research operation has a result. Verify the artifact; this does not complete the underlying task.",
+    closureSaved: "The approved closure reached the canonical record.", operationSaved: "Saved to the canonical record. Closing the task still needs its evidence.",
+    publicationSubmitted: "Submitted for publication. Not yet confirmed on the canonical branch.",
+    operationUnconfirmed: "The result is not confirmed. Check this existing receipt; do not submit another operation.",
+    exactApprovalRequired: "Nothing will execute until you approve this exact scope and source version.",
+    noNewSuccess: "No new success is claimed. Review the recorded state before taking another action.",
+    historicalReceipt: "Historical receipt only. Source content is unavailable and cannot authorize a new action.",
+    expiresLabel: "expires", sourceLabel: "Source", exactAction: "Exact action to approve",
+    closurePassHint: "Closure may require up to six explicitly continued checks of the pinned reference inventory. No task is submitted or closed from a partial check, and another pass never runs automatically.",
+    preparedNotVerified: "Prepared, not verified", suggestedSteps: "Suggested steps", uncertainties: "Uncertainties",
+    ownerNextAction: "Your next action", sourceEvidence: "Source evidence", operationReceipts: "Operation and publication receipts",
+    openResultStatus: "Open result or save status", approveExact: "Approve this exact action", declineAction: "Decline",
+    continueClosure: "Continue closure check", recoverClosure: "Recover last closure request",
+    closureStepHint: "One explicit step only. It may submit the approved closure once all pinned evidence is checked; publication remains separately verified.",
+    checkExistingRequest: "Check this existing request", reviewedResult: "I've reviewed this result",
+    resultMarkedReviewed: "Result marked reviewed. The underlying task remains open.",
+    acknowledgeUnavailable: "Acknowledge unavailable result", unavailableAcknowledged: "Unavailable result notice acknowledged. No private content was restored or task closed.",
+    proposalReceiptIncomplete: "No complete proposal receipt was returned. Inspect Activity before starting another request.",
+    sourceReceiptOnly: "Source content is unavailable; only the operation receipt remains.",
+    closureSourceChangedLabel: "Source changed", closureSourceChangedText: "The approved source or pinned revision changed. This closure was not completed.",
+    closureSourceClosedLabel: "Source already closed", closureSourceClosedText: "The source is already done, closed or cancelled. This receipt does not confirm that this request closed it.",
+    closureLinkedPathLabel: "Reference blocked", closureLinkedPathText: "A required path is linked or is not a regular directory. The safety check blocked closure.",
+    closureSourceInvalidLabel: "Reference invalid", closureSourceInvalidText: "A required reference has invalid text or metadata. The closure was not completed.",
+    closurePrivacyLabel: "Privacy refusal", closurePrivacyText: "A required reference is not permitted by privacy or source-safety rules. It was not skipped; closure was blocked.",
+    closureLinkRepairLabel: "Link repair required", closureLinkRepairText: "Required links could not be safely repaired. The closure was not completed.",
+    closureProofLabel: "Proof incomplete", closureProofText: "Required closure proof is missing or incomplete. No completed closure is confirmed.",
+    closureContextLabel: "Context limit", closureContextText: "A bounded reading or finalization limit blocked closure. The closure was not completed.",
+    closureInventoryChangedLabel: "Inventory changed", closureInventoryChangedText: "The pinned reference inventory or ignore rules changed. The closure was not completed.",
+    closureInventoryInvalidLabel: "Inventory invalid", closureInventoryInvalidText: "The required reference inventory could not be validated. The closure was not completed.",
+    closureInventoryLimitLabel: "Inventory limit", closureInventoryLimitText: "The required reference inventory exceeds the allowed limit. The closure was not completed.",
+    closureContinuationLabel: "Checkpoint conflict", closureContinuationText: "The continuation did not match this approved closure request. No completed closure is confirmed.",
+    closureExhaustedLabel: "Closure check limit", closureExhaustedText: "The bounded closure checks are exhausted. The closure was not completed.",
+    closureDestinationLabel: "Destination exists", closureDestinationText: "The closed-task destination already exists. This request did not overwrite it.",
+    closureRequestConflictLabel: "Request conflict", closureRequestConflictText: "This operation ID already belongs to a different approved request. No new closure is confirmed.",
+    closureUnconfirmedLabel: "Closure unconfirmed", closureUnconfirmedText: "The closure outcome could not be confirmed. No completed closure is confirmed.",
+    closureCheckpointLabel: "Closure unconfirmed", closureCheckpointText: "The saved closure checkpoint could not be confirmed. No completed closure is confirmed.",
+    closureReceiptLabel: "Closure unconfirmed", closureReceiptText: "The saved closure receipt could not be confirmed. No completed closure is confirmed.",
+    closureConflictLabel: "Closure conflict", closureConflictText: "The saved receipt does not identify a specific supported reason. No completed closure is confirmed.",
     estimatedUsage: "Estimated AI usage", aiLimits: "AI limits", monthlyLimit: "Estimated monthly AI usage and operational cap",
     usageHint: "Operational estimate, not a provider bill.", usageToday: "Today", calls: "calls",
     untriaged: "Untriaged", clarify: "Clarify", backlog: "Backlog",
@@ -1615,6 +1762,8 @@ const COPY = {
     checkingSignIn: "Проверяем вход", signInPrompt: "Войдите с настроенной личной учётной записью Microsoft, чтобы увидеть свои задачи.",
     sessionExpired: "Войдите снова с личной учётной записью. Проверьте историю, прежде чем повторять неподтверждённый запрос.",
     signedOutUnconfirmed: "Вы вышли. Исход одного запроса неизвестен; после входа проверьте историю, прежде чем создавать новый.",
+    signOutBusy: "Ответ ещё ожидается. Выйдите после получения ответа или сообщения о тайм-ауте.",
+    signOutUnconfirmed: "Выход не подтверждён. Попробуйте снова, прежде чем оставлять общее устройство.",
     personalWorkspace: "Личное пространство", signedOut: "Вход не выполнен", accessUnavailable: "Доступ недоступен", workingRequest: "Обрабатываем ваш запрос",
     openCopilot: "Открыть копилот", closeCopilot: "Закрыть копилот",
     useDark: "Включить тёмную тему", useLight: "Включить светлую тему", useRussian: "Переключить на русский", useEnglish: "Switch to English",
@@ -1649,6 +1798,7 @@ const COPY = {
     detailEmptyDetail: "Откройте задачу, чтобы уточнить результат, спланировать следующий шаг или проверить, что может подготовить ИИ.",
     areaUnclear: "Сфера не уточнена", clarifyNext: "Уточните следующий шаг.", selectedToday: "Выбрано на сегодня",
     deadlineLabel: "Крайний срок", reviewLabel: "Пересмотр", deadlineApproaching: "Срок приближается",
+    deadlineDue: "Наступил срок", reviewDue: "Пора пересмотреть",
     waitingDependency: "Ожидание зависимости", definitionNeedsWork: "Нужно уточнить описание",
     minutes: "мин", loadingTasks: "Загружаем задачи", noLoadedTasks: "Нет загруженных задач", loadingCanonical: "Загружаем каноническую задачу...",
     allStages: "Все этапы", allAreas: "Все сферы",
@@ -1667,6 +1817,107 @@ const COPY = {
     moreCandidates: "Остались другие записи; загрузите ещё, чтобы проверить разрешённые проекты.",
     unseenProjects: "Сохранено выбранных проектов вне этой страницы", reviewUnseenProjects: "Загрузите ещё, чтобы проверить их, или явно снимите выбор.",
     noEligibleTasks: "Нет подходящих загруженных задач.", noEligibleTasksDetail: "Выберите проект и явно переведите полностью определённую задачу в готовые к работе. При необходимости загрузите ещё задачи.",
+    manualDraftInvalidated: "Несохранённые ручные правки удалены: задача изменилась или больше недоступна. Проверьте текущий источник перед новыми правками.",
+    titleField: "Название", project: "Проект", executionMode: "Режим выполнения", outcomeField: "Результат",
+    doneWhenField: "Критерий готовности", waitingFor: "Ожидание", reviewOn: "Дата пересмотра", focusOn: "Дата фокуса",
+    chooseArea: "Выберите сферу", noProjectSelected: "Проект не выбран", keepUntriaged: "Оставить неразобранной",
+    notDecided: "Не решено", executionHuman: "Я", executionAssisted: "Я, с помощью ИИ", executionAgent: "Агент (нужно разрешение)",
+    execution_human: "Я", execution_assisted: "Я, с помощью ИИ", execution_agent: "Агент (нужно разрешение)",
+    whoActs: "Кто выполнит следующий шаг?", desiredOutcome: "Желаемый результат",
+    doneWhenHint: "Наблюдаемый результат, который можно проверить.",
+    clarifyRecord: "Уточнить запись", definitionHint: "Проверьте точные правки перед сохранением. Выбор этапа или исполнителя не запускает агента.",
+    waitingHint: "Укажите зависимость, а не чувствительные личные сведения. Очистите поле только после устранения препятствия.",
+    reviewOnHint: "Назначьте дату пересмотра, переводя начатую работу в ожидание.",
+    reviewDefinition: "Проверить правки описания", noDefinitionChanges: "Нет правок описания для проверки.",
+    fieldCannotClear: "Поле «{field}» нельзя очистить через эту форму. Укажите замену или оставьте без изменений.",
+    chooseWaitingStage: "Выберите этап задачи при изменении условий ожидания или используйте форму одной даты ниже.",
+    changeOneDate: "Осознанно изменить одну дату", dateType: "Тип даты", dateField: "Дата",
+    nextReview: "Следующий пересмотр", selectedFocusDate: "Выбранная дата фокуса", realDeadline: "Реальный крайний срок",
+    removeDate: "Явно удалить эту дату", reviewDateChange: "Проверить изменение даты",
+    dateHint: "Пересмотр не является крайним сроком. Перенос пересмотра не меняет крайний срок. Фокус дня не переносится автоматически.",
+    chooseDate: "Выберите дату или явно отметьте её удаление.",
+    preparationTitle: "Упростить следующий шаг",
+    preparationIntro: "Выберите ограниченное поручение и проверьте его точный объём. Результат ИИ остаётся черновиком до вашей проверки.",
+    preparationEligibility: "Для подготовки нужно полное описание и выбранный владельцем этап «Готово к работе», «В работе» или «Проверить».",
+    workToPrepare: "Что подготовить", privateDraft: "Личный черновик по этой задаче", publicResearch: "Ограниченное публичное исследование",
+    exactScope: "Точный вопрос или объём подготовки", reviewAssignment: "Проверить поручение ИИ",
+    privatePreparationLimits: "Личная подготовка: один вызов модели, без внешних инструментов, не более 45 секунд. Действие в реальном мире не выполняется.",
+    publicResearchLimits: "Один обезличенный публичный вопрос, без личного контекста. Не более пяти источников, один короткий отчёт, без последующих заданий. Расходы провайдера могут учитываться отдельно.",
+    closureTitle: "Завершить результат, а не только запуск",
+    closureIntro: "Черновика, отправленного запроса или завершённого запуска агента недостаточно. Запишите, что произошло и чем это подтверждено.",
+    closureNeedsCondition: "Перед завершением добавьте конкретный критерий готовности.",
+    resultAchieved: "Что удалось сделать?", evidenceField: "Доказательства или проверка", verifiedOn: "Дата проверки результата",
+    evidenceHint: "Опишите разрешённые доказательства или сошлитесь на них. Личные сведения оставьте в отдельной записи.",
+    verifiedOnHint: "Используется настроенный календарь задач. Это дата проверки, а не предполагаемая дата выполнения работы.",
+    learningField: "Полезный урок", learningHint: "Необязательно. Что вам или агенту стоит сделать иначе в следующий раз?",
+    ownerAttestation: "Я проверил критерий готовности по фактическому результату и доказательствам.", reviewClosure: "Проверить подтверждённое завершение",
+    openCanonical: "Открыть канонический источник", revision: "Версия", taskActions: "Действия с задачей", notRecorded: "Не записано",
+    taskAttentionFilter: "Фильтр внимания к задачам", taskLayout: "Вид списка задач",
+    needsClarification: "Нужно уточнить: {fields}. Это проверки структуры, а не разрешение действовать.",
+    clarifyTask: "Уточнить эту задачу", readFullSource: "Прочитать полный источник",
+    clarificationRecorded: "Уточнение записано отдельно. Описание задачи не изменено.",
+    oneQuestion: "По одному вопросу", answersUsed: "Для этой версии источника использовано ответов: {count} из 3. Нерешённая работа может остаться на этапе уточнения.",
+    answerBindingMissing: "У вопроса нет действительной привязки ответа. Обновите задачу и начните уточнение заново.",
+    yourAnswer: "Ваш ответ", recordAnswer: "Записать ответ", proposedChanges: "Предлагаемые правки", reviewRefinement: "Проверить это уточнение",
+    clarificationNext: "Проверьте предлагаемое уточнение или продолжите редактировать задачу вручную. Дополнительный вопрос не обязателен.",
+    sourceCaptureRequest: "Проверьте «{title}» и выберите конкретный следующий шаг.", sourceCaptureFrom: "Из источника: ",
+    sourceCaptureHint: "Каноническое происхождение и точные доказательства сохранятся и будут проверены перед подтверждением.",
+    unloadedStanding: "Ранее разрешённых задач, недоступных для выбора на загруженной странице: {count}. Сохранение заменит выбор отмеченными здесь задачами.",
+    projectLimit: "Выберите не более восьми проектов.",
+    projectsSaved: "Выбор проектов сохранён. Постоянная подготовка отключена до повторного подтверждения её объёма.",
+    projectsCleared: "Выбор проектов снят. Постоянная подготовка отключена; исходные проекты и задачи не удалены.",
+    standingLimit: "Выберите от одной до трёх подходящих задач перед включением подготовки.",
+    standingSourceMissing: "Выбранный источник больше не загружен. Обновите его перед выдачей разрешения.",
+    standingSaved: "Разрешение сохранено для этих точных версий источников. Действия в реальном мире не разрешены.",
+    standingOff: "Постоянная подготовка отключена.", standingStopped: "Постоянная подготовка отключена. Существующие результаты и квитанции сохранены.",
+    workingExactRequest: "Выполняется этот точный запрос. Дождитесь его квитанции.",
+    requestUnconfirmed: "Этот запрос не подтверждён.",
+    requestUnconfirmedHint: "Он уже мог дойти до сервера. Не закрывайте страницу: проверьте историю или восстановите этот точный запрос. Не создавайте замену.",
+    recoverSameRequest: "Восстановить тот же запрос",
+    captureOperation: "Записать задачу", refineOperation: "Уточнить описание", changeOperation: "Изменить задачу",
+    closeOperation: "Проверить и завершить", prepareOperation: "Подготовить личный черновик", researchOperation: "Исследовать публичный вопрос", taskOperation: "Операция с задачей",
+    freshClosureApproval: "Для новой попытки нужны новое предложение и подтверждение.",
+    closureCheckpointConfirmed: "Контрольная точка завершения подтверждена (проверок: {count} из 6). Задача открыта; завершение не отправлено. Продолжайте только для следующего ограниченного шага.",
+    closureCheckUnconfirmed: "Последняя проверка завершения не подтверждена. Восстановите тот же запрос, чтобы проверить ход работы. Не начинайте новое завершение и не считайте задачу сохранённой.",
+    privateDraftAvailable: "Личный черновик доступен. Задача остаётся открытой.",
+    researchResultAvailable: "У исследования есть результат. Проверьте материал; сама задача не завершена.",
+    closureSaved: "Подтверждённое завершение внесено в каноническую запись.", operationSaved: "Сохранено в канонической записи. Для завершения задачи по-прежнему нужны доказательства.",
+    publicationSubmitted: "Отправлено на публикацию. Наличие в канонической ветке ещё не подтверждено.",
+    operationUnconfirmed: "Результат не подтверждён. Проверьте эту квитанцию, не отправляйте новую операцию.",
+    exactApprovalRequired: "Ничего не будет выполнено без вашего подтверждения точного объёма и версии источника.",
+    noNewSuccess: "Новый успех не заявлен. Проверьте записанное состояние перед следующим действием.",
+    historicalReceipt: "Только историческая квитанция. Содержимое источника недоступно и не даёт разрешения на новое действие.",
+    expiresLabel: "истекает", sourceLabel: "Источник", exactAction: "Точное действие для подтверждения",
+    closurePassHint: "Для завершения может потребоваться до шести явно продолженных проверок закреплённых источников. Частичная проверка не отправляет и не закрывает задачу. Следующий проход не запускается автоматически.",
+    preparedNotVerified: "Подготовлено, но не проверено", suggestedSteps: "Предлагаемые шаги", uncertainties: "Неопределённости",
+    ownerNextAction: "Ваш следующий шаг", sourceEvidence: "Доказательства из источника", operationReceipts: "Квитанции операции и публикации",
+    openResultStatus: "Открыть результат или статус сохранения", approveExact: "Подтвердить это точное действие", declineAction: "Отклонить",
+    continueClosure: "Продолжить проверку завершения", recoverClosure: "Восстановить последний запрос завершения",
+    closureStepHint: "Только один явный шаг. После проверки всех закреплённых доказательств он может отправить подтверждённое завершение. Публикация проверяется отдельно.",
+    checkExistingRequest: "Проверить существующий запрос", reviewedResult: "Я проверил этот результат",
+    resultMarkedReviewed: "Результат отмечен проверенным. Сама задача остаётся открытой.",
+    acknowledgeUnavailable: "Подтвердить недоступность результата", unavailableAcknowledged: "Уведомление о недоступном результате подтверждено. Личные данные не восстановлены, задача не закрыта.",
+    proposalReceiptIncomplete: "Полная квитанция предложения не получена. Проверьте историю перед новым запросом.",
+    sourceReceiptOnly: "Содержимое источника недоступно; осталась только квитанция операции.",
+    closureSourceChangedLabel: "Источник изменился", closureSourceChangedText: "Утверждённый источник или закреплённая версия изменились. Завершение не выполнено.",
+    closureSourceClosedLabel: "Источник уже закрыт", closureSourceClosedText: "Источник уже выполнен, закрыт или отменён. Эта квитанция не подтверждает, что его закрыл данный запрос.",
+    closureLinkedPathLabel: "Ссылка заблокирована", closureLinkedPathText: "Обязательный путь является ссылкой или не является обычным каталогом. Проверка безопасности заблокировала завершение.",
+    closureSourceInvalidLabel: "Источник некорректен", closureSourceInvalidText: "У обязательного источника некорректный текст или метаданные. Завершение не выполнено.",
+    closurePrivacyLabel: "Отказ по приватности", closurePrivacyText: "Обязательный источник запрещён правилами приватности или безопасности. Он не пропущен; завершение заблокировано.",
+    closureLinkRepairLabel: "Нужно исправить ссылки", closureLinkRepairText: "Обязательные ссылки не удалось безопасно исправить. Завершение не выполнено.",
+    closureProofLabel: "Доказательства неполные", closureProofText: "Подтверждение завершения отсутствует или неполное. Успешное завершение не подтверждено.",
+    closureContextLabel: "Лимит контекста", closureContextText: "Лимит чтения или финализации заблокировал завершение. Задача не завершена.",
+    closureInventoryChangedLabel: "Список источников изменился", closureInventoryChangedText: "Закреплённый список источников или правила исключения изменились. Завершение не выполнено.",
+    closureInventoryInvalidLabel: "Список источников некорректен", closureInventoryInvalidText: "Обязательный список источников не прошёл проверку. Завершение не выполнено.",
+    closureInventoryLimitLabel: "Лимит источников", closureInventoryLimitText: "Обязательный список источников превышает допустимый лимит. Завершение не выполнено.",
+    closureContinuationLabel: "Конфликт контрольной точки", closureContinuationText: "Продолжение не соответствует подтверждённому запросу завершения. Успешное завершение не подтверждено.",
+    closureExhaustedLabel: "Лимит проверок завершения", closureExhaustedText: "Лимит ограниченных проверок завершения исчерпан. Завершение не выполнено.",
+    closureDestinationLabel: "Назначение уже существует", closureDestinationText: "Запись закрытой задачи уже существует в месте назначения. Этот запрос её не перезаписал.",
+    closureRequestConflictLabel: "Конфликт запроса", closureRequestConflictText: "Идентификатор операции уже принадлежит другому подтверждённому запросу. Новое завершение не подтверждено.",
+    closureUnconfirmedLabel: "Завершение не подтверждено", closureUnconfirmedText: "Не удалось подтвердить исход завершения. Успешное завершение не подтверждено.",
+    closureCheckpointLabel: "Завершение не подтверждено", closureCheckpointText: "Не удалось подтвердить сохранённую контрольную точку. Успешное завершение не подтверждено.",
+    closureReceiptLabel: "Завершение не подтверждено", closureReceiptText: "Не удалось подтвердить сохранённую квитанцию. Успешное завершение не подтверждено.",
+    closureConflictLabel: "Конфликт завершения", closureConflictText: "Сохранённая квитанция не указывает конкретную поддерживаемую причину. Успешное завершение не подтверждено.",
     estimatedUsage: "Оценка использования ИИ", aiLimits: "Лимиты ИИ", monthlyLimit: "Оценка использования ИИ за месяц и рабочий лимит",
     usageHint: "Рабочая оценка, не счёт провайдера.", usageToday: "Сегодня", calls: "вызовов",
     untriaged: "Не разобрано", clarify: "Уточнить", backlog: "Запас",
@@ -1734,12 +1985,15 @@ const COPY = {
     showTask: "Открыть задачу", confidence: "Уверенность", permission: "Нет привязки подтверждения. Обновите историю.",
   },
 };
-function t(key) { return COPY[assist.language]?.[key] || COPY.en[key] || key; }
+function t(key, values = {}) {
+  return (COPY[assist.language]?.[key] || COPY.en[key] || key)
+    .replace(/\{(\w+)\}/g, (match, name) => Object.hasOwn(values, name) ? String(values[name]) : match);
+}
 let activeViewTransition = null;
 function transitionView(view) {
   activeViewTransition?.skipTransition();
   if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    const transition = document.startViewTransition(() => setView(view));
+    const transition = document.startViewTransition(() => setView(view, { arrival: true }));
     activeViewTransition = transition;
     document.documentElement.dataset.transitioning = "true";
     transition.finished.catch(() => {}).finally(() => {
@@ -1747,7 +2001,7 @@ function transitionView(view) {
       activeViewTransition = null;
       delete document.documentElement.dataset.transitioning;
     });
-  } else setView(view);
+  } else setView(view, { arrival: true });
 }
 function threadFor(key) {
   if (!assist.threads.has(key)) assist.threads.set(key, { id: null, messages: [], suggestions: [], draft: "", pending: false });
@@ -1763,9 +2017,15 @@ function initWorkspace() {
   assist.initialized = true;
   assist.language = navigator.language?.toLowerCase().startsWith("ru") ? "ru" : "en";
   const header = document.querySelector(".app-header");
+  const quickBar = $("quick-bar");
   const measureHeader = () => document.documentElement.style.setProperty("--header-height", `${Math.ceil(header.getBoundingClientRect().height)}px`);
+  const measureQuickBar = () => document.documentElement.style.setProperty("--quick-bar-height", `${Math.ceil(quickBar.getBoundingClientRect().height)}px`);
   measureHeader();
-  if (typeof ResizeObserver !== "undefined") new ResizeObserver(measureHeader).observe(header);
+  measureQuickBar();
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(measureHeader).observe(header);
+    new ResizeObserver(measureQuickBar).observe(quickBar);
+  }
   $("command-shortcut").textContent = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘ K" : "Ctrl K";
   $("demo-banner").hidden = !isMockMode();
   $("demo-banner").dataset.i18n = "mock";
@@ -1774,14 +2034,22 @@ function initWorkspace() {
     document.documentElement.dataset.theme = dark ? "light" : "dark";
     $("theme-toggle").setAttribute("aria-label", t(dark ? "useDark" : "useLight"));
   });
+  let languageContext = null;
+  $("language-toggle").addEventListener("pointerdown", () => { languageContext = captureDetailContext(); });
   $("language-toggle").addEventListener("click", () => {
+    const context = languageContext;
+    languageContext = null;
+    const page = { left: window.scrollX, top: window.scrollY, behavior: "instant" };
     assist.language = assist.language === "en" ? "ru" : "en";
-    translateWorkspace(); setView(state.view, false);
+    translateWorkspace(); setView(state.view, { load: false });
     if (state.selected?.revision) renderDetail();
     if (dashboard.inbox) dashboard.renderInbox();
     if (dashboard.reader) dashboard.renderReader();
     if (assist.usage) renderAssistUsage();
     renderChats();
+    if (context?.focused && state.selected?.path === context.path && state.selected?.revision === context.revision
+      && ["tasks", "needs"].includes(state.view)) restoreDetailContext(context);
+    else window.scrollTo(page);
   });
   for (const id of ["command-open", "nav-copilot", "quick-chat"]) $(id).addEventListener("click", () => openCopilot());
   $("copilot-close").addEventListener("click", () => $("copilot-dialog").close());

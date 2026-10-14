@@ -99,9 +99,9 @@
         <nav id="canonical-links" class="actions" aria-label="Canonical vault pages" hidden></nav>
         <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
         <section id="uncertain" class="uncertain" role="alert" hidden>
-          <h2>This request has not been confirmed.</h2>
-          <p>It may already have reached the server. Keep this page open, inspect Activity, or recover this exact request. Do not create a replacement.</p>
-          <button id="recover-request" type="button">Recover the same request</button>
+          <h2 data-i18n="requestUnconfirmed">This request has not been confirmed.</h2>
+          <p data-i18n="requestUnconfirmedHint">It may already have reached the server. Keep this page open, inspect Activity, or recover this exact request. Do not create a replacement.</p>
+          <button id="recover-request" type="button" data-i18n="recoverSameRequest">Recover the same request</button>
         </section>
         <div id="warnings" class="warnings"></div>
 
@@ -152,14 +152,14 @@
         </section>
 
         <section id="tasks-section" data-view-panel="tasks" aria-labelledby="task-list-heading" hidden>
-          <div class="task-scope actions" aria-label="Task attention filter">
+          <div class="task-scope actions" aria-label="Task attention filter" data-i18n-aria="taskAttentionFilter">
             <button id="scope-needs" type="button" aria-pressed="false"><span data-i18n="needs">Needs you</span><span id="needs-count"></span></button>
             <button id="scope-all" type="button" aria-pressed="true" data-i18n="allTasks">All tasks</button>
           </div>
           <div id="attention" class="attention"></div>
           <div class="section-heading task-heading">
             <h2 id="task-list-heading" data-i18n="work">Your work, in motion</h2>
-            <div class="segmented" aria-label="Task layout">
+            <div class="segmented" aria-label="Task layout" data-i18n-aria="taskLayout">
               <button id="layout-list" type="button" aria-pressed="true" data-i18n="list">List</button>
               <button id="layout-board" type="button" aria-pressed="false" data-i18n="board">Flow board</button>
             </div>

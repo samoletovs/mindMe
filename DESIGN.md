@@ -42,7 +42,10 @@ readable. No external fonts, images, scripts, analytics or frontend dependencies
   expired/draft focus and partial coverage are explicit. Recorded estimates name
   how many of the shown tasks have estimates; they are not an invented total.
   Task attention and source changes follow below, without a decorative hero
-  taking over the working viewport.
+  taking over the working viewport. One shared ranking supplies the priority
+  list; each task appears once. Priority entries carry their exact dates, stage,
+  dependencies and definition warnings. The secondary section shows additional
+  loaded attention, waiting context, decisions and results, with full Flow access.
 - **Flow:** a scrollable six-lane board or a dense ruled list, real stage labels,
   filters, outcome/done conditions, a seven-step preparation rail and task chat.
   Stage changes have normal keyboard-accessible forms; dragging is optional.
@@ -62,6 +65,9 @@ header actions remain available at 1024px and above. Below 1024px, the phone/tab
 action bar supplies capture, voice and copilot with reserved bottom/safe-area
 space. Refresh and sign-out stay reachable on phones. The layout also covers a
 320px narrow viewport; long EN/RU text must wrap rather than widen the page.
+Header actions and form groups also reflow at 200% text resizing. The phone bar's
+measured height reserves its bottom space; text is not reduced to fit. Operational
+dates, statuses and metadata share a 0.75rem minimum role and scale with text size.
 
 ## Interaction
 
@@ -85,10 +91,23 @@ Escape-dismissable. Voice/API failures are visible inside the modal copilot as
 well as in the workspace, not only behind its backdrop.
 
 Background receipt refresh does not reset the selected tab or a same-source
-composer while reading. Draft/caret/scroll restoration is selection- and
-focus-aware. A changed/removed revision still invalidates old source content;
+composer while reading. Manual edit/date/preparation/closure/clarification drafts
+are bounded to the selected task's exact path and revision, in memory only.
+Locale changes and same-source rerenders retain input, selection and caret;
+clarification answers additionally require the same question token. A changed
+or unavailable source visibly discards incompatible manual drafts, never rebases
+them. Explicit close/new selection and sign-out/expiry clear them.
+Draft/caret/scroll restoration is selection- and focus-aware.
+A changed/removed revision still invalidates old source content;
 only a still-permitted, freshly re-read task can restore the selected view.
 Explicit close/navigation, a withheld source or a denied re-read cannot reopen it.
+Deliberate navigation establishes heading or selected-detail context; locale-only
+rendering and background refresh do not perform navigation. Initial loading does
+not move focus or scroll. On narrow screens, ordinary view arrival positions the
+navigation strip below the header with the new view context, rather than hiding
+the strip above the heading. Task/evidence drill-down keeps its own positioning.
+Normal signed-out states show Sign in alone; retry is for genuine service/network
+recovery.
 
 Source/model strings remain DOM text, never HTML. Requests, UUID formats, approval
 digests, receipt polling, Undo eligibility and closure gates remain service-owned.
