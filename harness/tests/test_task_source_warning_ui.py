@@ -24,7 +24,7 @@ const dashboardSource = fs.readFileSync(path.join(path.dirname(process.argv[2]),
 assert.ok(!source.endsWith("\nstart();\n"));
 function node() {
   return {
-    textContent: "", children: [], disabled: false, hidden: false, value: "", dataset: {},
+    textContent: "", children: [], disabled: false, hidden: false, open: false, value: "", dataset: {},
     append(...children) { this.children.push(...children); },
     replaceChildren(...children) { this.children = children; },
     get firstElementChild() { return this.children[0]; },
@@ -44,7 +44,8 @@ const document = {
 };
 const tests = `
 (async () => {
-  const warningText = () => $("warnings").children.map((item) => item.textContent).join("\\n");
+  const warningText = () => $("source-issues").children.map((item) => item.textContent).join("\\n");
+  const scopeText = () => [$("task-source-count").textContent, $("project-source-count").textContent].join("\\n");
   const calendar = { calendar_date: "2026-10-10", timezone: "UTC", deadline_horizon_days: 7, assessed_count: 14 };
   const current = {
     canonical_revision: "a".repeat(40), attention: calendar, attention_complete: true,
@@ -79,8 +80,12 @@ const tests = `
   assert.equal(dashboard.today, null);
   state.overview = structuredClone(current);
   renderSourceWarnings();
-  assert.match(warningText(), /1 task source candidate/);
-  assert.match(warningText(), /2 checked project source candidate/);
+  assert.equal($("source-scope").hidden, false);
+  assert.equal($("source-scope").open, false);
+  assert.match(scopeText(), /Excluded task sources in this assessed window: 1/);
+  assert.match(scopeText(), /Excluded project sources checked so far: 2/);
+  assert.equal($("source-issues").hidden, true);
+  assert.equal(warningText(), "");
   assert.doesNotMatch(warningText(), /coverage is incomplete|source issue\\(s\\)|inventory is incomplete/);
 
   const textTree = (item) => [item.textContent, ...item.children.map(textTree)].join("\\n");
@@ -104,15 +109,67 @@ const tests = `
   state.items = [];
 
   state.overview.attention_complete = false;
-  state.overview.errors = [{ code: "task_source_policy_unresolved" }];
-  state.overview.project_errors = [{ code: "task_source_unavailable" }];
+  state.overview.errors = [{ code: "task_source_policy_unresolved", path: "SYNTHETIC_HIDDEN_PATH" }];
+  state.overview.project_errors = [{ code: "task_source_unavailable", title: "SYNTHETIC_HIDDEN_TITLE" }];
   renderSourceWarnings();
+  assert.equal($("source-scope").open, false);
+  assert.equal($("source-issues").hidden, false);
   assert.match(warningText(), /Attention coverage is incomplete/);
+  assert.match(warningText(), /assessed in this bounded window: 14/);
   assert.match(warningText(), /privacy metadata is ambiguous/);
-  assert.match(warningText(), /1 project source issue/);
+  assert.match(warningText(), /Project source issues: 1/);
   assert.match(warningText(), /Refresh to retry/);
+  assert.doesNotMatch(warningText() + scopeText(), /SYNTHETIC_HIDDEN/);
+
+  state.overview.errors = [];
+  state.overview.project_errors = [];
+  state.overview.attention.assessed_count = 0;
+  renderSourceWarnings();
+  assert.match(warningText(), /assessed in this bounded window: 0/);
+  assert.match(warningText(), /unchecked or unresolved sources remain/);
+  delete state.overview.attention.assessed_count;
+  renderSourceWarnings();
+  assert.match(warningText(), /^Attention coverage is incomplete/);
+  assert.doesNotMatch(warningText(), /undefined|source issues/);
+
+  for (const language of ["en", "ru"]) {
+    assist.language = language;
+    for (const [code, key] of Object.entries(SOURCE_ISSUES)) {
+      assert.ok(COPY[language][key], language + " missing " + key);
+      assert.equal(sourceIssueMessage(code), COPY[language][key]);
+    }
+    for (const code of ["SYNTHETIC_HIDDEN_CODE", "__proto__", "constructor", "toString", undefined]) {
+      state.overview.errors = [{ code, message: "SYNTHETIC_HIDDEN_MESSAGE", path: "SYNTHETIC_HIDDEN_PATH" }];
+      renderSourceWarnings();
+      assert.equal(sourceIssueMessage(code), COPY[language].sourceIssueUnknown);
+      assert.ok(warningText().includes(COPY[language].sourceIssueUnknown));
+      assert.doesNotMatch(warningText() + scopeText(), /SYNTHETIC_HIDDEN|function|\\[object/);
+    }
+  }
+  assert.match(scopeText(), /проверенной части списка: 1/);
+  assert.match(scopeText(), /среди уже проверенных: 2/);
+  assert.match(warningText(), /Проверка внимания неполная/);
+  assist.language = "en";
+
+  state.overview = { ...structuredClone(current), excluded_count: 0, project_excluded_count: 0 };
+  renderSourceWarnings();
+  assert.equal($("source-scope").hidden, true);
+  assert.equal($("source-issues").hidden, true);
+  assert.equal($("task-source-count").textContent, "");
+  assert.equal($("project-source-count").textContent, "");
+  $("source-scope").open = true;
+  state.overview = null;
+  renderSourceWarnings();
+  assert.equal($("source-scope").hidden, true);
+  assert.equal($("source-scope").open, false);
+  assert.equal(warningText(), "");
 
   state.overview = structuredClone(current);
+  state.overview.project_excluded_count = 1;
+  renderSourceWarnings();
+  assert.match(scopeText(), /Excluded project sources checked so far: 1/);
+  const disclosure = $("source-scope");
+  disclosure.open = true;
   renderAreas = () => {};
   renderTasks = () => {};
   renderActivity = () => {};
@@ -120,7 +177,7 @@ const tests = `
   render = () => {};
   api = async (operation) => {
     assert.equal(operation, "projects?offset=4");
-    return { items: [{ id: "2026-three" }], next_offset: null, excluded_count: 1,
+    return { items: [{ id: "2026-three" }], next_offset: null, excluded_count: 2,
       candidate_count: 7, errors: [{ code: "task_source_policy_unresolved" }], canonical_revision: current.canonical_revision };
   };
   await loadProjects();
@@ -128,8 +185,10 @@ const tests = `
   assert.equal(state.overview.project_excluded_count, 3);
   assert.equal(state.overview.project_errors.length, 1);
   assert.equal(state.overview.project_next_offset, null);
-  assert.match(warningText(), /3 checked project source candidate/);
-  assert.match(warningText(), /1 project source issue/);
+  assert.match(scopeText(), /Excluded project sources checked so far: 3/);
+  assert.match(warningText(), /Project source issues: 1/);
+  assert.equal($("source-scope"), disclosure);
+  assert.equal(disclosure.open, true);
 
   api = async (operation) => {
     assert.equal(operation, "overview?offset=12");
@@ -140,7 +199,9 @@ const tests = `
   assert.equal(state.overview.project_excluded_count, 3);
   assert.equal(state.overview.project_errors.length, 1);
   assert.equal(state.overview.project_next_offset, null);
-  assert.match(warningText(), /1 project source issue/);
+  assert.match(warningText(), /Project source issues: 1/);
+  assert.match(scopeText(), /Excluded project sources checked so far: 3/);
+  assert.equal(disclosure.open, true);
 
   api = async (operation) => {
     assert.equal(operation, "overview?offset=0");
@@ -150,7 +211,15 @@ const tests = `
   assert.equal(state.overview.project_excluded_count, 2);
   assert.equal(state.overview.project_errors.length, 0);
   assert.equal(state.overview.project_next_offset, 4);
+  assert.match(scopeText(), /Excluded project sources checked so far: 2/);
   assert.doesNotMatch(warningText(), /inventory is incomplete/);
+  assert.equal(disclosure.open, true);
+  clearData();
+  assert.equal(disclosure.hidden, true);
+  assert.equal(disclosure.open, false);
+  assert.equal(warningText(), "");
+  assert.equal($("task-source-count").textContent, "");
+  assert.equal($("project-source-count").textContent, "");
 })()
 `;
 const bundledDashboard = "const Dashboard = (() => {\n" + dashboardSource + "\nreturn Dashboard;\n})();\n";

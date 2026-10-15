@@ -445,6 +445,277 @@ def api_fixture(operation, *, assist_enabled=True):
     return 404, {"error": "not_found", "message": "Synthetic API operation unavailable."}
 
 
+def source_notice_overview(**changes):
+    _, body = api_fixture("overview?offset=0")
+    body.update(excluded_count=1, project_excluded_count=2, errors=[], project_errors=[])
+    body["attention"]["assessed_count"] = 14
+    body.update(changes)
+    return body
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+@pytest.mark.parametrize("scheme", ["dark", "light"])
+def test_real_browser_source_notice_disclosure_locale_and_text_reflow(workspace_url, chromium, width, scheme):
+    context = chromium.new_context(viewport={"width": width, "height": 1000 if width == 1440 else 844},
+                                   locale="en-US", reduced_motion="reduce", has_touch=width == 390)
+    page = context.new_page()
+    calls, errors = [], []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        calls.append((operation, route.request.method))
+        status, body = api_fixture(operation, assist_enabled=False)
+        if operation.startswith("overview"):
+            body = source_notice_overview()
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    page.route("**/api/tasks/api/**", respond)
+    page.goto(workspace_url + "#tasks")
+    page.locator("#assist-usage[data-i18n='unavailable']").wait_for(state="attached")
+    label_fixture(page)
+    if scheme == "light":
+        page.locator("#theme-toggle").click()
+    scope = page.locator("#source-scope")
+    summary = scope.locator("summary")
+    original = summary.element_handle()
+    assert scope.evaluate("(node) => node.tagName") == "DETAILS"
+    assert scope.is_visible() and scope.get_attribute("open") is None
+    assert page.locator("#source-issues").is_hidden()
+    assert summary.inner_text() == "Some sources are outside this view"
+    assert "assessed window: 1." in page.locator("#task-source-count").text_content()
+    assert "checked so far: 2." in page.locator("#project-source-count").text_content()
+    assert not page.locator("#task-source-count").is_visible()
+    assert scope.evaluate("(node) => !node.closest('[role=alert], [aria-live]')")
+    assert scope.evaluate("(node) => getComputedStyle(node).color") == (
+        "rgb(176, 180, 167)" if scheme == "dark" else "rgb(90, 98, 80)")
+    screenshot(page, f"source-scope-{width}-{scheme}-en-closed")
+
+    page.keyboard.press("Tab")
+    summary.focus()
+    assert summary.evaluate("(node) => getComputedStyle(node).outlineStyle") == "solid"
+    assert summary.evaluate("(node) => parseFloat(getComputedStyle(node).outlineWidth)") >= 2
+    summary.press("Enter")
+    assert scope.get_attribute("open") is not None
+    summary.press("Space")
+    assert scope.get_attribute("open") is None
+    summary.press("Enter")
+    assert page.locator("#task-source-count").is_visible()
+    assert page.locator("#project-source-count").is_visible()
+    task_text = page.locator("#task-list").text_content()
+
+    for language in ["en", "ru"]:
+        if language == "ru":
+            summary.focus()
+            before_calls, before_scroll = list(calls), page.evaluate("scrollY")
+            page.locator("#language-toggle").evaluate("(node) => node.click()")
+            assert summary.evaluate("(node, original) => node === original && node === document.activeElement", original)
+            assert abs(page.evaluate("scrollY") - before_scroll) <= 1
+            assert calls == before_calls, "Changing local notice copy must not refetch or mutate"
+            assert scope.get_attribute("open") is not None
+            assert summary.inner_text() == "Некоторые источники не входят в этот обзор"
+            assert "проверенной части списка: 1." in page.locator("#task-source-count").inner_text()
+            assert "среди уже проверенных: 2." in page.locator("#project-source-count").inner_text()
+            assert "ошибками загрузки" in scope.inner_text()
+            assert page.locator("#capture-section").is_hidden()
+            assert page.locator("#copilot-dialog").is_hidden()
+        for text_size in [16, 32]:
+            page.evaluate("(size) => document.documentElement.style.fontSize = size + 'px'", text_size)
+            summary.scroll_into_view_if_needed()
+            metrics = scope.evaluate("""node => {
+              const summary = node.querySelector('summary').getBoundingClientRect();
+              return {
+                height: summary.height, width: summary.width,
+                overflow: document.documentElement.scrollWidth - innerWidth,
+                clipped: [...node.children].some(child => {
+                  const rect = child.getBoundingClientRect();
+                  return rect.left < 0 || rect.right > innerWidth + 1 || child.scrollWidth > child.clientWidth + 1;
+                }),
+              };
+            }""")
+            assert metrics["height"] >= 44 and metrics["width"] >= 44
+            assert metrics["overflow"] <= 0 and not metrics["clipped"], metrics
+            assert summary.evaluate("(node) => parseFloat(getComputedStyle(node).fontSize)") >= text_size * .8
+            screenshot(page, f"source-scope-{width}-{scheme}-{language}-text{text_size}", reset_scroll=False)
+        page.evaluate("document.documentElement.style.fontSize = '16px'")
+    assert page.locator("#task-list").text_content() != "", "Locale rendering must retain the task"
+    assert "<img src=x onerror=alert(1)> Synthetic task" in task_text
+    assert "<img src=x onerror=alert(1)> Synthetic task" in page.locator("#task-list").text_content()
+    if width == 390:
+        summary.tap()
+        assert scope.get_attribute("open") is None
+        summary.tap()
+        assert scope.get_attribute("open") is not None
+    assert all(method == "GET" for _, method in calls)
+    assert page.evaluate("localStorage.length + sessionStorage.length") == 0
+    assert not errors
+    context.close()
+
+
+@pytest.mark.parametrize("width", [390, 1440])
+def test_real_browser_source_notice_keeps_errors_visible_and_paging_state(workspace_url, chromium, width):
+    context = chromium.new_context(viewport={"width": width, "height": 1000 if width == 1440 else 844},
+                                   locale="en-US", reduced_motion="reduce")
+    page = context.new_page()
+    calls, errors = [], []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    fixture = {"overview": source_notice_overview(
+        attention_complete=False, project_excluded_count=1, project_next_offset=4, next_offset=12,
+        errors=[
+            {"code": "task_source_policy_unresolved", "path": "SYNTHETIC_HIDDEN_PATH"},
+            {"code": "SYNTHETIC_HIDDEN_CODE", "message": "SYNTHETIC_HIDDEN_MESSAGE"},
+        ],
+        project_errors=[{"code": "task_source_unavailable", "title": "SYNTHETIC_HIDDEN_TITLE"}],
+    )}
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        calls.append((operation, route.request.method))
+        status, body = api_fixture(operation, assist_enabled=False)
+        if operation == "overview?offset=0":
+            body = fixture["overview"]
+        elif operation == "projects?offset=4":
+            status, body = 200, {
+                "items": [{"id": "synthetic-project"}], "next_offset": None, "excluded_count": 2,
+                "candidate_count": 4, "errors": [{"code": "task_source_unavailable"}],
+                "canonical_revision": "a" * 40,
+            }
+        elif operation == "overview?offset=12":
+            _, task = api_fixture("task")
+            task.update(path="tasks/synthetic-next.md", title="Synthetic next page")
+            body = source_notice_overview(items=[task])
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    page.route("**/api/tasks/api/**", respond)
+    page.goto(workspace_url + "#tasks")
+    page.locator("#assist-usage[data-i18n='unavailable']").wait_for(state="attached")
+    label_fixture(page)
+    scope, issues = page.locator("#source-scope"), page.locator("#source-issues")
+    summary = scope.locator("summary")
+    original = summary.element_handle()
+    assert scope.get_attribute("open") is None
+    assert issues.is_visible()
+    assert "Attention coverage is incomplete" in issues.inner_text()
+    assert "privacy metadata is ambiguous" in issues.inner_text()
+    assert "Project source issues: 1" in issues.inner_text()
+    assert "Refresh to retry its current version" in issues.inner_text()
+    assert "absence is not evidence that no work is due" in issues.inner_text()
+    assert "SYNTHETIC_HIDDEN" not in page.locator("#warnings").text_content()
+    assert issues.evaluate("(node) => !node.closest('details')")
+    assert all(node.is_visible() for node in issues.locator("p").all())
+    assert issues.evaluate("(node) => getComputedStyle(node).color") == "rgb(241, 199, 141)"
+    screenshot(page, f"source-warnings-{width}-mixed-closed")
+
+    before_calls = list(calls)
+    click_visible_header(page, "#language-toggle")
+    assert calls == before_calls
+    assert "Проверка внимания неполная" in issues.inner_text()
+    assert "остаётся недоступным до их уточнения" in issues.inner_text()
+    assert "повторить попытку с его текущей версией" in issues.inner_text()
+    assert "Его отсутствие не означает" in issues.inner_text()
+    assert scope.get_attribute("open") is None
+    assert "SYNTHETIC_HIDDEN" not in page.locator("#warnings").text_content()
+    click_visible_header(page, "#language-toggle")
+
+    fixture["overview"] = source_notice_overview(
+        attention_complete=False, project_excluded_count=1, project_next_offset=4, next_offset=12)
+    page.locator("#refresh").click()
+    page.wait_for_function("document.getElementById('source-issues').children.length === 1")
+    assert "unchecked or unresolved sources remain" in issues.inner_text()
+    assert issues.is_visible() and scope.get_attribute("open") is None
+    page.locator('[data-view="areas"]').click()
+    summary.focus()
+    summary.press("Enter")
+    page.locator("#projects-more").evaluate("(node) => node.click()")
+    page.wait_for_function("document.getElementById('project-source-count').textContent.endsWith(': 3.')")
+    assert scope.get_attribute("open") is not None
+    assert summary.evaluate("(node, original) => node === original && node === document.activeElement", original)
+    assert "Project source issues: 1" in issues.inner_text()
+    assert page.locator("#projects-more").is_hidden()
+
+    page.locator('[data-view="tasks"]').click()
+    summary.focus()
+    page.locator("#load-more").evaluate("(node) => node.click()")
+    page.wait_for_function("document.querySelectorAll('#task-list .task-row').length === 2")
+    assert "checked so far: 3." in page.locator("#project-source-count").inner_text()
+    assert "assessed window: 1." in page.locator("#task-source-count").inner_text()
+    assert "Project source issues: 1" in issues.inner_text()
+    assert scope.get_attribute("open") is not None
+    assert summary.evaluate("(node, original) => node === original && node === document.activeElement", original)
+    fixture["overview"] = source_notice_overview()
+    before_scroll = page.evaluate("scrollY")
+    page.locator("#refresh").evaluate("(node) => node.click()")
+    page.wait_for_function("document.getElementById('source-issues').hidden")
+    assert "checked so far: 2." in page.locator("#project-source-count").inner_text()
+    assert scope.get_attribute("open") is not None
+    assert summary.evaluate("(node, original) => node === original && node === document.activeElement", original)
+    assert abs(page.evaluate("scrollY") - before_scroll) <= 1
+    assert page.locator("#task-list .task-row").count() == 1
+    page.locator('[data-view="knowledge"]').click()
+    assert page.locator("#warnings").is_hidden()
+    page.locator('[data-view="tasks"]').click()
+    assert scope.is_visible() and scope.get_attribute("open") is not None
+    assert all(method == "GET" for _, method in calls)
+    assert page.evaluate("localStorage.length + sessionStorage.length") == 0
+    assert not errors
+    context.close()
+
+
+@pytest.mark.parametrize("scenario", ["zero", "missing-overview", "expiry", "logout"])
+def test_real_browser_source_notice_clears_without_data_or_session(workspace_url, chromium, scenario):
+    context = chromium.new_context(locale="en-US", reduced_motion="reduce")
+    page = context.new_page()
+    fixture = {"expired": False}
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        status, body = api_fixture(operation, assist_enabled=False)
+        if fixture["expired"]:
+            status, body = 401, {"error": "authentication_required", "message": "Synthetic session expired."}
+        elif operation.startswith("overview"):
+            if scenario == "missing-overview":
+                status, body = 503, {"error": "unavailable", "message": "Synthetic overview unavailable."}
+            else:
+                count = 0 if scenario == "zero" else 1
+                body = source_notice_overview(excluded_count=count, project_excluded_count=count)
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    def logout(route):
+        fixture["expired"] = True
+        route.fulfill(status=200, content_type="application/json", body="{}")
+
+    page.route("**/api/tasks/api/**", respond)
+    page.route("**/api/tasks/auth/logout", logout)
+    page.goto(workspace_url + "#tasks")
+    page.locator("#assist-usage[data-i18n='unavailable']").wait_for(state="attached")
+    scope = page.locator("#source-scope")
+    if scenario in {"expiry", "logout"}:
+        scope.locator("summary").click()
+        assert scope.get_attribute("open") is not None
+        if scenario == "expiry":
+            fixture["expired"] = True
+            page.locator("#refresh").click()
+        else:
+            page.locator("#sign-out").click()
+        page.locator("#sign-in").wait_for()
+    assert scope.get_attribute("hidden") is not None
+    assert scope.get_attribute("open") is None
+    assert page.locator("#task-source-count").text_content() == ""
+    assert page.locator("#project-source-count").text_content() == ""
+    assert page.locator("#source-issues").text_content() == ""
+    assert page.locator("#source-issues").is_hidden()
+    if scenario == "missing-overview":
+        assert page.locator("#notice.error").is_visible()
+        assert "Synthetic overview unavailable" in page.locator("#notice").inner_text()
+    if scenario == "zero":
+        assert page.locator("#warnings").evaluate("(node) => node.getBoundingClientRect().height") == 0
+    assert page.evaluate("localStorage.length + sessionStorage.length") == 0
+    assert not errors
+    context.close()
+
+
 @pytest.mark.parametrize("recover_voice", [False, True])
 def test_real_browser_owner_boundary_voice_and_text_only_proposal(workspace_url, chromium, recover_voice):
     context = chromium.new_context(viewport={"width": 1440, "height": 1000})
