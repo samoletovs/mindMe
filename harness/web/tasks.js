@@ -22,6 +22,13 @@ const CLOSURE_CONFLICTS = {
   task_closure_checkpoint_unavailable: "closureCheckpoint", receipt_unavailable: "closureReceipt",
   task_closure_conflict: "closureConflict",
 };
+const SOURCE_ISSUES = {
+  task_metadata_missing: "sourceMetadataMissing", task_metadata_invalid: "sourceMetadataInvalid",
+  task_definition_invalid: "sourceDefinitionInvalid", task_date_invalid: "sourceDateInvalid",
+  task_title_missing: "sourceTitleMissing", task_review_date_ambiguous: "sourceReviewAmbiguous",
+  task_source_too_large: "sourceTooLarge", task_source_policy_unresolved: "sourcePolicyUnresolved",
+  task_source_unavailable: "sourceUnavailable",
+};
 const $ = (id) => document.getElementById(id);
 const state = {
   csrf: "", view: "today", layout: "board", items: [], overview: null, selected: null,
@@ -513,40 +520,40 @@ function render(preserveForms = false) {
   }
 }
 function sourceIssueMessage(code) {
-  return {
-    task_metadata_missing: "A task has no supported metadata block. Its dates could not be assessed.",
-    task_metadata_invalid: "A source has invalid or conflicting metadata. Correct the source before relying on its dates.",
-    task_definition_invalid: "A task has an invalid definition field. Its attention status is unknown.",
-    task_date_invalid: "A task has an invalid date. Correct the saved date before relying on this view.",
-    task_title_missing: "A task has no supported title. Its definition could not be assessed.",
-    task_review_date_ambiguous: "A task has conflicting review dates. Reconcile them in the source.",
-    task_source_too_large: "A source exceeded the bounded reader's size limit and was not assessed.",
-    task_source_policy_unresolved: "A source's scope or privacy metadata is ambiguous. It remains unavailable until clarified.",
-    task_source_unavailable: "A source could not be read or verified. Refresh to retry its current version.",
-  }[code] || "A source could not be assessed. Its absence is not evidence that no work is due.";
+  return t(Object.hasOwn(SOURCE_ISSUES, code) ? SOURCE_ISSUES[code] : "sourceIssueUnknown");
 }
 function renderSourceWarnings() {
   const data = state.overview;
-  $("warnings").replaceChildren();
-  if (!data) return;
-  if (data.excluded_count > 0) {
-    $("warnings").append(element("p", `${data.excluded_count} task source candidate(s) in this assessed window are outside the permitted scope/privacy policy. They remain excluded, not failed reads.`));
+  const issues = $("source-issues");
+  const scope = $("source-scope");
+  issues.replaceChildren();
+  issues.hidden = true;
+  for (const [id, count, key] of [
+    ["task-source-count", data?.excluded_count, "sourceTaskExclusions"],
+    ["project-source-count", data?.project_excluded_count, "sourceProjectExclusions"],
+  ]) {
+    $(id).hidden = !(count > 0);
+    $(id).textContent = count > 0 ? t(key, { count }) : "";
   }
-  if (data.project_excluded_count > 0) {
-    $("warnings").append(element("p", `${data.project_excluded_count} checked project source candidate(s) are outside the permitted scope/privacy policy. Their content is not shown.`));
+  scope.hidden = $("task-source-count").hidden && $("project-source-count").hidden;
+  if (!data) {
+    scope.open = false;
+    return;
   }
   if (data.attention_complete === false) {
     const assessed = data.attention?.assessed_count;
-    $("warnings").append(element("p", `${Number.isInteger(assessed) ? `${assessed} permitted task definitions assessed in this bounded window. ` : ""}Attention coverage is incomplete; unchecked or unresolved sources remain.`));
+    issues.append(element("p", Number.isInteger(assessed)
+      ? t("sourceAttentionAssessedPartial", { count: assessed }) : t("sourceAttentionPartial")));
   }
   if (data.errors?.length) {
-    $("warnings").append(element("p", `${data.errors.length} task source issue(s) need attention. Unavailable sources are not treated as empty or complete.`));
-    for (const error of data.errors) $("warnings").append(element("p", sourceIssueMessage(error.code)));
+    issues.append(element("p", t("sourceTaskIssues", { count: data.errors.length })));
+    for (const error of data.errors) issues.append(element("p", sourceIssueMessage(error.code)));
   }
   if (data.project_errors?.length) {
-    $("warnings").append(element("p", `${data.project_errors.length} project source issue(s) remain. The permitted inventory is incomplete; refresh to retry.`));
-    for (const error of data.project_errors) $("warnings").append(element("p", sourceIssueMessage(error.code)));
+    issues.append(element("p", t("sourceProjectIssues", { count: data.project_errors.length })));
+    for (const error of data.project_errors) issues.append(element("p", sourceIssueMessage(error.code)));
   }
+  issues.hidden = !issues.children.length;
 }
 function renderCanonicalLinks() {
   const target = $("canonical-links");
@@ -1306,8 +1313,9 @@ function clearData() {
   $("capture-context").textContent = "";
   $("capture-context").hidden = true;
   renderCanonicalLinks();
+  renderSourceWarnings();
   for (const id of ["task-list", "inspector", "activity-list", "proposal-preview", "project-options",
-    "standing-options", "area-list", "capture-details", "warnings", "budget-details", "snapshot", "attention"]) $(id).replaceChildren();
+    "standing-options", "area-list", "capture-details", "budget-details", "snapshot", "attention"]) $(id).replaceChildren();
   delete $("inspector").dataset.path;
   delete $("inspector").dataset.revision;
   $("capture-form").reset();
@@ -1575,6 +1583,24 @@ const COPY = {
     refreshFailed: "Task refresh was not confirmed. Inspect the source status before continuing.",
     sourcesUnavailable: "Your sources are not available yet.", sourcesUnavailableDetail: "Refresh to load them. Unavailable is not an empty backlog.",
     attentionIncomplete: "The attention check is incomplete.", attentionIncompleteDetail: "More task sources or source errors remain. Load more or resolve the reported issue before concluding that nothing is due.",
+    sourceScope: "Some sources are outside this view",
+    sourceScopeExplanation: "This is due to scope or privacy rules, not loading failures. Names and contents stay hidden.",
+    sourceTaskExclusions: "Excluded task sources in this assessed window: {count}.",
+    sourceProjectExclusions: "Excluded project sources checked so far: {count}.",
+    sourceAttentionPartial: "Attention coverage is incomplete; unchecked or unresolved sources remain.",
+    sourceAttentionAssessedPartial: "Permitted task definitions assessed in this bounded window: {count}. Attention coverage is incomplete; unchecked or unresolved sources remain.",
+    sourceTaskIssues: "Task source issues needing attention: {count}. Unavailable sources are not treated as empty or complete.",
+    sourceProjectIssues: "Project source issues: {count}. The permitted inventory is incomplete; refresh to retry.",
+    sourceMetadataMissing: "A task has no supported metadata block. Its dates could not be assessed.",
+    sourceMetadataInvalid: "A source has invalid or conflicting metadata. Correct the source before relying on its dates.",
+    sourceDefinitionInvalid: "A task has an invalid definition field. Its attention status is unknown.",
+    sourceDateInvalid: "A task has an invalid date. Correct the saved date before relying on this view.",
+    sourceTitleMissing: "A task has no supported title. Its definition could not be assessed.",
+    sourceReviewAmbiguous: "A task has conflicting review dates. Reconcile them in the source.",
+    sourceTooLarge: "A source exceeded the bounded reader's size limit and was not assessed.",
+    sourcePolicyUnresolved: "A source's scope or privacy metadata is ambiguous. It remains unavailable until clarified.",
+    sourceUnavailable: "A source could not be read or verified. Refresh to retry its current version.",
+    sourceIssueUnknown: "A source could not be assessed. Its absence is not evidence that no work is due.",
     noMatchingAttention: "No matching due or selected tasks on this page.", noMatchingTasks: "No matching tasks on this page.",
     noMatchingDetail: "Check the filters, load more tasks, or capture a new request. Nothing has been completed or discarded.",
     loadedTasks: "Loaded tasks", loadedOnly: "Filters and counts cover loaded, permitted tasks only.", availabilityUnconfirmed: "Source availability has not been confirmed.",
@@ -1805,6 +1831,24 @@ const COPY = {
     refreshFailed: "Обновление задачи не подтверждено. Проверьте состояние источника, прежде чем продолжать.",
     sourcesUnavailable: "Ваши источники пока недоступны.", sourcesUnavailableDetail: "Обновите их. Недоступность не означает пустой список задач.",
     attentionIncomplete: "Проверка внимания неполная.", attentionIncompleteDetail: "Остались другие источники задач или ошибки чтения. Загрузите ещё или устраните проблему, прежде чем считать, что ничего не требует внимания.",
+    sourceScope: "Некоторые источники не входят в этот обзор",
+    sourceScopeExplanation: "Это связано с правилами отбора или конфиденциальности, а не с ошибками загрузки. Названия и содержимое скрыты.",
+    sourceTaskExclusions: "Исключённые источники задач в проверенной части списка: {count}.",
+    sourceProjectExclusions: "Исключённые источники проектов среди уже проверенных: {count}.",
+    sourceAttentionPartial: "Проверка внимания неполная; остались непроверенные источники или неразрешённые проблемы.",
+    sourceAttentionAssessedPartial: "Оценено разрешённых описаний задач в этой ограниченной части списка: {count}. Проверка внимания неполная; остались непроверенные источники или неразрешённые проблемы.",
+    sourceTaskIssues: "Проблемы с источниками задач, требующие внимания: {count}. Недоступные источники не считаются пустыми или полностью проверенными.",
+    sourceProjectIssues: "Проблемы с источниками проектов: {count}. Список разрешённых проектов неполный; обновите его, чтобы повторить попытку.",
+    sourceMetadataMissing: "У задачи нет поддерживаемого блока метаданных. Не удалось оценить её даты.",
+    sourceMetadataInvalid: "Метаданные источника некорректны или противоречивы. Исправьте источник, прежде чем полагаться на его даты.",
+    sourceDefinitionInvalid: "Одно из полей описания задачи некорректно. Неизвестно, требует ли она внимания.",
+    sourceDateInvalid: "У задачи некорректная дата. Исправьте сохранённую дату, прежде чем полагаться на этот обзор.",
+    sourceTitleMissing: "У задачи нет поддерживаемого заголовка. Не удалось оценить её описание.",
+    sourceReviewAmbiguous: "У задачи противоречивые даты пересмотра. Согласуйте их в источнике.",
+    sourceTooLarge: "Источник превышает допустимый размер для чтения и не был оценён.",
+    sourcePolicyUnresolved: "Правила отбора или конфиденциальности в метаданных источника неоднозначны. Он остаётся недоступным до их уточнения.",
+    sourceUnavailable: "Не удалось прочитать или проверить источник. Обновите обзор, чтобы повторить попытку с его текущей версией.",
+    sourceIssueUnknown: "Не удалось оценить источник. Его отсутствие не означает, что нет дел, требующих внимания.",
     noMatchingAttention: "На этой странице нет подходящих задач со сроком или выбранным фокусом.", noMatchingTasks: "На этой странице нет подходящих задач.",
     noMatchingDetail: "Проверьте фильтры, загрузите ещё задачи или запишите новый запрос. Ничего не завершено и не отброшено.",
     loadedTasks: "Загружено задач", loadedOnly: "Фильтры и счётчики относятся только к загруженным разрешённым задачам.", availabilityUnconfirmed: "Доступность источников не подтверждена.",
@@ -2104,6 +2148,7 @@ function translateWorkspace() {
   for (const option of $("stage-filter").options) option.textContent = option.value ? t(option.value) : t("allStages");
   if ($("area-filter").options[0]) $("area-filter").options[0].textContent = t("allAreas");
   for (const id of ["quick-mic", "header-mic"]) $(id).setAttribute("aria-label", t(assist.recorder ? "stop" : "record"));
+  renderSourceWarnings();
 }
 function renderAssistUsage() {
   const usage = assist.usage;

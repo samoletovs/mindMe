@@ -103,7 +103,15 @@
           <p data-i18n="requestUnconfirmedHint">It may already have reached the server. Keep this page open, inspect Activity, or recover this exact request. Do not create a replacement.</p>
           <button id="recover-request" type="button" data-i18n="recoverSameRequest">Recover the same request</button>
         </section>
-        <div id="warnings" class="warnings"></div>
+        <div id="warnings" class="warnings">
+          <div id="source-issues" class="source-issues" hidden></div>
+          <details id="source-scope" class="source-scope" hidden>
+            <summary data-i18n="sourceScope">Some sources are outside this view</summary>
+            <p data-i18n="sourceScopeExplanation">This is due to scope or privacy rules, not loading failures. Names and contents stay hidden.</p>
+            <p id="task-source-count" hidden></p>
+            <p id="project-source-count" hidden></p>
+          </details>
+        </div>
 
         <section id="capture-section" class="capture-section" aria-labelledby="capture-title" hidden>
           <div class="section-heading"><h2 id="capture-title" data-i18n="captureTitle">Get it out of your head</h2><button id="capture-cancel" class="quiet" type="button" data-i18n="closeCapture">Close capture</button></div>

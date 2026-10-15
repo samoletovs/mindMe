@@ -54,6 +54,17 @@ unresolved errors across task-page appends; a fresh overview retries the source
 snapshot. Known exclusions are described as out of scope, not an unavailable
 project inventory, and unread pages still have a continuation control.
 
+The portal presents known exclusions in one muted, initially collapsed
+"Some sources are outside this view" disclosure. Its separate counts describe
+task sources in the assessed window and project sources checked so far, never
+a combined full-vault total. Names and contents stay hidden. Read errors,
+ambiguous policy and incomplete coverage remain visible outside the disclosure;
+unknown error codes use a content-free warning. EN/RU changes update this copy
+locally without fetching sources. The disclosure retains its open/focus state
+through same-session refreshes and paging, has no browser persistence, and clears
+when the overview is absent or the owner signs out/session expires. It remains
+part of task-source reporting, not Knowledge-source diagnostics.
+
 `MINDME_TASKS_TIMEZONE` is a required, validated IANA setting, not an inferred
 browser or device zone. Missing/invalid configuration returns 503, without an
 implicit UTC calendar. The overview's `attention.calendar_date`, `timezone` and

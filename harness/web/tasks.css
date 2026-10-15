@@ -173,9 +173,12 @@ body:has(#access:not([hidden])) .app-footer { border-top: 1px solid var(--line);
 .notice.error, .uncertain { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); }
 .notice.pending { background: var(--warning-bg); border-color: var(--warning); color: var(--warning); }
 .uncertain p { font-size: .88rem; }
-.warnings { color: var(--warning); font-size: .82rem; margin-bottom: 1rem; }
-.warnings:empty { display: none; }
+.warnings { font-size: .82rem; }
 .warnings p { margin: .3rem 0; }
+.source-issues { color: var(--warning); margin-bottom: 1rem; }
+.source-scope { color: var(--muted); margin-bottom: 1rem; }
+.source-scope summary { font-weight: 400; overflow-wrap: anywhere; touch-action: manipulation; }
+.source-scope summary:hover { color: var(--ink); }
 .section-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
 .section-heading h2 { margin: 0; }
 .capture-section, #proposal-section { position: relative; z-index: 21; scroll-margin-top: 1rem; margin: 0 0 2rem; padding: 1.6rem; background: var(--paper); border: 1px solid var(--control-line); border-radius: var(--radius); }
