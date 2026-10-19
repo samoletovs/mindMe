@@ -127,6 +127,7 @@ def navigation_redirect(req: func.HttpRequest, env: Mapping[str, str]) -> func.H
         origin = f"{parsed.scheme}://{parsed.netloc}"
         if (
             parsed.scheme != "https" or not req.url.startswith(origin)
+            or not parsed.netloc.isascii()
             or any(ord(char) <= 32 or char == "\\" for char in req.url)
         ):
             raise AuthError("secure_origin_required", 400)
@@ -139,7 +140,7 @@ def navigation_redirect(req: func.HttpRequest, env: Mapping[str, str]) -> func.H
             "/api/tasks/auth/login": "/api/tasks/auth/login",
             "/api/tasks/auth/login/": "/api/tasks/auth/login",
         }.get(parsed.path or "/")
-        if origin not in config.redirect_origins or target is None:
+        if origin.lower() not in (config.origin, *config.redirect_origins) or target is None:
             raise AuthError("secure_origin_required", 400)
         # No query is copied; omitting a fragment lets browsers retain bookmark navigation.
         return func.HttpResponse("", status_code=302, headers={

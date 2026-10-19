@@ -99,11 +99,14 @@ def redirect_env(monkeypatch, auth_env):
     return forbidden
 
 
+@pytest.mark.parametrize("origin", [
+    "https://vault.synthetic.example", "https://VAULT.synthetic.example", "https://mindMe.synthetic.example",
+])
 @pytest.mark.parametrize("path", ["", "/"])
-def test_legacy_site_root_uses_canonical_shell_without_query_or_cookie(redirect_env, path):
+def test_legacy_and_case_variant_site_root_use_canonical_shell_without_query_or_cookie(redirect_env, origin, path):
     response = fa.task_site_root(func.HttpRequest(
         method="GET",
-        url="https://vault.synthetic.example" + path + "?next=https://attacker.example/&code=synthetic-code&access_token=synthetic-token",
+        url=origin + path + "?next=https://attacker.example/&code=synthetic-code&access_token=synthetic-token",
         headers={"Cookie": "synthetic-cookie", "X-Forwarded-Host": "attacker.example"}, body=b"",
     ))
     assert response.status_code == 302
@@ -149,11 +152,14 @@ def test_root_rejects_malformed_redirect_configuration_explicitly(redirect_env, 
     redirect_env.assert_not_called()
 
 
+@pytest.mark.parametrize("origin", [
+    "https://vault.synthetic.example", "https://VAULT.synthetic.example", "https://mindMe.synthetic.example",
+])
 @pytest.mark.parametrize("path", ["", "auth/login"])
 @pytest.mark.asyncio
-async def test_real_task_route_adapters_redirect_legacy_shell_and_login_without_services(redirect_env, path):
+async def test_real_case_variant_task_route_adapters_redirect_shell_and_login_without_services(redirect_env, origin, path):
     req = func.HttpRequest(
-        method="GET", url="https://vault.synthetic.example/api/tasks" + ("/" + path if path else ""),
+        method="GET", url=origin + "/api/tasks" + ("/" + path if path else ""),
         route_params={"path": path}, body=b"",
     )
     response = await (fa.task_web_route(req) if path else fa.task_web_root(req))

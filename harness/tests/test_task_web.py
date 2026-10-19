@@ -61,17 +61,22 @@ def redirect_web(identity, auth_env):
     return web, auth, auth_factory, service_factory
 
 
+@pytest.mark.parametrize("origin", [
+    "https://vault.synthetic.example", "https://VAULT.synthetic.example", "https://mindMe.synthetic.example",
+])
 @pytest.mark.parametrize(("path", "suffix", "target"), [
     ("", "", "/api/tasks"),
     ("", "/", "/api/tasks"),
     ("auth/login", "/auth/login", "/api/tasks/auth/login"),
     ("auth/login/", "/auth/login/", "/api/tasks/auth/login"),
 ])
-def test_legacy_navigation_uses_only_fixed_canonical_destinations(redirect_web, identity, path, suffix, target, caplog):
+def test_legacy_and_case_variant_navigation_use_fixed_canonical_destinations(
+    redirect_web, identity, origin, path, suffix, target, caplog,
+):
     web, auth, auth_factory, service_factory = redirect_web
     query = "?next=https://attacker.example/&redirect_uri=//attacker.example&code=synthetic-code&state=synthetic-state&access_token=synthetic-token"
     result = web.handle(request(
-        path, url="https://vault.synthetic.example/api/tasks" + suffix + query,
+        path, url=origin + "/api/tasks" + suffix + query,
         cookie="synthetic-cookie", extra={"X-Forwarded-Host": "attacker.example"},
     ), path)
     assert result.status_code == 302
@@ -94,7 +99,12 @@ def test_legacy_navigation_uses_only_fixed_canonical_destinations(redirect_web, 
     "https://evil.example@vault.synthetic.example/api/tasks",
     "https://vault.synthetic.example:443/api/tasks",
     "https://vault.synthetic.example./api/tasks",
-    "https://VAULT.synthetic.example/api/tasks",
+    "https://mindMe.synthetic.example:443/api/tasks",
+    "https://user@mindMe.synthetic.example/api/tasks",
+    "https://mindMe.synthetic.example./api/tasks",
+    "https://mindMe.synthetic.example.evil.example/api/tasks",
+    "https://%6dindme.synthetic.example/api/tasks",
+    "https://m\u0131ndme.synthetic.example/api/tasks",
     "https://vault.synthetic.example\\@evil.example/api/tasks",
     "https://vault.synthetic.example\t/api/tasks",
     " https://vault.synthetic.example/api/tasks",
@@ -115,6 +125,20 @@ def test_navigation_requires_the_exact_actual_https_url_not_spoofed_headers(redi
     service_factory.assert_not_called()
 
 
+@pytest.mark.parametrize("setting", ["MINDME_WEB_ORIGIN", "MINDME_WEB_REDIRECT_ORIGINS"])
+def test_unicode_case_mapping_cannot_become_a_configured_navigation_hostname(redirect_web, setting):
+    web, _, auth_factory, service_factory = redirect_web
+    web.env[setting] = "https://knowledge.synthetic.example"
+    result = web.handle(request("", url="https://\u212anowledge.synthetic.example/api/tasks"))
+    assert result.status_code == 400 and data(result)["error"] == "secure_origin_required"
+    assert "Location" not in result.headers and "Set-Cookie" not in result.headers
+    auth_factory.assert_not_called()
+    service_factory.assert_not_called()
+
+
+@pytest.mark.parametrize("origin", [
+    "https://vault.synthetic.example", "https://VAULT.synthetic.example", "https://mindMe.synthetic.example",
+])
 @pytest.mark.parametrize(("method", "path", "status"), [
     ("POST", "", 405), ("POST", "auth/login", 400),
     ("GET", "auth/callback", 400), ("POST", "auth/callback", 400),
@@ -124,15 +148,15 @@ def test_navigation_requires_the_exact_actual_https_url_not_spoofed_headers(redi
     ("POST", "api/task", 400), ("POST", "api/decide", 400),
     ("POST", "api/assist/chat", 400), ("GET", "auth/login/extra", 400),
 ])
-def test_legacy_non_navigation_keeps_method_and_secure_origin_rejection(
-    redirect_web, identity, monkeypatch, method, path, status,
+def test_legacy_and_case_variant_non_navigation_keep_method_and_secure_origin_rejection(
+    redirect_web, identity, monkeypatch, origin, method, path, status,
 ):
     web, auth, _, service_factory = redirect_web
-    forbidden = Mock(side_effect=AssertionError("Legacy requests must not authenticate or execute"))
+    forbidden = Mock(side_effect=AssertionError("Non-canonical requests must not authenticate or execute"))
     for name in ("login", "callback", "authenticate", "logout"):
         monkeypatch.setattr(auth, name, forbidden)
     result = web.handle(request(
-        path, method=method, url="https://vault.synthetic.example/api/tasks/" + path,
+        path, method=method, url=origin + "/api/tasks/" + path,
         cookie="synthetic-cookie", csrf="synthetic-csrf", origin=auth.config.origin,
     ), path)
     assert result.status_code == status
@@ -210,7 +234,10 @@ def test_new_canonical_host_keeps_real_owner_flow_host_only_cookies_and_exact_cs
         session = web.handle(request("api/session", url=origin + "/api/tasks/api/session", cookie=cookie), "api/session")
         assert session.status_code == 200 and set(data(session)) == {"authenticated", "csrf", "expires"}
         csrf = data(session)["csrf"]
-        for request_origin, token in (("https://vault.synthetic.example", csrf), (origin, "forged")):
+        for request_origin, token in (
+            ("https://vault.synthetic.example", csrf), ("https://VAULT.synthetic.example", csrf),
+            ("https://mindMe.synthetic.example", csrf), (origin, "forged"),
+        ):
             result = web.handle(request(
                 "auth/logout", {}, url=origin + "/api/tasks/auth/logout",
                 cookie=cookie, csrf=token, origin=request_origin,
