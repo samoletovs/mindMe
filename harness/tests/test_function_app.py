@@ -324,7 +324,7 @@ def test_transcribe_voice_resolves_retired_whisper_without_logging_content(monke
     monkeypatch.setenv("AZURE_OPENAI_WHISPER_DEPLOYMENT", "whisper")
     client = Mock()
     client.audio.transcriptions.create.return_value = SimpleNamespace(text=" synthetic words ")
-    monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
+    monkeypatch.setattr(fa, "_transcription_client", lambda _: client)
     assert fa._transcribe_voice(b"synthetic", "audio/ogg") == "synthetic words"
     client.audio.transcriptions.create.assert_called_once_with(
         model="gpt-4o-mini-transcribe", file=("voice.ogg", b"synthetic", "audio/ogg"),
@@ -340,7 +340,7 @@ def test_transcribe_voice_prefers_explicit_supported_setting(monkeypatch):
     monkeypatch.setenv("AZURE_OPENAI_WHISPER_DEPLOYMENT", "whisper")
     client = Mock()
     client.audio.transcriptions.create.return_value = SimpleNamespace(text="synthetic")
-    monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
+    monkeypatch.setattr(fa, "_transcription_client", lambda _: client)
     assert fa._transcribe_voice(b"synthetic") == "synthetic"
     assert client.audio.transcriptions.create.call_args.kwargs["model"] == "supported-transcription"
 

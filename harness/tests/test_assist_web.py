@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import wave
 
 import azure.functions as func
+import httpx
 import pytest
 
 from task_service import TaskError
@@ -120,6 +121,7 @@ def test_duplicate_keys_remain_rejected_before_assist(logged_in):
     (TaskAssistError("assist_request_id_invalid"), "assist_request_invalid", 422),
     (TaskAssistError("assist_request_uncertain"), "assist_request_uncertain", 503),
     (TaskAssistError("assist_model_output_invalid"), "model_unavailable", 503),
+    (TaskAssistError("assist_transcription_unavailable"), "model_unavailable", 503),
     (AssistStoreError("assist_state_capacity"), "rate_limited", 429),
     (AssistStoreError("assist_state_read_unavailable"), "model_unavailable", 503),
 ])
@@ -131,6 +133,48 @@ def test_real_core_and_state_errors_use_safe_http_contract(logged_in, error, cod
         request("api/assist/chat", {}, cookie=cookie, csrf=csrf), "api/assist/chat",
     )
     assert response.status_code == status and data(response)["error"] == code
+
+
+@pytest.mark.parametrize("failure,code,status", [
+    ("provider", "model_unavailable", 503),
+    ("empty", "assist_audio_invalid", 422),
+])
+def test_transcription_provider_failure_is_not_an_invalid_request_id(logged_in, monkeypatch, caplog, failure, code, status):
+    auth, cookie, csrf = logged_in
+    subject, _, execute, _, publish, _ = service()
+    container = Mock()
+    container.get_blob_client.return_value = FakeBlob()
+    monkeypatch.setattr(fa, "_os_container_client", lambda: container)
+    monkeypatch.setenv("MINDME_ASSIST_ENABLED", "true")
+    client = Mock()
+    client.base_url = httpx.URL("https://synthetic.services.ai.azure.com/api/projects/synthetic/openai/v1/")
+    client.with_options.return_value = client
+    if failure == "provider":
+        client.audio.transcriptions.create.side_effect = RuntimeError("synthetic-private-provider-detail")
+    else:
+        client.audio.transcriptions.create.return_value = SimpleNamespace(text=" ")
+    monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
+    monkeypatch.setattr(fa, "_http_client", lambda: Mock())
+    assistant = fa._task_assist(subject)
+    req = func.HttpRequest(
+        method="POST", url=auth.config.origin + "/api/tasks/api/assist/voice",
+        headers={"Cookie": cookie, "Origin": auth.config.origin, "X-MindMe-CSRF": csrf,
+                 "Content-Type": "audio/webm", "X-Request-Id": "9aeb8104-e499-45dc-bf30-287b704ef92f"},
+        body=webm(),
+    )
+    response = web(auth, assistant).handle(req, "api/assist/voice")
+    assert response.status_code == status
+    assert data(response)["error"] == code
+    assert "request ID" not in data(response)["message"]
+    replay = web(auth, assistant).handle(req, "api/assist/voice")
+    assert replay.status_code == 503 and data(replay)["error"] == "assist_request_uncertain"
+    client.audio.transcriptions.create.assert_called_once()
+    client.chat.completions.create.assert_not_called()
+    execute.assert_not_called()
+    publish.assert_not_called()
+    assert not assistant.store.read()["threads"]
+    assert "synthetic-private-provider-detail" not in caplog.text
+    assert "synthetic-private-provider-detail" not in str(assistant.store.read())
 
 
 @pytest.mark.parametrize("recorder_mime,raw_audio", [
@@ -150,6 +194,7 @@ def test_real_voice_route_only_transcribes_no_chat_or_task_mutation(
     monkeypatch.setattr(fa, "_os_container_client", lambda: container)
     monkeypatch.setenv("MINDME_ASSIST_ENABLED", "true")
     client = Mock()
+    client.base_url = httpx.URL("https://synthetic.services.ai.azure.com/api/projects/synthetic/openai/v1/")
     client.with_options.return_value = client
     client.audio.transcriptions.create.return_value = SimpleNamespace(
         text="Create a task to write a synthetic outline", language="en",

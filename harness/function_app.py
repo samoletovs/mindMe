@@ -71,7 +71,7 @@ from azure.core.exceptions import AzureError, ResourceExistsError, ResourceNotFo
 from azure.core.settings import settings as azure_settings
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient
-from openai import BadRequestError, OpenAIError, UnprocessableEntityError
+from openai import BadRequestError, OpenAI, OpenAIError, UnprocessableEntityError
 
 import vault_layout
 from briefing_actions import ActionError, ActionGateway
@@ -146,13 +146,23 @@ _blob: BlobServiceClient | None = None
 _http: httpx.Client | None = None
 
 
-def _foundry() -> tuple[AIProjectClient, object]:
+def _foundry() -> tuple[AIProjectClient, OpenAI]:
     global _project, _openai
     if _project is None:
         endpoint = os.environ["AZURE_AI_PROJECT_ENDPOINT"]
         _project = AIProjectClient(endpoint=endpoint, credential=_credential)
         _openai = _project.get_openai_client()
     return _project, _openai
+
+
+def _transcription_client(deployment: str) -> OpenAI:
+    _, client = _foundry()
+    # Audio uses the account's deployment API, not the project's OpenAI endpoint.
+    return client.with_options(
+        base_url=client.base_url.copy_with(path=f"/openai/deployments/{quote(deployment, safe='')}/"),
+        default_query={"api-version": "2024-02-01"},
+        timeout=bounded_timeout(60, stages=2), max_retries=0, http_client=_http_client(),
+    )
 
 
 def _blob_client() -> BlobServiceClient:
@@ -770,10 +780,7 @@ def _transcribe_task_audio(audio: bytes, mime: str) -> dict:
     deployment = os.environ.get("MINDME_ASSIST_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe").strip()
     if not deployment:
         raise TaskError("model_unavailable")
-    _, client = _foundry()
-    result = client.with_options(
-        timeout=bounded_timeout(60, stages=2), max_retries=0, http_client=_http_client(),
-    ).audio.transcriptions.create(
+    result = _transcription_client(deployment).audio.transcriptions.create(
         model=deployment, file=("voice." + _VOICE_EXT_MAP[media_type.split("/")[1]], audio, media_type),
         response_format="json",
         prompt="English and Russian speech, including mixed English/Russian task instructions. Preserve the speaker's words.",
@@ -1279,7 +1286,7 @@ def _transcribe_voice(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str |
         span.set_attribute("audio.size_bytes", len(audio_bytes))
         span.set_attribute("audio.mime_type", mime_type)
         try:
-            _, openai_client = _foundry()
+            openai_client = _transcription_client(deployment)
             result = openai_client.audio.transcriptions.create(
                 model=deployment,
                 file=(f"voice.{ext}", audio_bytes, mime_type),

@@ -353,8 +353,12 @@ def test_real_browser_layouts_and_task_chat(workspace_url, chromium, width, heig
       const priorities = new Set([...document.querySelectorAll('.priority-card')].map(n => n.dataset.path));
       return [...document.querySelectorAll('#today-work .task-row')].every(n => !priorities.has(n.dataset.path));
     }"""), "Additional attention must not repeat the priority cards"
-    for selector in ["#snapshot", ".priority-reason", ".status", ".focus-line .hint"]:
-        assert page.locator(selector).first.evaluate("(node) => parseFloat(getComputedStyle(node).fontSize)") >= 12
+    font_sizes = page.evaluate("""selectors => selectors.map(selector => {
+      const node = document.querySelector(selector);
+      return {selector, connected: Boolean(node?.isConnected),
+        size: node ? parseFloat(getComputedStyle(node).fontSize) : null};
+    })""", ["#snapshot", ".priority-reason", ".status", ".focus-line .hint"])
+    assert all(item["connected"] and item["size"] is not None and item["size"] >= 12 for item in font_sizes), font_sizes
     assert visible_panels(page) == ["today"]
     hero = page.locator("#hero-line").inner_text()
     assert "today" in hero, hero
@@ -451,6 +455,265 @@ def source_notice_overview(**changes):
     body["attention"]["assessed_count"] = 14
     body.update(changes)
     return body
+
+
+def test_real_browser_ai_controls_do_not_wait_for_task_overview(workspace_url, chromium):
+    context = chromium.new_context(viewport={"width": 1440, "height": 1000})
+    page = context.new_page()
+    pending, calls = [], []
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        calls.append(operation)
+        if operation.startswith("overview"):
+            pending.append(route)
+            return
+        status, body = api_fixture(operation)
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    try:
+        page.route("**/api/tasks/api/**", respond)
+        page.goto(workspace_url + "#tasks", wait_until="domcontentloaded")
+        page.locator("#header-mic").wait_for(state="visible", timeout=3000)
+        assert page.locator("#command-open").is_visible()
+        assert pending and "assist/usage" in calls
+        assert page.locator("#capture-section").is_hidden()
+        status, body = api_fixture("overview")
+        for route in pending:
+            route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+        page.locator("#task-list .task-row").first.wait_for()
+    finally:
+        context.close()
+
+
+def test_real_browser_workspace_view_does_not_wait_for_ai_usage(workspace_url, chromium):
+    context = chromium.new_context(viewport={"width": 1440, "height": 1000})
+    page = context.new_page()
+    pending, calls = [], []
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        calls.append(operation)
+        if operation == "assist/usage":
+            pending.append(route)
+            return
+        status, body = api_fixture(operation)
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    try:
+        page.route("**/api/tasks/api/**", respond)
+        page.goto(workspace_url + "#knowledge", wait_until="domcontentloaded")
+        page.locator("#knowledge-section").wait_for(state="visible", timeout=3000)
+        page.wait_for_function("document.querySelector('[data-view=\"knowledge\"]').getAttribute('aria-current') === 'page'")
+        assert pending
+        assert page.locator("#capture-open").is_visible()
+        assert page.locator("#header-mic").is_hidden()
+        assert any(operation.startswith("dashboard/inbox") for operation in calls)
+        status, body = api_fixture("assist/usage")
+        pending[0].fulfill(status=status, content_type="application/json", body=json.dumps(body))
+        page.locator("#header-mic").wait_for()
+        assert page.locator("#knowledge-section").is_visible()
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("width,locale", [(1440, "en-US"), (390, "ru-RU")])
+def test_real_browser_capture_voice_only_fills_reviewable_draft(workspace_url, chromium, width, locale):
+    context = chromium.new_context(viewport={"width": width, "height": 1000}, locale=locale)
+    page = context.new_page()
+    calls = []
+    transcript = "Write a synthetic outline." if locale == "en-US" else "Написать учебный план."
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        calls.append((operation, route.request))
+        status, body = api_fixture(operation)
+        if operation == "assist/voice":
+            body = {"text": transcript, "language": "en" if locale == "en-US" else "ru", "duration_s": 1}
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    try:
+        page.route("**/api/tasks/api/**", respond)
+        page.goto(workspace_url + "#tasks")
+        page.locator("#assist-usage meter").wait_for(state="attached")
+        page.locator("#capture-open" if width == 1440 else "#quick-capture").click()
+        page.locator("#capture-text").fill("Existing draft")
+        page.locator("#capture-title-input").fill("Existing title")
+        record_capture_voice(page)
+        page.wait_for_function(
+            "text => document.getElementById('capture-text').value === 'Existing draft\\n' + text", arg=transcript,
+        )
+        assert page.locator("#capture-title-input").input_value() == "Existing title"
+        assert page.locator("#capture-section").is_visible()
+        assert not page.locator("#copilot-dialog").is_visible()
+        assert page.locator("#capture-form button[type=submit]").is_enabled()
+        action = "Add task" if locale == "en-US" else "Добавить задачу"
+        assert page.locator("#capture-submit").inner_text() == action
+        assert action in page.locator("#notice").inner_text()
+        assert [operation for operation, _ in calls if operation in {"assist/voice", "assist/chat", "capture", "capture-save", "decide"}] == ["assist/voice"]
+        voice = next(request for operation, request in calls if operation == "assist/voice")
+        from task_assist import _uuid
+        assert _uuid(voice.headers["x-request-id"]) == voice.headers["x-request-id"]
+        page.locator("#capture-text").fill("Edited synthetic draft")
+        assert page.locator("#capture-text").input_value() == "Edited synthetic draft"
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        screenshot(page, f"capture-voice-{width}-draft")
+    finally:
+        context.close()
+
+
+def record_capture_voice(page):
+    page.locator("#capture-mic").click()
+    page.wait_for_function("document.getElementById('capture-mic').getAttribute('aria-pressed') === 'true'")
+    assert page.locator("#capture-form button[type=submit]").is_disabled()
+    page.wait_for_timeout(250)
+    page.locator("#capture-mic").click()
+
+
+def test_real_browser_capture_retains_long_transcript_until_explicit_edited_review(workspace_url, chromium):
+    context = chromium.new_context(viewport={"width": 1440, "height": 1000})
+    page = context.new_page()
+    calls = []
+    transcript = "Synthetic " + "x" * 3990
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        calls.append((operation, route.request))
+        status, body = api_fixture(operation)
+        if operation == "assist/voice":
+            body = {"text": transcript, "language": "en", "duration_s": 1}
+        elif operation == "capture-save":
+            payload = route.request.post_data_json
+            status, body = 200, {
+                "id": "e" * 24, "kind": "capture_task", "status": "submitted",
+                "approval_digest": "f" * 64, "source_status": "current",
+                "approved_by": "owner-capture",
+                "action": {"kind": "create_task", "text": payload["text"], "definition": payload["definition"]},
+            }
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    try:
+        page.route("**/api/tasks/api/**", respond)
+        page.goto(workspace_url + "#tasks")
+        page.locator("#header-mic").wait_for()
+        page.locator("#capture-open").click()
+        page.locator("#capture-text").fill("Existing draft")
+        page.locator("#capture-title-input").fill("Existing title")
+        record_capture_voice(page)
+        page.wait_for_function(
+            "text => document.getElementById('capture-text').value === 'Existing draft\\n' + text", arg=transcript,
+        )
+        assert "2,000" in page.locator("#capture-voice-status").inner_text()
+        page.locator("#capture-form").evaluate("(form) => form.requestSubmit()")
+        assert not any(operation in {"capture", "capture-save", "assist/chat", "decide"} for operation, _ in calls)
+        assert page.locator("#capture-text").input_value() == "Existing draft\n" + transcript
+        page.locator("#capture-text").fill("Short edited task")
+        with page.expect_request("**/api/tasks/api/capture-save") as sent:
+            page.locator("#capture-form button[type=submit]").click()
+        assert sent.value.post_data_json["text"] == "Short edited task"
+        assert sent.value.post_data_json["definition"]["title"] == "Existing title"
+        assert re.fullmatch(r"[a-f0-9]{32}", sent.value.post_data_json["request_id"])
+        assert not any(operation in {"assist/chat", "decide"} for operation, _ in calls)
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("outcome", ["rejected", "recover", "closed"])
+def test_real_browser_capture_voice_failure_recovery_and_late_result(workspace_url, chromium, outcome):
+    context = chromium.new_context(viewport={"width": 1440, "height": 1000})
+    page = context.new_page()
+    calls, pending = [], []
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        calls.append((operation, route.request))
+        status, body = api_fixture(operation)
+        if operation == "assist/voice":
+            if outcome == "closed":
+                pending.append(route)
+                return
+            if outcome == "recover" and sum(name == "assist/voice" for name, _ in calls) == 1:
+                route.abort("failed")
+                return
+            if outcome == "rejected":
+                status, body = 422, {"error": "assist_audio_invalid", "message": "Synthetic recording rejected."}
+            else:
+                body = {"text": "Synthetic recovered draft", "language": "en", "duration_s": 1}
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    try:
+        page.route("**/api/tasks/api/**", respond)
+        page.goto(workspace_url + "#tasks")
+        page.locator("#header-mic").wait_for()
+        page.locator("#capture-open").click()
+        page.locator("#capture-text").fill("Existing draft")
+        page.locator("#capture-title-input").fill("Existing title")
+        with page.expect_request("**/api/tasks/api/assist/voice"):
+            record_capture_voice(page)
+        if outcome == "closed":
+            page.wait_for_function("document.getElementById('capture-mic').disabled")
+            page.locator("#capture-cancel").click()
+            page.locator("#capture-open").click()
+            assert page.locator("#capture-section").is_hidden()
+            assert len(pending) == 1
+            pending[0].fulfill(status=200, content_type="application/json", body=json.dumps({
+                "text": "Must not enter a new draft", "language": "en", "duration_s": 1,
+            }))
+            page.wait_for_function("!document.getElementById('capture-mic').disabled")
+            page.locator("#capture-open").click()
+            assert page.locator("#capture-text").input_value() == "Existing draft"
+        elif outcome == "recover":
+            page.locator("#uncertain").wait_for()
+            assert page.locator("#capture-text").input_value() == "Existing draft"
+            page.locator("#recover-request").click()
+            page.wait_for_function(
+                "document.getElementById('capture-text').value === 'Existing draft\\nSynthetic recovered draft'",
+            )
+            requests = [request for operation, request in calls if operation == "assist/voice"]
+            assert len(requests) == 2
+            assert requests[0].headers["x-request-id"] == requests[1].headers["x-request-id"]
+            assert requests[0].post_data_buffer == requests[1].post_data_buffer
+        else:
+            page.wait_for_function("document.getElementById('notice').textContent.includes('Synthetic recording rejected')")
+            assert page.locator("#capture-text").input_value() == "Existing draft"
+        assert page.locator("#capture-title-input").input_value() == "Existing title"
+        assert page.locator("#capture-form button[type=submit]").is_enabled()
+        assert not any(operation in {"assist/chat", "capture", "capture-save", "decide"} for operation, _ in calls)
+    finally:
+        context.close()
+
+
+def test_real_browser_closing_capture_cancels_pending_microphone_permission(workspace_url, chromium):
+    context = chromium.new_context(viewport={"width": 1440, "height": 1000})
+    page = context.new_page()
+    calls = []
+    page.add_init_script("""navigator.mediaDevices.getUserMedia = () => new Promise((resolve) => {
+      window.finishCapturePermission = () => resolve({
+        getTracks: () => [{ stop: () => { window.captureStreamStopped = true; } }],
+      });
+    });""")
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        calls.append(operation)
+        status, body = api_fixture(operation)
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    try:
+        page.route("**/api/tasks/api/**", respond)
+        page.goto(workspace_url + "#tasks")
+        page.locator("#header-mic").wait_for()
+        page.locator("#capture-open").click()
+        page.locator("#capture-text").fill("Existing draft")
+        page.locator("#capture-mic").click()
+        assert page.locator("#capture-mic").is_disabled()
+        page.locator("#capture-cancel").click()
+        page.evaluate("window.finishCapturePermission()")
+        page.wait_for_function("window.captureStreamStopped === true")
+        assert "assist/voice" not in calls and "assist/chat" not in calls
+        assert page.locator("#capture-text").input_value() == "Existing draft"
+    finally:
+        context.close()
 
 
 @pytest.mark.parametrize("width", [390, 1440])
@@ -927,12 +1190,23 @@ def test_real_browser_studio_sign_in(workspace_url, chromium, width, height, loc
     ("en-US", "dark"), ("en-US", "light"), ("ru-RU", "dark"), ("ru-RU", "light"),
 ])
 def test_real_browser_keyboard_focus_and_responsive_frame(workspace_url, chromium, width, locale, scheme):
+    from playwright.sync_api import TimeoutError as BrowserTimeout
+
     context = chromium.new_context(viewport={"width": width, "height": 1000 if width >= 1024 else 844},
                                    locale=locale, reduced_motion="reduce")
     page = context.new_page()
+    errors, failures = [], []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.on("requestfailed", lambda request: failures.append(request.url))
     page.goto(workspace_url + "?mock=1#tasks")
     page.locator("#briefing-open").wait_for(state="attached")
-    page.wait_for_function("!document.getElementById('command-open').hidden")
+    try:
+        page.wait_for_function("!document.getElementById('command-open').hidden")
+    except BrowserTimeout as error:
+        notices = page.evaluate("""() => Object.fromEntries(
+          ["notice", "access-message", "assist-usage", "connection"].map(
+            id => [id, document.getElementById(id).textContent]))""")
+        raise AssertionError(f"Mock workspace AI initialization failed: {notices}; errors={errors}; failed requests={failures}") from error
     if scheme == "light":
         page.locator("#theme-toggle").click()
     assert page.locator(".app-header").bounding_box()["height"] <= 100, "Normal text must not create an oversized header"

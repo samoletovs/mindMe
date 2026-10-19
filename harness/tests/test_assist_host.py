@@ -2,7 +2,9 @@ import json
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import httpx
 import pytest
+from openai import OpenAI
 
 import function_app as fa
 from task_service import TaskError
@@ -14,6 +16,7 @@ from test_briefing_state import FakeBlob
 
 def model(monkeypatch, output=None):
     client = Mock()
+    client.base_url = httpx.URL("https://synthetic.services.ai.azure.com/api/projects/synthetic/openai/v1/")
     client.with_options.return_value = client
     client.chat.completions.create.return_value = SimpleNamespace(
         choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(
@@ -65,6 +68,43 @@ def test_assist_transcription_preserves_mixed_language_and_usage_without_storage
     assert result["usage"] == {"input_tokens": 50, "output_tokens": 10}
     assert client.with_options.call_args.kwargs["max_retries"] == 0
     assert "Создай" not in caplog.text
+
+
+@pytest.mark.parametrize("channel", ["assist", "telegram"])
+@pytest.mark.parametrize("deployment", ["gpt-4o-mini-transcribe", "synthetic-speech"])
+def test_transcription_uses_account_deployment_route_not_project_api(monkeypatch, channel, deployment):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if (
+            request.url.path != f"/openai/deployments/{deployment}/audio/transcriptions"
+            or request.url.params.get("api-version") != "2024-02-01"
+        ):
+            return httpx.Response(404, json={"error": {"code": "not_found", "message": "Synthetic unsupported route"}})
+        return httpx.Response(200, json={"text": "Synthetic voice draft", "language": "en"})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as transport:
+        client = OpenAI(
+            base_url="https://synthetic.services.ai.azure.com/api/projects/synthetic/openai/v1/",
+            api_key=lambda: "synthetic-token", http_client=transport, max_retries=0,
+        )
+        monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
+        monkeypatch.setattr(fa, "_http_client", lambda: transport)
+        monkeypatch.setenv("MINDME_ASSIST_TRANSCRIPTION_MODEL", deployment)
+        monkeypatch.setenv("AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT", deployment)
+        result = (
+            fa._transcribe_task_audio(b"synthetic-audio", "audio/webm")["text"]
+            if channel == "assist" else fa._transcribe_voice(b"synthetic-audio", "audio/webm")
+        )
+        assert result == "Synthetic voice draft"
+        assert len(requests) == 1
+        assert requests[0].headers["authorization"] == "Bearer synthetic-token"
+        assert requests[0].url.host == "synthetic.services.ai.azure.com"
+        assert b'filename="voice.webm"' in requests[0].content
+        assert deployment.encode() in requests[0].content
+        assert requests[0].extensions["timeout"]["read"] <= 60
+        assert "/api/projects/synthetic/openai/v1/" in str(client.base_url)
 
 
 def test_empty_transcript_is_not_a_success_shaped_response(monkeypatch):

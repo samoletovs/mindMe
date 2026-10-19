@@ -137,6 +137,26 @@ actual iPhone recording still belongs to authorized post-deploy acceptance.
 Audio is never persisted. The same UUID must be retained after an uncertain
 response: a new UUID is not a retry of the same operation.
 
+Both task assistance and the existing Telegram transcription adapter use the
+account-level `/openai/deployments/{deployment}/audio/transcriptions` route
+with the [documented stable `2024-02-01` API](https://learn.microsoft.com/en-us/azure/foundry/openai/whisper-quickstart).
+They reuse the existing authenticated client and configured deployment, not the
+unsupported project-level audio route.
+Provider failures are service errors, not invalid-request-ID errors; diagnostics
+record only the exception type, never the provider message or audio content.
+
+After sign-in, AI availability loads independently of the task overview, so a slow
+task inventory does not hide Copilot and microphone controls. Slow or unavailable
+AI also does not delay the requested workspace view. **+Capture → Record
+a task** transcribes into the editable capture form, appending to any existing
+draft without replacing its title or details. It never sends an assist-chat
+instruction or creates a task automatically: the owner reviews the draft and
+clicks **Add task** to save the ordinary capture. Source-bound Knowledge captures
+retain **Review capture** and their separate approval. Closing or replacing the capture cancels its recording and
+prevents a late transcript from filling another draft. Overlong transcripts
+remain visible in full and must be shortened to the capture limit before review.
+The separate Copilot microphone retains its voice-instruction behavior.
+
 Chat and step responses contain `thread_id`, a short language-matched `reply`,
 `language`, typed `cards`, at most four follow-up `suggestions`, and `usage`.
 Private working threads retain at most twelve bounded turns for fourteen days
