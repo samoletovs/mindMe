@@ -105,7 +105,7 @@ from task_context import parse_task_callback, task_context
 from task_service import TaskError, TaskService, preparation_schema, task_timezone
 from task_sources import TaskRepository, task_path
 from task_telegram import TaskAssistTelegram, TaskTelegram, task_assist_intent
-from task_web import TaskWeb
+from task_web import TaskWeb, navigation_redirect
 
 # Hard Rule 8: silence httpx/httpcore BEFORE constructing any Telegram client.
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -3146,7 +3146,11 @@ def weekly_review_timer(timer: func.TimerRequest) -> None:
 # An empty template defaults to the function name; this optional segment matches only /.
 @app.route(route="{ignored:maxlength(0)?}", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
 def task_site_root(req: func.HttpRequest) -> func.HttpResponse:
-    del req
+    if req.method.upper() != "GET":
+        return func.HttpResponse("", status_code=405, headers={"Allow": "GET", "Cache-Control": "no-store"})
+    redirected = navigation_redirect(req, os.environ)
+    if redirected is not None:
+        return redirected
     return func.HttpResponse(
         "", status_code=302, headers={"Location": "/api/tasks", "Cache-Control": "no-store"},
     )

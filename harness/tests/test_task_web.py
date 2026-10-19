@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from unittest.mock import Mock
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import azure.functions as func
 import pytest
@@ -10,14 +10,14 @@ import pytest
 import function_app as fa
 from task_auth import AuthConfig, AuthError, FLOW_COOKIE, SESSION_COOKIE
 from task_web import TaskWeb
-from test_task_auth import cookie_pair, identity
+from test_task_auth import auth_env, cookie_pair, identity
 from test_task_service import PATH, REVISION, approve, refine_payload, service
 
 
-def request(path, body=None, *, method=None, cookie="", csrf="", origin="https://synthetic.example", extra=None):
+def request(path, body=None, *, method=None, cookie="", csrf="", origin="https://synthetic.example", extra=None, url=None):
     return func.HttpRequest(
         method=method or ("POST" if body is not None else "GET"),
-        url="https://synthetic.example/api/tasks/" + path, params={}, route_params={"path": path},
+        url=url or "https://synthetic.example/api/tasks/" + path, params={}, route_params={"path": path},
         headers={
             "Cookie": cookie, "X-MindMe-CSRF": csrf, "Origin": origin,
             "Content-Type": "application/json", **(extra or {}),
@@ -46,6 +46,181 @@ def app(auth, factory):
 
 def data(response):
     return json.loads(response.get_body())
+
+
+@pytest.fixture
+def redirect_web(identity, auth_env):
+    auth_env.update(
+        MINDME_WEB_ORIGIN="https://mindme.synthetic.example",
+        MINDME_WEB_REDIRECT_ORIGINS="https://vault.synthetic.example",
+    )
+    auth = identity[0]
+    auth.config = AuthConfig.load(auth_env)
+    auth_factory, service_factory = Mock(return_value=auth), Mock()
+    web = TaskWeb(env=auth_env, auth=auth_factory, service=service_factory)
+    return web, auth, auth_factory, service_factory
+
+
+@pytest.mark.parametrize(("path", "suffix", "target"), [
+    ("", "", "/api/tasks"),
+    ("", "/", "/api/tasks"),
+    ("auth/login", "/auth/login", "/api/tasks/auth/login"),
+    ("auth/login/", "/auth/login/", "/api/tasks/auth/login"),
+])
+def test_legacy_navigation_uses_only_fixed_canonical_destinations(redirect_web, identity, path, suffix, target, caplog):
+    web, auth, auth_factory, service_factory = redirect_web
+    query = "?next=https://attacker.example/&redirect_uri=//attacker.example&code=synthetic-code&state=synthetic-state&access_token=synthetic-token"
+    result = web.handle(request(
+        path, url="https://vault.synthetic.example/api/tasks" + suffix + query,
+        cookie="synthetic-cookie", extra={"X-Forwarded-Host": "attacker.example"},
+    ), path)
+    assert result.status_code == 302
+    assert result.headers["Location"] == auth.config.origin + target
+    assert result.headers["Cache-Control"] == "no-store, private"
+    assert result.headers["Referrer-Policy"] == "no-referrer"
+    assert result.get_body() == b"" and "Set-Cookie" not in result.headers
+    assert not urlsplit(result.headers["Location"]).fragment
+    assert all(value not in caplog.text for value in ("synthetic-code", "synthetic-token", "synthetic-cookie"))
+    auth_factory.assert_not_called()
+    service_factory.assert_not_called()
+    assert identity[3] == []
+
+
+@pytest.mark.parametrize("url", [
+    "http://vault.synthetic.example/api/tasks",
+    "https://unlisted.synthetic.example/api/tasks",
+    "https://vault.synthetic.example.evil.example/api/tasks",
+    "https://vault.synthetic.example@evil.example/api/tasks",
+    "https://evil.example@vault.synthetic.example/api/tasks",
+    "https://vault.synthetic.example:443/api/tasks",
+    "https://vault.synthetic.example./api/tasks",
+    "https://VAULT.synthetic.example/api/tasks",
+    "https://vault.synthetic.example\\@evil.example/api/tasks",
+    "https://vault.synthetic.example\t/api/tasks",
+    " https://vault.synthetic.example/api/tasks",
+    "//vault.synthetic.example/api/tasks",
+    "https://[invalid/api/tasks",
+])
+def test_navigation_requires_the_exact_actual_https_url_not_spoofed_headers(redirect_web, url):
+    web, auth, auth_factory, service_factory = redirect_web
+    result = web.handle(request("", url=url, origin=auth.config.origin, extra={
+        "Host": "vault.synthetic.example",
+        "X-Forwarded-Host": "vault.synthetic.example", "X-Forwarded-Proto": "https",
+        "Forwarded": "proto=https;host=vault.synthetic.example",
+        "X-Original-Host": "mindme.synthetic.example",
+    }))
+    assert result.status_code == 400 and data(result)["error"] == "secure_origin_required"
+    assert "Location" not in result.headers and "Set-Cookie" not in result.headers
+    auth_factory.assert_not_called()
+    service_factory.assert_not_called()
+
+
+@pytest.mark.parametrize(("method", "path", "status"), [
+    ("POST", "", 405), ("POST", "auth/login", 400),
+    ("GET", "auth/callback", 400), ("POST", "auth/callback", 400),
+    ("POST", "auth/logout", 400),
+    ("GET", "api/session", 400), ("GET", "api/overview", 400),
+    ("GET", "api/dashboard/today", 400), ("GET", "api/assist/usage", 400),
+    ("POST", "api/task", 400), ("POST", "api/decide", 400),
+    ("POST", "api/assist/chat", 400), ("GET", "auth/login/extra", 400),
+])
+def test_legacy_non_navigation_keeps_method_and_secure_origin_rejection(
+    redirect_web, identity, monkeypatch, method, path, status,
+):
+    web, auth, _, service_factory = redirect_web
+    forbidden = Mock(side_effect=AssertionError("Legacy requests must not authenticate or execute"))
+    for name in ("login", "callback", "authenticate", "logout"):
+        monkeypatch.setattr(auth, name, forbidden)
+    result = web.handle(request(
+        path, method=method, url="https://vault.synthetic.example/api/tasks/" + path,
+        cookie="synthetic-cookie", csrf="synthetic-csrf", origin=auth.config.origin,
+    ), path)
+    assert result.status_code == status
+    assert data(result)["error"] == ("method_not_allowed" if status == 405 else "secure_origin_required")
+    assert "Location" not in result.headers and "Set-Cookie" not in result.headers
+    forbidden.assert_not_called()
+    service_factory.assert_not_called()
+    assert identity[3] == []
+
+
+@pytest.mark.parametrize("path", ["assets/tasks.js", "assets/tasks.css", "assets/dashboard.js"])
+def test_legacy_static_assets_are_not_redirected_or_authenticated(redirect_web, path):
+    web, _, auth_factory, service_factory = redirect_web
+    result = web.handle(request(path, url="https://vault.synthetic.example/api/tasks/" + path), path)
+    assert result.status_code == 200 and "Location" not in result.headers
+    auth_factory.assert_not_called()
+    service_factory.assert_not_called()
+
+
+@pytest.mark.parametrize("path", ["", "auth/login"])
+def test_bad_redirect_configuration_has_an_explicit_content_free_error(redirect_web, path, caplog):
+    web, _, auth_factory, service_factory = redirect_web
+    web.env["MINDME_WEB_REDIRECT_ORIGINS"] = "https://synthetic-secret@vault.synthetic.example"
+    result = web.handle(request(path, url="https://vault.synthetic.example/api/tasks/" + path), path)
+    assert result.status_code == 503 and data(result)["error"] == "auth_configuration_invalid"
+    assert "Location" not in result.headers
+    assert "synthetic-secret" not in result.get_body().decode() + caplog.text
+    auth_factory.assert_not_called()
+    service_factory.assert_not_called()
+
+
+@pytest.mark.parametrize("origin", ["https://mindme.synthetic.example", "http://legacy.synthetic.example"])
+def test_unset_redirect_configuration_preserves_the_public_static_shell(origin):
+    forbidden = Mock(side_effect=AssertionError("Static shell must not load auth or services without the opt-in"))
+    web = TaskWeb(env={"MINDME_WEB_ENABLED": "true"}, auth=forbidden, service=forbidden)
+    result = web.handle(request("", url=origin + "/api/tasks"))
+    assert result.status_code == 200 and "Location" not in result.headers
+    forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize("wrong_owner", [False, True])
+def test_new_canonical_host_keeps_real_owner_flow_host_only_cookies_and_exact_csrf(
+    redirect_web, identity, wrong_owner,
+):
+    web, auth, _, service_factory = redirect_web
+    origin = auth.config.origin
+    shell = web.handle(request("", url=origin + "/api/tasks"))
+    assert shell.status_code == 200 and "Set-Cookie" not in shell.headers
+    login = web.handle(request("auth/login", url=origin + "/api/tasks/auth/login"), "auth/login")
+    assert login.status_code == 303
+    query = parse_qs(urlsplit(login.headers["Location"]).query)
+    assert query["redirect_uri"] == [origin + "/api/tasks/auth/callback"]
+    assert query["response_mode"] == ["form_post"] and query["code_challenge_method"] == ["S256"]
+    claims = identity[2]
+    claims["nonce"] = query["nonce"][0]
+    if wrong_owner:
+        claims["oid"] = "44444444-4444-4444-8444-444444444444"
+    callback = web.handle(func.HttpRequest(
+        method="POST", url=origin + "/api/tasks/auth/callback",
+        headers={"Cookie": cookie_pair(login.headers["Set-Cookie"], FLOW_COOKIE),
+                 "Content-Type": "application/x-www-form-urlencoded"},
+        body=urlencode({"state": query["state"][0], "code": "synthetic-code"}).encode(),
+    ), "auth/callback")
+    if wrong_owner:
+        assert callback.status_code == 403 and data(callback)["error"] == "owner_not_authorized"
+        assert "Set-Cookie" not in callback.headers and "Location" not in callback.headers
+    else:
+        assert callback.status_code == 303 and callback.headers["Location"] == origin + "/api/tasks"
+        for result, name, same_site in ((login, FLOW_COOKIE, "None"), (callback, SESSION_COOKIE, "Lax")):
+            cookie = result.headers["Set-Cookie"]
+            assert cookie.startswith(name + "=") and name.startswith("__Host-")
+            assert "Secure" in cookie and "HttpOnly" in cookie and "Path=/" in cookie
+            assert "Domain=" not in cookie and f"SameSite={same_site}" in cookie
+        cookie = cookie_pair(callback.headers["Set-Cookie"], SESSION_COOKIE)
+        session = web.handle(request("api/session", url=origin + "/api/tasks/api/session", cookie=cookie), "api/session")
+        assert session.status_code == 200 and set(data(session)) == {"authenticated", "csrf", "expires"}
+        csrf = data(session)["csrf"]
+        for request_origin, token in (("https://vault.synthetic.example", csrf), (origin, "forged")):
+            result = web.handle(request(
+                "auth/logout", {}, url=origin + "/api/tasks/auth/logout",
+                cookie=cookie, csrf=token, origin=request_origin,
+            ), "auth/logout")
+            assert result.status_code == 403 and data(result)["error"] == "csrf_rejected"
+        logout = web.handle(request(
+            "auth/logout", {}, url=origin + "/api/tasks/auth/logout", cookie=cookie, csrf=csrf, origin=origin,
+        ), "auth/logout")
+        assert logout.status_code == 200
+    service_factory.assert_not_called()
 
 
 def test_no_cookie_or_forged_host_headers_can_reach_task_data(identity):

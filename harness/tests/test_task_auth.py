@@ -74,6 +74,21 @@ def identity():
     return auth, config, claims, calls, token, blob
 
 
+@pytest.fixture
+def auth_env(identity):
+    config = identity[1]
+    return {
+        "MINDME_WEB_ENABLED": "true",
+        "MINDME_TASKS_ENABLED": "true",
+        "MINDME_WEB_ORIGIN": config.origin,
+        "MINDME_WEB_TENANT_ID": config.tenant_id,
+        "MINDME_WEB_CLIENT_ID": config.client_id,
+        "MINDME_WEB_OWNER_OBJECT_ID": config.owner_id,
+        "MINDME_WEB_CLIENT_SECRET": config.client_secret,
+        "MINDME_WEB_COOKIE_KEY": config.cookie_key,
+    }
+
+
 def cookie_pair(header, name):
     """Mirror the Python binding and the ASP.NET host's URI-escaped RPC cookie."""
     encoded = HttpResponseConverter.encode(
@@ -228,6 +243,52 @@ def test_state_csrf_and_untrusted_proxy_headers_do_not_authenticate(identity):
 def test_configuration_has_no_first_visitor_or_local_demo_fallback():
     with pytest.raises(AuthError, match="auth_unconfigured"):
         AuthConfig.load({})
+
+
+def test_redirect_origins_are_opt_in_and_do_not_change_the_canonical_callback(auth_env):
+    auth_env["MINDME_WEB_ORIGIN"] = "https://mindme.synthetic.example"
+    config = AuthConfig.load(auth_env)
+    assert config.redirect_origins == ()
+    auth_env["MINDME_WEB_REDIRECT_ORIGINS"] = "https://vault.synthetic.example, https://old.synthetic.example"
+    config = AuthConfig.load(auth_env)
+    assert config.redirect_origins == ("https://vault.synthetic.example", "https://old.synthetic.example")
+    assert config.origin == "https://mindme.synthetic.example"
+    assert config.redirect_uri == "https://mindme.synthetic.example/api/tasks/auth/callback"
+
+
+@pytest.mark.parametrize("value", [
+    " ", ",", "https://vault.synthetic.example,",
+    "https://synthetic.example",
+    "https://vault.synthetic.example,https://vault.synthetic.example",
+    "http://vault.synthetic.example", "//vault.synthetic.example",
+    "https://vault.synthetic.example/", "https://vault.synthetic.example/api/tasks",
+    "https://vault.synthetic.example?next=synthetic", "https://vault.synthetic.example#tasks",
+    "https://vault.synthetic.example?", "https://vault.synthetic.example#",
+    "https://user@vault.synthetic.example", "https://user:password@vault.synthetic.example",
+    "https://vault.synthetic.example:443", "https://vault.synthetic.example.",
+    "https://*.synthetic.example", "https://VAULT.synthetic.example",
+    "https://vault..synthetic.example", "https://-vault.synthetic.example",
+    "https://vault.synthetic.example\\other", "https://vault.synthetic.example\t.evil.example",
+    "https://vault.synthetic.example evil.example", "https://[invalid",
+    "https://v\u00e4ult.synthetic.example", "https://%76ault.synthetic.example",
+    '["https://vault.synthetic.example"]',
+])
+def test_redirect_configuration_is_exact_and_fails_closed(auth_env, value):
+    auth_env["MINDME_WEB_REDIRECT_ORIGINS"] = value
+    with pytest.raises(AuthError, match="auth_configuration_invalid") as failure:
+        AuthConfig.load(auth_env)
+    assert failure.value.status == 503
+
+
+def test_navigation_alias_never_becomes_an_authentication_or_csrf_origin(identity, auth_env):
+    auth_env["MINDME_WEB_REDIRECT_ORIGINS"] = "https://vault.synthetic.example"
+    auth = identity[0]
+    auth.config = AuthConfig.load(auth_env)
+    for path in ("/api/tasks/auth/login", "/api/tasks/auth/callback", "/api/tasks/api/session"):
+        with pytest.raises(AuthError, match="secure_origin_required"):
+            auth.check_transport("https://vault.synthetic.example" + path)
+    with pytest.raises(AuthError, match="csrf_rejected"):
+        auth.csrf({"csrf": "synthetic"}, origin="https://vault.synthetic.example", token="synthetic")
 
 
 @pytest.mark.parametrize("collection,code", [

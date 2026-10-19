@@ -32,6 +32,10 @@ _PERSONAL_PROVIDERS = (
     "https://sts.windows.net/9188040d-6c67-4c5b-b112-36a304b66dad/",
 )
 _UUID = re.compile(r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\Z")
+_HTTPS_ORIGIN = re.compile(
+    r"https://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*"
+    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z"
+)
 
 
 class AuthError(RuntimeError):
@@ -48,6 +52,7 @@ class AuthConfig:
     owner_id: str
     client_secret: str
     cookie_key: str
+    redirect_origins: tuple[str, ...] = ()
 
     @classmethod
     def load(cls, env: Mapping[str, str]) -> AuthConfig:
@@ -57,15 +62,15 @@ class AuthConfig:
         ]
         if not all(values):
             raise AuthError("auth_unconfigured", 503)
-        config = cls(*values)
-        try:
-            origin = urlsplit(config.origin)
-        except ValueError:
-            raise AuthError("auth_configuration_invalid", 503) from None
+        redirects = env.get("MINDME_WEB_REDIRECT_ORIGINS", "")
+        config = cls(*values, redirect_origins=tuple(value.strip() for value in redirects.split(",")) if redirects else ())
         if (
-            origin.scheme != "https" or not origin.hostname or origin.path
-            or origin.query or origin.fragment or origin.username or origin.password
-            or origin.netloc != origin.hostname or config.origin != f"https://{origin.hostname}"
+            not all(
+                _HTTPS_ORIGIN.fullmatch(value) and len(value.removeprefix("https://")) <= 253
+                for value in (config.origin, *config.redirect_origins)
+            )
+            or config.origin in config.redirect_origins
+            or len(config.redirect_origins) != len(set(config.redirect_origins))
             or not all(_UUID.fullmatch(value) for value in (config.tenant_id, config.client_id, config.owner_id))
             or config.tenant_id in {"common", "organizations", "consumers"}
         ):
