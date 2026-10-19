@@ -80,9 +80,14 @@ def validate_workspace(value: object) -> None:
     for key, record in value["requests"].items():
         if (
             not HASH.fullmatch(key) or not isinstance(record, dict)
-            or set(record) - {"digest", "status", "proposal_id", "created_on"}
+            or set(record) - {"digest", "status", "proposal_id", "created_on", "capture_save_digest"}
             or not isinstance(record.get("digest"), str) or not HASH.fullmatch(record["digest"])
             or record.get("status") not in {"claimed", "recorded", "sending", "sent", "uncertain"}
+            or ("capture_save_digest" in record and (
+                not isinstance(record["capture_save_digest"], str)
+                or not HASH.fullmatch(record["capture_save_digest"])
+                or "proposal_id" not in record
+            ))
         ):
             raise StateError("invalid_task_request_receipt")
         if "proposal_id" in record and not HEX24.fullmatch(record["proposal_id"]):

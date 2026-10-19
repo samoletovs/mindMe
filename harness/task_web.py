@@ -72,6 +72,8 @@ ERROR_TEXT = {
     "task_clarification_limit": "Three answers is the limit for this file version. Keep unresolved work in Clarify.",
     "task_clarification_stale": "That question has changed. Reload clarification and answer the question now shown; no answer was applied.",
     "task_request_conflict": "This request ID already describes a different action. Reload the saved receipt.",
+    "task_capture_scope_invalid": "Add task only saves a new rough task in Clarify. Use the existing review flow for other changes.",
+    "task_capture_unconfirmed": "Saving this task is not confirmed. Recover the same request or inspect Activity; do not add it again.",
     "task_closure_requires_verification": "Check the done condition and record the actual result and evidence first.",
     "task_closure_date_invalid": "The verification date cannot be after the owner's current calendar date.",
     "task_closure_checkpoint_changed": "That closure checkpoint has changed. Refresh its saved receipt before continuing.",
@@ -224,7 +226,7 @@ class TaskWeb:
             status = (
                 402 if code == "budget_exhausted"
                 else 429 if code in {"rate_limited", "assist_capacity"}
-                else 503 if code in {"assist_disabled", "model_unavailable", "assist_request_uncertain"}
+                else 503 if code in {"assist_disabled", "model_unavailable", "assist_request_uncertain", "task_capture_unconfirmed"}
                 else 409 if code == "assist_request_conflict"
                 else
                 503 if code in {"task_timezone_not_configured", "task_timezone_invalid", "task_clock_invalid"}
@@ -354,7 +356,8 @@ class TaskWeb:
         if path == "api/task" and set(payload) == {"path"}:
             return response(service._source(payload["path"]))
         operations = {
-            "api/capture": service.capture, "api/refine": service.refine, "api/change": service.change,
+            "api/capture": service.capture, "api/capture-save": service.save_capture,
+            "api/refine": service.refine, "api/change": service.change,
             "api/prepare": service.prepare, "api/close": service.close, "api/decide": service.decide,
             "api/continue-closure": service.continue_closure, "api/recover-closure": service.recover_closure,
         }

@@ -123,7 +123,7 @@
             <label for="capture-title-input" data-i18n="optionalTitle">Title (optional)</label>
             <input id="capture-title-input" name="title" maxlength="120" placeholder="Leave blank to use the first line of your request" data-i18n-placeholder="titlePlaceholder">
             <details><summary data-i18n="captureDetails">Add the details you already know</summary><div id="capture-details" class="form-grid"></div></details>
-            <div class="form-footer"><p class="hint" data-i18n="captureHint">First review the proposed record. Capturing it will not start research or an agent.</p><button class="primary" type="submit" data-i18n="reviewCapture">Review capture</button></div>
+            <div class="form-footer"><p id="capture-hint" class="hint" data-i18n="captureHint">Add task saves this request as one task in Clarify. It does not make purchases, start research or run an agent.</p><button id="capture-submit" class="primary" type="submit" aria-describedby="capture-hint" data-i18n="addTask">Add task</button></div>
           </form>
         </section>
 
