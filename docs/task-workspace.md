@@ -398,10 +398,11 @@ remain below `/api/tasks`; platform-anonymous declarations do not make
 authenticated task data public.
 
 With [opt-in canonical navigation](#configuration-and-release-gate), GET root,
-bookmarked shell and sign-in requests on an exact configured legacy HTTPS origin
-redirect to fixed canonical destinations without query data or cookies. The
-canonical root retains its relative redirect; canonical shell/sign-in behavior,
-static assets and non-navigation routes remain unchanged.
+bookmarked shell and sign-in requests on a configured legacy HTTPS origin, or an
+ASCII hostname-case variant of the canonical/legacy origin, redirect to fixed
+lowercase canonical destinations without query data or cookies. The exact
+lowercase canonical root retains its relative redirect; its shell/sign-in
+behavior, static assets and non-navigation routes remain unchanged.
 
 The host HTTP `routePrefix` is empty so the root can be bound. Every existing HTTP
 route explicitly retains its `api/` prefix: health, Telegram, Function-key tools,
@@ -412,10 +413,10 @@ an empty template would instead default to the function name.
 
 | Route | Method | Result |
 |---|---|---|
-| `/` | GET | Default/canonical: relative 302 to `/api/tasks`; configured legacy: canonical shell redirect. No cookies or data |
-| `/api/tasks` | GET | Static shell; configured legacy navigation redirects to the canonical shell |
+| `/` | GET | Default/exact canonical: relative 302 to `/api/tasks`; opted-in legacy/ASCII host-case navigation: canonical shell redirect. No cookies or data |
+| `/api/tasks` | GET | Static shell; opted-in legacy/ASCII host-case navigation redirects to the lowercase canonical shell |
 | `/assets/tasks.css`, `/assets/tasks.js`, `/assets/dashboard.js` | GET | Static assets only, never redirected |
-| `/auth/login` | GET | Canonical Microsoft code+PKCE flow; configured legacy navigation first redirects to canonical sign-in |
+| `/auth/login` | GET | Exact canonical Microsoft code+PKCE flow; opted-in legacy/ASCII host-case navigation first redirects to lowercase canonical sign-in |
 | `/auth/callback` | POST | Bounded form-post callback; exact owner validation |
 | `/auth/logout` | POST | CSRF-protected session revocation |
 | `/api/session` | GET | Authorized session CSRF token and expiry, no OAuth tokens/identity details |
@@ -765,7 +766,7 @@ guidance, not a claim that the cutover is deployed. The callback is then exactly
 `https://mindme.naurolabs.com/api/tasks/auth/callback`; no separate redirect-URI
 setting or second authentication origin is added.
 
-Origins must use lowercase ASCII hostnames (punycode for international names),
+Configured origins must use lowercase ASCII hostnames (punycode for international names),
 without ports, credentials, wildcards, paths, trailing slashes, queries or
 fragments. Spaces around comma-separated entries are trimmed. Empty entries,
 duplicates and the canonical origin in the legacy list are invalid;
@@ -775,15 +776,19 @@ static shell behavior. Configured navigation requires the existing complete
 owner-auth configuration; missing configuration still fails closed.
 
 Only GET `/`, `/api/tasks`, `/api/tasks/`, `/api/tasks/auth/login` and its
-trailing-slash form redirect from a listed legacy origin. Destinations are fixed
-canonical shell/sign-in paths. All query parameters are discarded, including
+trailing-slash form redirect from a listed legacy origin or an ASCII hostname-case
+variant of the configured canonical/legacy origin. Destinations are fixed
+lowercase canonical shell/sign-in paths. All query parameters are discarded, including
 OAuth codes, state, tokens and caller-supplied return URLs. Redirect responses
 are non-cacheable, suppress the referrer, and neither read nor set cookies.
 No fragment is placed in `Location`, so browsers retain existing bookmarks such
 as `#needs`, `#tasks` and `#knowledge`; fragments remain browser-only navigation,
-not redirect destinations or authorization. The actual request URL must match
-an exact configured HTTPS origin; `Host`/forwarded headers do not grant access.
-Unlisted and HTTP navigation is rejected when this opt-in is configured.
+not redirect destinations or authorization. The actual request URL must name a
+configured HTTPS origin; only ASCII hostname lettercase may vary for navigation.
+Userinfo, ports, trailing dots, encoded/non-ASCII hosts and other obfuscations
+are rejected, not normalized. `Host`/forwarded headers do not grant access.
+Unlisted and HTTP navigation is rejected when this opt-in is configured. Exact
+lowercase canonical navigation retains its existing behavior.
 
 POSTs, OAuth callbacks, task/session/dashboard/assist APIs, static assets,
 Telegram and Function-key tools are not redirected or replayed. Auth/data/action
