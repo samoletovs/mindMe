@@ -38,6 +38,11 @@ precedes task edits, bounded preparation or public research; submitted writes ar
 not described as saved until canonical readback succeeds. Closing a task requires
 the owner to verify its done condition and retain the result/evidence/learning.
 
+The ordinary **Add task** form saves one rough request in Clarify without a
+separate JSON approval step or model call. That click authorizes only the new
+record, not purchases or other work. Unconfirmed saves retain the same request;
+the UI says saved only after merged/current canonical proof.
+
 Microsoft sign-in is a server-side code+PKCE flow with an exact personal-directory
 owner allowlist. It is not enabled merely by checking out or merging this code.
 App registration, secrets, HTTPS-only host configuration and deployment require
@@ -47,8 +52,8 @@ The [hosted vault dashboard first release](docs/vault-dashboard.md) extends this
 same surface with Today and a Knowledge inbox. It displays eligible approved
 focus, existing task attention, changed captures/research, daily review findings
 and weekly digests with an authenticated evidence reader. Review feedback reuses
-Telegram's private state; making a task still needs an exact preview and explicit
-approval. This is application behavior, not evidence that the planned
+Telegram's private state; making a task from a source still needs an exact preview
+and explicit approval. This is application behavior, not evidence that the planned
 `vault.naurolabs.com` origin or domain cutover is deployed.
 
 ### Telegram voice

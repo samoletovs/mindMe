@@ -34,7 +34,8 @@ const state = {
   csrf: "", view: "today", layout: "board", items: [], overview: null, selected: null,
   tab: "overview", busy: false, unknown: null, proposal: null, clarification: null,
   loading: false, detailGeneration: 0, detailIntent: 0, sessionGeneration: 0, authExpires: 0, expiryTimer: null,
-  captureSource: null, snapshotCheckedAt: 0, manualDraft: null, manualDraftInvalidated: false,
+  captureSource: null, captureReceipt: null, capturePoll: null,
+  snapshotCheckedAt: 0, manualDraft: null, manualDraftInvalidated: false,
 };
 const MANUAL_FORMS = ["definition-form", "date-form", "prepare-form", "completion-form", "clarification-form"];
 const focusOrigins = { task: null, capture: null, proposal: null, copilot: null };
@@ -191,7 +192,7 @@ async function performMutation(attempt) {
   const generation = state.sessionGeneration;
   let confirmed = false;
   setBusy(true);
-  showNotice(t("workingExactRequest"));
+  showNotice(t(attempt.operation === "capture-save" ? "captureSaving" : "workingExactRequest"));
   try {
     const result = await api(attempt.operation, attempt.payload);
     if (generation !== state.sessionGeneration) return;
@@ -622,8 +623,22 @@ async function loadOverview(appendPage = false, refreshContext = null) {
         }
       }
     }
+    if (state.captureReceipt) {
+      const previous = state.captureReceipt;
+      state.captureReceipt = data.history.find((record) => record.id === previous.id) || {
+        id: previous.id, kind: "capture_task", status: previous.status,
+        approved_by: "owner-capture", source_status: "unavailable",
+      };
+      if (captureSaved(state.captureReceipt)) state.captureReceipt = null;
+    } else {
+      state.captureReceipt = data.history.find((record) =>
+        record.kind === "capture_task" && record.approved_by === "owner-capture"
+        && ["submitted", "executing", "uncertain"].includes(record.status)
+      ) || null;
+    }
     if (state.proposal) {
-      state.proposal = data.history.find((record) => record.id === state.proposal.id) || null;
+      state.proposal = data.history.find((record) => record.id === state.proposal.id)
+        || (state.proposal.id === state.captureReceipt?.id ? state.captureReceipt : null);
       $("proposal-preview").replaceChildren(...(state.proposal ? [renderProposal(state.proposal)] : []));
       $("proposal-section").hidden = !state.proposal;
     }
@@ -1084,6 +1099,9 @@ function renderClarification(parent) {
   parent.append(target);
 }
 function proposalTitle(record) {
+  if (record.kind === "capture_task" && record.source_status === "current" && record.action?.definition?.title) {
+    return record.action.definition.title;
+  }
   return t(({
     capture_task: "captureOperation", refine_task: "refineOperation", edit_task: "changeOperation",
     close_task: "closeOperation", prepare_task: "prepareOperation", research: "researchOperation",
@@ -1113,6 +1131,13 @@ function closureConflict(record) {
   return { label: t(`${key}Label`), text: t(`${key}Text`) };
 }
 function proposalStatusText(record) {
+  if (record.kind === "capture_task") {
+    if (captureSaved(record)) return t("captureSavedDetail", { stage: t(record.action?.definition?.stage || "clarify") });
+    if (record.status === "submitted") return t("captureSubmitted");
+    if (record.status === "executing") return t("captureSaving");
+    if (["uncertain", "completed"].includes(record.status)) return t("captureUnconfirmed");
+    if (record.approved_by === "owner-capture") return t("captureNotSaved");
+  }
   const conflict = closureConflict(record);
   if (conflict) return `${conflict.text} ${t("freshClosureApproval")}`;
   if (confirmedClosureScan(record)) {
@@ -1136,15 +1161,27 @@ function renderProposal(record) {
   const article = element("article", null, "proposal");
   const contentAvailable = record.action && (!record.source_status || record.source_status === "current");
   const conflict = closureConflict(record);
-  append(article, statusBadge(record.status, conflict?.label), element("h3", proposalTitle(record)), element("p",
+  const capture = record.kind === "capture_task";
+  const status = capture && ((record.status === "completed" && !captureSaved(record))
+    || (record.status === "pending" && record.approved_by === "owner-capture")) ? "uncertain" : record.status;
+  const label = captureSaved(record) ? t("captureSaved") : capture && status === "submitted" ? t("captureSubmittedLabel")
+    : capture && status === "executing" ? t("captureSavingLabel") : conflict?.label;
+  append(article, statusBadge(status, label), element("h3", proposalTitle(record)), element("p",
     contentAvailable ? proposalStatusText(record) : (record.text || t("historicalReceipt"))));
+  if (capture && !contentAvailable) article.append(element("p", proposalStatusText(record)));
   if (conflict && !contentAvailable) article.append(element("p", proposalStatusText(record)));
   const source = element("p", null, "source");
   append(source, element("span", `${record.created_on || ""}${record.expires_on ? ` / ${t("expiresLabel")} ${record.expires_on}` : ""} `), safeLink(t("sourceLabel"), record.source_url));
   article.append(source);
   if (contentAvailable) {
-    const action = element("div", null, "exact-action");
-    append(action, element("h4", t("exactAction")), element("pre", JSON.stringify(record.action, null, 2)));
+    if (capture) {
+      const request = element("div", null, "outcome-block");
+      request.append(element("p", record.action.text));
+      article.append(request);
+    }
+    const action = element(capture ? "details" : "div", null, "exact-action");
+    append(action, element(capture ? "summary" : "h4", t(capture ? "captureRecordDetails" : "exactAction")),
+      element("pre", JSON.stringify(record.action, null, 2)));
     if (record.kind === "close_task" && record.closure_scan_protocol === 1) {
       action.append(element("p", t("closurePassHint"), "hint"));
     }
@@ -1183,7 +1220,7 @@ function renderProposal(record) {
     append(article, details, safeLink(t("openResultStatus"), url));
   }
   const actions = element("div", null, "actions");
-  if (contentAvailable && record.status === "pending" && record.approval_digest) {
+  if (contentAvailable && record.status === "pending" && record.approval_digest && !(capture && record.approved_by === "owner-capture")) {
     actions.append(writeButton(t("approveExact"), () => mutate("decide", {
       proposal_id: record.id, approval_digest: record.approval_digest, decision: "approve",
     }, updateProposal), "primary"));
@@ -1200,8 +1237,8 @@ function renderProposal(record) {
     actions.append(writeButton(t("recoverClosure"), () => mutate("recover-closure", {
       proposal_id: record.id, request_id: requestId(),
     }, updateProposal)));
-  } else if (["submitted", "executing", "uncertain"].includes(record.status)) {
-    actions.append(writeButton(t("checkExistingRequest"), () => mutate("reconcile", { proposal_id: record.id }, updateProposal)));
+  } else if (["submitted", "executing", "uncertain"].includes(record.status) || (capture && record.status === "completed" && !captureSaved(record))) {
+    actions.append(writeButton(t(capture ? "checkCapture" : "checkExistingRequest"), () => mutate("reconcile", { proposal_id: record.id }, updateProposal)));
   }
   if (contentAvailable && record.status === "completed" && ["prepare_task", "research"].includes(record.kind) && !record.reviewed) {
     actions.append(writeButton(t("reviewedResult"), () => mutate("review-result", { proposal_id: record.id }, async () => {
@@ -1220,19 +1257,66 @@ function renderProposal(record) {
   article.append(actions);
   return article;
 }
-function showProposal(record) {
+function showProposal(record, { focus = true } = {}) {
   const redacted = ["changed_or_removed", "unavailable"].includes(record.source_status);
   if (!/^[a-f0-9]{24}$/.test(record.id || "") || !record.status || (!record.action && !redacted)) {
     throw new Error(t("proposalReceiptIncomplete"));
   }
+  if (record.kind === "capture_task" && (
+    !["pending", "executing", "submitted", "uncertain", "completed", "failed", "invalidated", "expired", "declined"].includes(record.status)
+    || (!redacted && (record.source_status !== "current" || record.action?.kind !== "create_task"
+      || typeof record.action.text !== "string" || !record.action.text
+      || typeof record.action.definition?.title !== "string" || !record.action.definition.title))
+  )) throw new Error(t("proposalReceiptIncomplete"));
   if ($("proposal-section").hidden) focusOrigins.proposal = document.activeElement;
   state.proposal = record;
+  if (state.captureReceipt?.id === record.id) state.captureReceipt = captureSaved(record) ? null : record;
+  const heading = record.kind === "capture_task" && (record.status !== "pending" || record.approved_by === "owner-capture")
+    ? "captureResult" : "reviewBefore";
+  $("proposal-heading").dataset.i18n = heading;
+  $("proposal-heading").textContent = t(heading);
   $("proposal-section").hidden = false;
   $("proposal-preview").replaceChildren(renderProposal(record));
   showNotice(redacted ? (record.text || t("sourceReceiptOnly")) : proposalStatusText(record),
-    record.status === "pending" && !redacted ? "" : "pending");
-  $("proposal-section").scrollIntoView({ block: "start" });
-  restoreFocus($("proposal-heading"));
+    captureSaved(record) || (record.status === "pending" && !redacted) ? "" : "pending");
+  watchCaptureReceipt();
+  if (focus) {
+    $("proposal-section").scrollIntoView({ block: "start" });
+    restoreFocus($("proposal-heading"));
+  }
+}
+function captureSaved(record) {
+  return record?.kind === "capture_task" && record.status === "completed" && record.source_status === "current"
+    && (record.publish_result || record.result)?.status === "merged";
+}
+function captureUnresolved(record = state.captureReceipt) {
+  return record && (["submitted", "executing", "uncertain"].includes(record.status)
+    || (record.status === "completed" && !captureSaved(record)));
+}
+function watchCaptureReceipt() {
+  const record = state.captureReceipt;
+  if (!record && state.capturePoll) {
+    clearTimeout(state.capturePoll.timer);
+    state.capturePoll.timer = null;
+  }
+  if (!captureUnresolved(record) || state.proposal?.id !== record.id || $("proposal-section").hidden) return;
+  if (state.capturePoll?.id !== record.id) {
+    clearTimeout(state.capturePoll?.timer);
+    state.capturePoll = { id: record.id, generation: state.sessionGeneration, attempt: 0, timer: null };
+  }
+  const poll = state.capturePoll;
+  if (poll.timer || poll.attempt >= 6 || document.hidden || state.unknown) return;
+  poll.timer = setTimeout(() => { poll.timer = null; return pollCaptureReceipt(poll); }, Math.min(2000 * 2 ** poll.attempt, 60000));
+}
+async function pollCaptureReceipt(poll) {
+  if (poll !== state.capturePoll || poll.generation !== state.sessionGeneration || !state.csrf
+    || !captureUnresolved() || state.proposal?.id !== poll.id || $("proposal-section").hidden || document.hidden) return;
+  if (state.busy) { watchCaptureReceipt(); return; }
+  poll.attempt += 1;
+  await mutate("reconcile", { proposal_id: poll.id }, (record) => {
+    if (record.id !== poll.id || record.kind !== "capture_task") throw new Error(t("proposalReceiptIncomplete"));
+    if (state.proposal?.id === poll.id) showProposal(record, { focus: false });
+  }, loadOverview);
 }
 async function updateProposal(record) {
   showProposal(record);
@@ -1297,6 +1381,8 @@ function renderAreas(preserve = false) {
   setBusy(state.busy);
 }
 function clearData() {
+  clearTimeout(state.capturePoll?.timer);
+  state.capturePoll = null; state.captureReceipt = null;
   clearManualDraft();
   clearAssist();
   dashboard.clear();
@@ -1411,6 +1497,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) chec
 window.addEventListener("focus", checkSessionExpiry);
 window.addEventListener("pageshow", checkSessionExpiry);
 function beginSourceCapture(source, finding) {
+  if (captureEntryBlocked()) return;
   state.captureSource = { id: source.id, revision: source.revision, finding: finding?.id || null };
   $("capture-form").reset();
   const text = finding?.next_step || t("sourceCaptureRequest", { title: source.title });
@@ -1423,27 +1510,51 @@ function beginSourceCapture(source, finding) {
   openCapture();
 }
 function openCapture() {
+  for (const [id, key] of [
+    ["capture-submit", state.captureSource ? "reviewCapture" : "addTask"],
+    ["capture-hint", state.captureSource ? "sourceCaptureSaveHint" : "captureHint"],
+  ]) {
+    $(id).dataset.i18n = key;
+    $(id).textContent = t(key);
+  }
   if ($("capture-section").hidden) focusOrigins.capture = document.activeElement;
   $("capture-section").hidden = false;
   $("capture-text").focus();
   $("capture-section").scrollIntoView({ block: "start" });
 }
 $("capture-open").addEventListener("click", () => {
+  if (captureEntryBlocked()) return;
   if (state.captureSource) $("capture-form").reset();
   state.captureSource = null;
   $("capture-context").hidden = true;
   openCapture();
 });
+function captureEntryBlocked() {
+  if (state.busy) return true;
+  if (state.unknown) {
+    showNotice(t("requestUnconfirmedHint"), "pending");
+    return true;
+  }
+  if (captureUnresolved()) {
+    showProposal(state.captureReceipt);
+    return true;
+  }
+  return false;
+}
 function closeCapture() {
-  if (state.captureSource) $("capture-form").reset();
-  state.captureSource = null;
-  $("capture-context").hidden = true;
+  if (!state.busy && !state.unknown) {
+    if (state.captureSource) $("capture-form").reset();
+    state.captureSource = null;
+    $("capture-context").hidden = true;
+  }
   $("capture-section").hidden = true;
   restoreFocus(focusOrigins.capture, matchMedia("(max-width: 690px)").matches ? $("quick-capture") : $("capture-open"));
   focusOrigins.capture = null;
 }
 $("capture-cancel").addEventListener("click", closeCapture);
 $("proposal-close").addEventListener("click", () => {
+  clearTimeout(state.capturePoll?.timer);
+  if (state.capturePoll) state.capturePoll.timer = null;
   $("proposal-section").hidden = true; state.proposal = null;
   restoreFocus(focusOrigins.proposal, $("view-title")); focusOrigins.proposal = null;
 });
@@ -1452,25 +1563,35 @@ $("recover-request").addEventListener("click", () => {
 });
 $("capture-form").addEventListener("submit", (event) => {
   event.preventDefault();
+  if (captureEntryBlocked()) return;
   const form = new FormData(event.currentTarget);
   const text = String(form.get("text") || "");
-  const firstLine = text.split(/\r?\n/).find((line) => line.trim())?.trim() || "";
+  const firstLine = text.split(/\r?\n/)
+    .map((line) => line.trim().replace(/^(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+|>\s*)/, "").trim())
+    .find(Boolean) || "";
   const title = String(form.get("title") || "").trim() || Array.from(firstLine).slice(0, 120).join("");
-  if (!text.trim() || !title) return;
+  if (!text.trim() || !title) { showNotice(t("captureTextRequired"), "error"); return; }
   const definition = { title, stage: "clarify" };
   for (const name of ["area", "project", "execution", "outcome", "next_action", "done_when"]) {
     const value = String(form.get(name) || "").trim();
     if (value) definition[name] = value;
   }
   const source = state.captureSource;
-  mutate(source ? "dashboard/capture" : "capture", { request_id: requestId(), text, definition, ...(source || {}) }, async (record) => {
+  mutate(source ? "dashboard/capture" : "capture-save", { request_id: requestId(), text, definition, ...(source || {}) }, (record) => {
+    if (record.kind !== "capture_task" || (!source && record.source_status === "current" && (
+      record.action?.text !== text || record.action?.definition?.title !== title
+      || record.approved_by !== "owner-capture"
+    ))) throw new Error(t("proposalReceiptIncomplete"));
     showProposal(record);
+    if (!source) {
+      state.captureReceipt = captureSaved(record) ? null : record;
+      watchCaptureReceipt();
+    }
     $("capture-form").reset();
     $("capture-section").hidden = true;
     state.captureSource = null;
     $("capture-context").hidden = true;
-    await loadOverview();
-  });
+  }, loadOverview);
 });
 $("projects-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1555,7 +1676,16 @@ const COPY = {
     captureIntro: "One rough request is enough. Missing details can stay in Clarify. Keep sensitive details in their private record.",
     capturePlaceholder: "Describe the outcome or the question you want to resolve.",
     optionalTitle: "Title (optional)", titlePlaceholder: "Leave blank to use the first line of your request",
-    captureHint: "First review the proposed record. Capturing it will not start research or an agent.",
+    captureHint: "Add task saves this request as one task in Clarify. It does not make purchases, start research or run an agent.",
+    sourceCaptureSaveHint: "First review the source-bound record. Capturing it will not start research or an agent.",
+    addTask: "Add task", captureResult: "Task capture", captureRecordDetails: "Technical task record",
+    captureSubmittedLabel: "Submitted", captureSavingLabel: "Saving",
+    captureSaving: "Saving this task. No saved result is confirmed yet.",
+    captureSubmitted: "Your request was received. We are checking that the task was saved; no need to add it again.",
+    captureUnconfirmed: "Saving is not confirmed. It may already be saved; check this same request, not a new capture.",
+    captureNotSaved: "This request did not confirm a saved task. Inspect its receipt before trying again.",
+    captureSaved: "Task saved", captureSavedDetail: "Added to your task list in {stage}. No work was started.",
+    checkCapture: "Check save status", captureTextRequired: "Describe the task before adding it.",
     reviewBefore: "Review before acting", returnWorkspace: "Return to workspace",
     responsibilities: "Responsibilities and selected projects",
     areasIntro: "Areas are ongoing responsibilities. A project has an outcome; an inventory entry is not automatically an active commitment.",
@@ -1803,7 +1933,16 @@ const COPY = {
     captureIntro: "Достаточно чернового запроса. Недостающие детали можно уточнить позже. Чувствительные сведения оставляйте в личной записи.",
     capturePlaceholder: "Опишите желаемый результат или вопрос, который хотите решить.",
     optionalTitle: "Название (необязательно)", titlePlaceholder: "Оставьте пустым, чтобы использовать первую строку запроса",
-    captureHint: "Сначала проверьте предлагаемую запись. Ввод задачи не запускает исследование или агента.",
+    captureHint: "«Добавить задачу» сохраняет весь запрос как одну задачу для уточнения. Это не разрешает покупки, исследования или запуск агента.",
+    sourceCaptureSaveHint: "Сначала проверьте запись, связанную с источником. Ввод задачи не запускает исследование или агента.",
+    addTask: "Добавить задачу", captureResult: "Запись задачи", captureRecordDetails: "Техническая запись задачи",
+    captureSubmittedLabel: "Отправлено", captureSavingLabel: "Сохраняется",
+    captureSaving: "Сохраняем задачу. Сохранение пока не подтверждено.",
+    captureSubmitted: "Запрос получен. Проверяем, что задача сохранилась; добавлять её повторно не нужно.",
+    captureUnconfirmed: "Сохранение не подтверждено. Задача уже могла сохраниться; проверьте этот же запрос, не создавайте новый.",
+    captureNotSaved: "Этот запрос не подтвердил сохранение задачи. Проверьте его запись, прежде чем пробовать снова.",
+    captureSaved: "Задача сохранена", captureSavedDetail: "Добавлено в ваш список задач: «{stage}». Работа не запускалась.",
+    checkCapture: "Проверить сохранение", captureTextRequired: "Опишите задачу перед добавлением.",
     reviewBefore: "Проверьте перед действием", returnWorkspace: "Вернуться к работе",
     responsibilities: "Обязанности и выбранные проекты",
     areasIntro: "Сферы — постоянные обязанности. У проекта есть результат; запись в списке не означает активного обязательства.",
@@ -2130,6 +2269,7 @@ function initWorkspace() {
     }
   });
   document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) watchCaptureReceipt();
     if (!document.hidden) for (const poll of assist.polls.values()) {
       if (!poll.timer) scheduleReceiptPoll(poll);
     }
@@ -2149,6 +2289,9 @@ function translateWorkspace() {
   if ($("area-filter").options[0]) $("area-filter").options[0].textContent = t("allAreas");
   for (const id of ["quick-mic", "header-mic"]) $(id).setAttribute("aria-label", t(assist.recorder ? "stop" : "record"));
   renderSourceWarnings();
+  if (state.proposal) {
+    $("proposal-preview").replaceChildren(renderProposal(state.proposal));
+  }
 }
 function renderAssistUsage() {
   const usage = assist.usage;

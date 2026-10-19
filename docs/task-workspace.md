@@ -423,6 +423,7 @@ an empty template would instead default to the function name.
 | `/api/projects?offset=N` | GET | Bounded permitted project inventory |
 | `/api/history?offset=N` | GET | Ten source-revalidated proposal/result receipts per page |
 | `/api/task` | POST | Read one permitted canonical task from `{path}` |
+| `/api/capture-save` | POST | The owner form's Add task click authorizes this exact new Clarify capture; prepare, claim and publish through the existing ledger/writer |
 | `/api/capture`, `/api/refine`, `/api/change`, `/api/close` | POST | Prepare an exact action; no write until approval |
 | `/api/prepare` | POST | Prepare a bounded private-planning or public-research proposal |
 | `/api/decide` | POST | Approve/decline the exact proposal ID and action digest |
@@ -440,6 +441,55 @@ oversized payloads, stale revisions, and malformed identifiers are rejected.
 An API error says no success is confirmed; it never fabricates an empty live view.
 
 ## Capture, clarification, approval, publication
+
+The ordinary phone/desktop capture form is one step: type a rough request and
+click **Add task**. That deliberate owner-authenticated, origin/CSRF-checked POST
+to `/api/capture-save` is permission to save **only this new task**, not to perform
+the requested work. Multiple items and the original multiline text remain one
+task in Clarify. No model call or clarification questionnaire is needed. An
+omitted title uses the first meaningful line without list/heading markers; the
+capture text stays unchanged. The optional title, area, existing project,
+execution, outcome, next action and done
+condition still work; an `execution: agent` value is metadata, not permission to
+run. This route cannot set deadlines, move existing tasks, close/drop tasks,
+attach caller-supplied source evidence or authorize purchases/research.
+It does not depend on, enable or extend `MINDME_ASSIST_AUTO_APPLY`.
+
+The route reuses capture validation, the existing task request ledger and exact
+approval digest, the atomic claim, ActionGateway and memex's separate
+`publish_task` operation. The ledger records `approved_by: owner-capture` and a
+content-free `capture_save_digest` on the bounded request receipt. Repeating the
+same request recovers its original pinned proposal/action/publication IDs, even
+if the task contract has since changed; a different body or a legacy/source-bound
+request ID cannot acquire this permission. Source drift before the original claim
+still blocks execution. No unknown create operation is reexecuted. Post-claim
+errors remain unconfirmed (503), not field rejections permitting a new capture.
+
+The result shows the task title/request and a readable saving, submitted or
+unconfirmed status; technical action/receipts are collapsed. **Task saved**
+requires a completed operation, merged writer publication and a current canonical
+readback. Receipt of the request does not prove whether the task is already
+saved; the UI says it is checking, not that the task is definitely unsaved.
+Ordinary success copy says "Added to your task list"; publication details remain
+in the collapsed technical receipts. Submission, timeout or unavailable readback
+is not success. A displayed ordinary capture receipt gets at most six automatic
+same-receipt checks, at cumulative 2, 6, 14, 30, 62 and 122 seconds while idle and
+visible (2, 4, 8, 16, 32 and 60 seconds between checks). This allows ordinary
+publication to take over a minute without needing another owner click.
+Confirmation or a failed/invalidated/declined/expired receipt stops the checks.
+Closing the receipt or hiding the page pauses them without resetting the cap;
+sign-out/session expiry cancels them. An unconfirmed HTTP response requires explicit
+same-request recovery. **Check save status** remains an explicit way to
+reconcile that receipt. Reopening capture while its save is unresolved shows that
+receipt instead of a replacement form. A lost initial HTTP response retains the
+exact request and input for **Recover the same request**; validation failure or an
+incomplete receipt never resets the form. All browser state is session-only and
+clears on sign-out/expiry; after reentry inspect Activity rather than recreate an
+unconfirmed capture.
+
+Legacy `/api/capture` remains prepare-only. **Make task** from Knowledge still
+uses `/api/dashboard/capture`, source revalidation and a separate exact approval;
+opening a finding or editing a suggestion is not the ordinary form's save intent.
 
 Telegram `/task` still forwards the original integer update/message/chat/from
 IDs to memex. A new task requires the enrolled DM owner; there is no sender
@@ -463,7 +513,8 @@ The original Capture stays untouched. Remaining gaps stay Clarify. Full form
 edits and collected answers still become an exact owner-reviewed proposal,
 not silently expanded scope or automatic activity.
 
-The web shows the complete action before approval. Approvals bind the source
+Apart from the explicitly authorized ordinary capture above, the web shows the
+complete action before separate approval. Approvals bind the source
 blob, exact action digest, persisted proposal and authenticated owner. The
 existing atomic claim precedes external effects. Stable request/action IDs
 prevent duplicate writes; a different body cannot reuse an ID.

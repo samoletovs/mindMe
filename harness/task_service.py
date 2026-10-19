@@ -329,7 +329,7 @@ class TaskService:
 
     def _save(
         self, source: dict[str, Any], action: dict[str, Any], kind: str, request_id: str, today: date,
-        *, dashboard_source: bool = False,
+        *, dashboard_source: bool = False, capture_save_digest: str | None = None,
     ) -> dict[str, Any]:
         request_id = _identifier(request_id)
         request_key = fingerprint(["task-request", request_id])
@@ -350,6 +350,8 @@ class TaskService:
         }
         if dashboard_source:
             record["dashboard_source"] = True
+        if capture_save_digest is not None:
+            record["approved_by"] = "owner-capture"
         if kind == "close_task":
             record["closure_scan_protocol"] = 1
         if len(json.dumps(action, ensure_ascii=False).encode("utf-8")) > 6800:
@@ -359,21 +361,22 @@ class TaskService:
             data = workspace(state)
             previous = data["requests"].get(request_key)
             if previous:
-                if previous["digest"] != digest:
+                if previous["digest"] != digest or previous.get("capture_save_digest") != capture_save_digest:
                     raise TaskError("task_request_conflict")
                 return copy.deepcopy(state["proposals"][previous["proposal_id"]])
             data["requests"][request_key] = {
                 "digest": digest, "status": "recorded", "proposal_id": identifier,
                 "created_on": today.isoformat(),
             }
+            if capture_save_digest is not None:
+                data["requests"][request_key]["capture_save_digest"] = capture_save_digest
             state["proposals"].setdefault(identifier, record)
             return copy.deepcopy(state["proposals"][identifier])
 
         return self._project_receipt(self.store.update(save), today)
 
-    def capture(
-        self, payload: dict[str, Any], today: date, *, source: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    @staticmethod
+    def _capture_action(payload: dict[str, Any]) -> dict[str, Any]:
         if set(payload) != {"request_id", "text", "definition"}:
             raise TaskError("task_request_invalid")
         _text(payload["text"], 2000, paragraph=False)
@@ -384,12 +387,59 @@ class TaskService:
         definition.setdefault("stage", "clarify")
         if definition["stage"] == "backlog" and (definition_gaps(definition) or definition.get("clarification_question")):
             raise TaskError("task_definition_incomplete")
-        self._project(definition)
+        return {"kind": "create_task", "text": text, "definition": definition}
+
+    def capture(
+        self, payload: dict[str, Any], today: date, *, source: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        action = self._capture_action(payload)
+        self._project(action["definition"])
         return self._save(
             source if source is not None else self._source("tasks/README.md"),
-            {"kind": "create_task", "text": text, "definition": definition},
+            action,
             "capture_task", payload["request_id"], today, dashboard_source=source is not None,
         )
+
+    def save_capture(self, payload: dict[str, Any], today: date) -> dict[str, Any]:
+        """The owner form authorizes only this exact new Clarify record."""
+        self._require_enabled()
+        action = self._capture_action(payload)
+        definition = action["definition"]
+        if (
+            definition["stage"] != "clarify"
+            or not definition.keys() <= {*DEFINITION_LIMITS, "area", "project", "stage", "execution"}
+        ):
+            raise TaskError("task_capture_scope_invalid")
+        request_id = _identifier(payload["request_id"])
+        capture_digest = fingerprint(["capture-save", action])
+        state = self.store.read()
+        previous = workspace(state)["requests"].get(fingerprint(["task-request", request_id]))
+        if previous:
+            saved = state["proposals"].get(previous.get("proposal_id"))
+            if previous.get("capture_save_digest") != capture_digest or not saved or saved.get("kind") != "capture_task":
+                raise TaskError("task_request_conflict")
+            # Recover the pinned receipt, not a new action against today's task contract.
+            record = self._project_receipt(saved, today)
+        else:
+            self._project(definition)
+            record = self._save(
+                self._source("tasks/README.md"), action, "capture_task", request_id, today,
+                capture_save_digest=capture_digest,
+            )
+        try:
+            if record["status"] == "pending":
+                return self.decide({
+                    "proposal_id": record["id"], "approval_digest": record["approval_digest"], "decision": "approve",
+                }, today)
+            if record["status"] in {"submitted", "executing", "uncertain"}:
+                return self.reconcile(record["id"], today)
+        except (TaskError, PlanError):
+            saved = self.store.read()["proposals"].get(record["id"], {})
+            if saved.get("action_id"):
+                # A post-claim failure is not a field rejection permitting a new capture.
+                raise TaskError("task_capture_unconfirmed") from None
+            raise
+        return record
 
     def _capture_recheck(self, record: dict[str, Any]) -> None:
         if not record.get("dashboard_source"):

@@ -107,13 +107,17 @@ disabled when `MINDME_DAILY_EVOLVE_ENABLED` is off. Missing/changed private
 receipts, expired windows, conflicting updates and persistence failures are
 explicit. A canonical-only feedback receipt is not a Telegram delivery.
 
-Making a task is separate:
+Making a task from a finding or source is separate:
 
 1. Select a finding or original source, then edit a capture.
 2. Review the exact record, including server-retained source paths, revisions
    and literal finding evidence in its context.
 3. Explicitly approve that exact action through TaskService.
 4. Observe the existing separate `publish_task` receipt and canonical readback.
+
+This source-derived flow keeps **Review capture** and its separate approval.
+The ordinary **Add task** form's [one-step save](task-workspace.md#capture-clarification-approval-publication)
+does not authorize dashboard suggestions or bypass their evidence checks.
 
 Weekly digests require selecting an original source first. Captures exceeding
 the existing context/action size bound fail explicitly; choose an individual
