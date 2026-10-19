@@ -1459,10 +1459,14 @@ async function start() {
     setConnection(isMockMode() ? "mock" : "personalWorkspace");
     $("quick-bar").hidden = false;
     checkSessionExpiry();
-    await Promise.all([loadOverview(), loadAssist()]);
-    if (generation !== state.sessionGeneration || !state.csrf) return;
-    if (!state.selected) closeDetail();
-    setView(location.hash.slice(1) || "today");
+    await Promise.all([
+      loadOverview().then(() => {
+        if (generation !== state.sessionGeneration || !state.csrf) return;
+        if (!state.selected) closeDetail();
+        setView(location.hash.slice(1) || "today");
+      }),
+      loadAssist(),
+    ]);
   } catch (error) {
     if (generation !== state.sessionGeneration) return;
     state.csrf = "";

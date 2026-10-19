@@ -353,8 +353,12 @@ def test_real_browser_layouts_and_task_chat(workspace_url, chromium, width, heig
       const priorities = new Set([...document.querySelectorAll('.priority-card')].map(n => n.dataset.path));
       return [...document.querySelectorAll('#today-work .task-row')].every(n => !priorities.has(n.dataset.path));
     }"""), "Additional attention must not repeat the priority cards"
-    for selector in ["#snapshot", ".priority-reason", ".status", ".focus-line .hint"]:
-        assert page.locator(selector).first.evaluate("(node) => parseFloat(getComputedStyle(node).fontSize)") >= 12
+    font_sizes = page.evaluate("""selectors => selectors.map(selector => {
+      const node = document.querySelector(selector);
+      return {selector, connected: Boolean(node?.isConnected),
+        size: node ? parseFloat(getComputedStyle(node).fontSize) : null};
+    })""", ["#snapshot", ".priority-reason", ".status", ".focus-line .hint"])
+    assert all(item["connected"] and item["size"] is not None and item["size"] >= 12 for item in font_sizes), font_sizes
     assert visible_panels(page) == ["today"]
     hero = page.locator("#hero-line").inner_text()
     assert "today" in hero, hero
@@ -478,6 +482,37 @@ def test_real_browser_ai_controls_do_not_wait_for_task_overview(workspace_url, c
         for route in pending:
             route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
         page.locator("#task-list .task-row").first.wait_for()
+    finally:
+        context.close()
+
+
+def test_real_browser_workspace_view_does_not_wait_for_ai_usage(workspace_url, chromium):
+    context = chromium.new_context(viewport={"width": 1440, "height": 1000})
+    page = context.new_page()
+    pending, calls = [], []
+
+    def respond(route):
+        operation = route.request.url.split("/api/tasks/api/")[1]
+        calls.append(operation)
+        if operation == "assist/usage":
+            pending.append(route)
+            return
+        status, body = api_fixture(operation)
+        route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
+
+    try:
+        page.route("**/api/tasks/api/**", respond)
+        page.goto(workspace_url + "#knowledge", wait_until="domcontentloaded")
+        page.locator("#knowledge-section").wait_for(state="visible", timeout=3000)
+        page.wait_for_function("document.querySelector('[data-view=\"knowledge\"]').getAttribute('aria-current') === 'page'")
+        assert pending
+        assert page.locator("#capture-open").is_visible()
+        assert page.locator("#header-mic").is_hidden()
+        assert any(operation.startswith("dashboard/inbox") for operation in calls)
+        status, body = api_fixture("assist/usage")
+        pending[0].fulfill(status=status, content_type="application/json", body=json.dumps(body))
+        page.locator("#header-mic").wait_for()
+        assert page.locator("#knowledge-section").is_visible()
     finally:
         context.close()
 
@@ -1155,12 +1190,23 @@ def test_real_browser_studio_sign_in(workspace_url, chromium, width, height, loc
     ("en-US", "dark"), ("en-US", "light"), ("ru-RU", "dark"), ("ru-RU", "light"),
 ])
 def test_real_browser_keyboard_focus_and_responsive_frame(workspace_url, chromium, width, locale, scheme):
+    from playwright.sync_api import TimeoutError as BrowserTimeout
+
     context = chromium.new_context(viewport={"width": width, "height": 1000 if width >= 1024 else 844},
                                    locale=locale, reduced_motion="reduce")
     page = context.new_page()
+    errors, failures = [], []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.on("requestfailed", lambda request: failures.append(request.url))
     page.goto(workspace_url + "?mock=1#tasks")
     page.locator("#briefing-open").wait_for(state="attached")
-    page.wait_for_function("!document.getElementById('command-open').hidden")
+    try:
+        page.wait_for_function("!document.getElementById('command-open').hidden")
+    except BrowserTimeout as error:
+        notices = page.evaluate("""() => Object.fromEntries(
+          ["notice", "access-message", "assist-usage", "connection"].map(
+            id => [id, document.getElementById(id).textContent]))""")
+        raise AssertionError(f"Mock workspace AI initialization failed: {notices}; errors={errors}; failed requests={failures}") from error
     if scheme == "light":
         page.locator("#theme-toggle").click()
     assert page.locator(".app-header").bounding_box()["height"] <= 100, "Normal text must not create an oversized header"

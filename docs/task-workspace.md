@@ -146,7 +146,8 @@ Provider failures are service errors, not invalid-request-ID errors; diagnostics
 record only the exception type, never the provider message or audio content.
 
 After sign-in, AI availability loads independently of the task overview, so a slow
-task inventory does not hide Copilot and microphone controls. **+Capture → Record
+task inventory does not hide Copilot and microphone controls. Slow or unavailable
+AI also does not delay the requested workspace view. **+Capture → Record
 a task** transcribes into the editable capture form, appending to any existing
 draft without replacing its title or details. It never sends an assist-chat
 instruction or creates a task automatically: the owner reviews the draft and
