@@ -390,11 +390,18 @@ screenshots; do not point it into the repository or use real tasks/audio.
 
 ## Routes
 
-`GET /` is a root-only, anonymous 302 redirect to the fixed relative `/api/tasks`
-path. It reads no configuration, sets no cookies and returns no task data.
-Non-root paths and other HTTP methods are not handled by that redirect. Task
-routes remain below `/api/tasks`; platform-anonymous declarations do not make
+By default (`MINDME_WEB_REDIRECT_ORIGINS` unset or empty), `GET /` is a root-only,
+anonymous 302 redirect to the fixed relative `/api/tasks` path. It loads no
+owner-auth configuration, sets no cookies and returns no task data. Non-root
+paths and other HTTP methods are not handled by that root binding. Task routes
+remain below `/api/tasks`; platform-anonymous declarations do not make
 authenticated task data public.
+
+With [opt-in canonical navigation](#configuration-and-release-gate), GET root,
+bookmarked shell and sign-in requests on an exact configured legacy HTTPS origin
+redirect to fixed canonical destinations without query data or cookies. The
+canonical root retains its relative redirect; canonical shell/sign-in behavior,
+static assets and non-navigation routes remain unchanged.
 
 The host HTTP `routePrefix` is empty so the root can be bound. Every existing HTTP
 route explicitly retains its `api/` prefix: health, Telegram, Function-key tools,
@@ -405,9 +412,10 @@ an empty template would instead default to the function name.
 
 | Route | Method | Result |
 |---|---|---|
-| `/` | GET | Fixed 302 redirect to `/api/tasks`, no cookies or data |
-| `/api/tasks` and `/assets/tasks.css`, `/assets/tasks.js`, `/assets/dashboard.js` | GET | Static shell only |
-| `/auth/login` | GET | Microsoft code+PKCE redirect |
+| `/` | GET | Default/canonical: relative 302 to `/api/tasks`; configured legacy: canonical shell redirect. No cookies or data |
+| `/api/tasks` | GET | Static shell; configured legacy navigation redirects to the canonical shell |
+| `/assets/tasks.css`, `/assets/tasks.js`, `/assets/dashboard.js` | GET | Static assets only, never redirected |
+| `/auth/login` | GET | Canonical Microsoft code+PKCE flow; configured legacy navigation first redirects to canonical sign-in |
 | `/auth/callback` | POST | Bounded form-post callback; exact owner validation |
 | `/auth/logout` | POST | CSRF-protected session revocation |
 | `/api/session` | GET | Authorized session CSRF token and expiry, no OAuth tokens/identity details |
