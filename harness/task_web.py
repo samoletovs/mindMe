@@ -193,7 +193,7 @@ def assist_error(error: TaskAssistError | AssistStoreError) -> tuple[str, int]:
     if isinstance(error, AssistStoreError) or code in {
         "assist_model_unavailable", "assist_model_output_invalid", "assist_model_usage_invalid",
         "assist_transcription_not_configured", "assist_transcription_invalid", "assist_configuration_invalid",
-        "assist_source_unavailable",
+        "assist_transcription_unavailable", "assist_source_unavailable",
     }:
         return "model_unavailable", 503
     return "assist_request_invalid", 422

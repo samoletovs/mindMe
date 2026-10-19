@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import math
 import re
 import uuid
@@ -21,6 +22,7 @@ from task_service import EDIT_FIELDS, TaskError, _text, validate_changes
 from task_sources import SourceError, task_path
 from task_state import AREAS, STAGES
 
+log = logging.getLogger(__name__)
 MAX_INPUT_CHARS = 4000
 MAX_OUTPUT_TOKENS = 2400
 MAX_CONTEXT_CHARS = 24000
@@ -1703,9 +1705,10 @@ class TaskAssist:
         try:
             try:
                 transcription = self.transcribe(audio, mime)
-            except TaskAssistError:
+            except (TaskAssistError, TaskError):
                 raise
-            except Exception:
+            except Exception as error:
+                log.warning("task assist transcription failed error=%s", type(error).__name__)
                 raise TaskAssistError("assist_transcription_unavailable") from None
             if not isinstance(transcription, dict) or set(transcription) - {
                 "text", "language", "duration_s", "usage",

@@ -34,7 +34,7 @@ const state = {
   csrf: "", view: "today", layout: "board", items: [], overview: null, selected: null,
   tab: "overview", busy: false, unknown: null, proposal: null, clarification: null,
   loading: false, detailGeneration: 0, detailIntent: 0, sessionGeneration: 0, authExpires: 0, expiryTimer: null,
-  captureSource: null, captureReceipt: null, capturePoll: null,
+  captureSource: null, captureReceipt: null, capturePoll: null, captureGeneration: 0,
   snapshotCheckedAt: 0, manualDraft: null, manualDraftInvalidated: false,
 };
 const MANUAL_FORMS = ["definition-form", "date-form", "prepare-form", "completion-form", "clarification-form"];
@@ -128,6 +128,7 @@ function setBusy(value) {
   });
   $("recover-request").disabled = value;
   setConnection(value ? "workingRequest" : state.csrf ? (isMockMode() ? "mock" : "personalWorkspace") : "signedOut");
+  renderCaptureVoice();
 }
 function writeButton(text, action, className = "") {
   const node = button(text, action, className);
@@ -1394,6 +1395,7 @@ function clearData() {
   state.detailIntent += 1;
   state.csrf = ""; state.items = []; state.overview = null; state.selected = null;
   state.proposal = null; state.clarification = null; state.unknown = null;
+  state.captureGeneration += 1;
   state.captureSource = null; state.snapshotCheckedAt = 0;
   for (const key of Object.keys(focusOrigins)) focusOrigins[key] = null;
   $("capture-context").textContent = "";
@@ -1437,6 +1439,7 @@ function checkSessionExpiry() {
 async function start() {
   initWorkspace();
   clearData();
+  const generation = state.sessionGeneration;
   $("access").hidden = false;
   $("workspace").hidden = true;
   $("sign-in").hidden = true;
@@ -1445,6 +1448,7 @@ async function start() {
   setConnection("checkingSignIn");
   try {
     const session = await api("session");
+    if (generation !== state.sessionGeneration) return;
     if (session.authenticated !== true || typeof session.csrf !== "string" || !session.csrf
       || !Number.isFinite(session.expires) || session.expires * 1000 <= Date.now()) throw new Error("The owner session could not be verified. Sign in again.");
     state.csrf = session.csrf;
@@ -1455,11 +1459,12 @@ async function start() {
     setConnection(isMockMode() ? "mock" : "personalWorkspace");
     $("quick-bar").hidden = false;
     checkSessionExpiry();
-    await loadOverview();
+    await Promise.all([loadOverview(), loadAssist()]);
+    if (generation !== state.sessionGeneration || !state.csrf) return;
     if (!state.selected) closeDetail();
     setView(location.hash.slice(1) || "today");
-    await loadAssist();
   } catch (error) {
+    if (generation !== state.sessionGeneration) return;
     state.csrf = "";
     setAccessMessage(error.status === 401 ? "signInPrompt" : "", errorMessage(error));
     $("sign-in").hidden = ![401, 403].includes(error.status);
@@ -1498,6 +1503,7 @@ window.addEventListener("focus", checkSessionExpiry);
 window.addEventListener("pageshow", checkSessionExpiry);
 function beginSourceCapture(source, finding) {
   if (captureEntryBlocked()) return;
+  invalidateCaptureVoice();
   state.captureSource = { id: source.id, revision: source.revision, finding: finding?.id || null };
   $("capture-form").reset();
   const text = finding?.next_step || t("sourceCaptureRequest", { title: source.title });
@@ -1517,14 +1523,21 @@ function openCapture() {
     $(id).dataset.i18n = key;
     $(id).textContent = t(key);
   }
-  if ($("capture-section").hidden) focusOrigins.capture = document.activeElement;
+  if ($("capture-section").hidden) {
+    focusOrigins.capture = document.activeElement;
+    state.captureGeneration += 1;
+  }
   $("capture-section").hidden = false;
+  renderCaptureVoice();
   $("capture-text").focus();
   $("capture-section").scrollIntoView({ block: "start" });
 }
 $("capture-open").addEventListener("click", () => {
   if (captureEntryBlocked()) return;
-  if (state.captureSource) $("capture-form").reset();
+  if (state.captureSource) {
+    invalidateCaptureVoice();
+    $("capture-form").reset();
+  }
   state.captureSource = null;
   $("capture-context").hidden = true;
   openCapture();
@@ -1542,6 +1555,7 @@ function captureEntryBlocked() {
   return false;
 }
 function closeCapture() {
+  invalidateCaptureVoice();
   if (!state.busy && !state.unknown) {
     if (state.captureSource) $("capture-form").reset();
     state.captureSource = null;
@@ -1552,6 +1566,8 @@ function closeCapture() {
   focusOrigins.capture = null;
 }
 $("capture-cancel").addEventListener("click", closeCapture);
+$("capture-mic").addEventListener("click", () => toggleVoice("capture"));
+$("capture-text").addEventListener("input", renderCaptureVoice);
 $("proposal-close").addEventListener("click", () => {
   clearTimeout(state.capturePoll?.timer);
   if (state.capturePoll) state.capturePoll.timer = null;
@@ -1566,6 +1582,7 @@ $("capture-form").addEventListener("submit", (event) => {
   if (captureEntryBlocked()) return;
   const form = new FormData(event.currentTarget);
   const text = String(form.get("text") || "");
+  if (Array.from(text).length > 2000) { showNotice(t("captureTooLong"), "error"); return; }
   const firstLine = text.split(/\r?\n/)
     .map((line) => line.trim().replace(/^(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+|>\s*)/, "").trim())
     .find(Boolean) || "";
@@ -1882,6 +1899,10 @@ const COPY = {
     executeStep: "Execute", resolveStep: "Resolve", learnStep: "Learn",
     stepHelp: "Prepare this AI step. A completed definition is not proof of completed work.",
     record: "Record voice instruction", stop: "Stop recording", recording: "Listening · tap to finish",
+    captureRecord: "Record a task", voicePermission: "Waiting for microphone permission…",
+    captureVoiceHint: "Speak in English or Russian. The transcript fills this draft; review it before creating a task.",
+    captureVoiceReady: "Transcript added to your draft. Edit it, then choose {action}. No task has been created.",
+    captureTooLong: "Your draft exceeds 2,000 characters. Nothing was cut off; shorten it before reviewing the capture.",
     finishVoice: "Finish the voice recording before starting another request.",
     voiceSourceChanged: "The task changed while recording or recovering. Review the transcript draft against the current source before sending it.",
     voiceTypeFallback: "You can type your instruction instead. No voice instruction was sent.",
@@ -2142,6 +2163,10 @@ const COPY = {
     executeStep: "Выполнить", resolveStep: "Завершить", learnStep: "Усвоить",
     stepHelp: "Подготовить этот шаг с ИИ. Полное описание не означает выполненную работу.",
     record: "Записать голосовое поручение", stop: "Остановить запись", recording: "Слушаю · нажмите для завершения",
+    captureRecord: "Записать задачу голосом", voicePermission: "Ожидаю разрешения на микрофон…",
+    captureVoiceHint: "Говорите по-русски или по-английски. Расшифровка заполнит черновик; проверьте его перед созданием задачи.",
+    captureVoiceReady: "Расшифровка добавлена в черновик. Отредактируйте её и нажмите «{action}». Задача ещё не создана.",
+    captureTooLong: "В черновике больше 2 000 символов. Текст не обрезан; сократите его перед проверкой записи.",
     finishVoice: "Завершите запись голоса перед новым запросом.",
     voiceSourceChanged: "Задача изменилась во время записи или восстановления. Проверьте черновик расшифровки по текущему источнику перед отправкой.",
     voiceTypeFallback: "Можно ввести поручение текстом. Голосовое поручение не отправлено.",
@@ -2244,7 +2269,7 @@ function initWorkspace() {
     toggleVoice(key);
   });
   $("copilot-dialog").addEventListener("close", () => {
-    if (assist.voiceKey === "global" || assist.acquiringVoice) { cancelVoice(); renderChats(); }
+    if (assist.voiceKey === "global") { cancelVoice(); renderChats(); }
     $("copilot-notice").textContent = ""; $("copilot-notice").hidden = true;
     restoreFocus(focusOrigins.copilot, matchMedia("(max-width: 1023px)").matches ? $("quick-chat") : $("command-open"));
     focusOrigins.copilot = null;
@@ -2326,6 +2351,7 @@ async function loadAssist() {
   }
   document.querySelectorAll(".ai-feature").forEach((node) => { node.hidden = !assist.available; });
   if (state.selected?.revision) renderDetail();
+  renderChats();
 }
 function clearAssist() {
   cancelVoice();
@@ -2369,7 +2395,31 @@ function buildStepRail(task) {
   }
   return rail;
 }
+function invalidateCaptureVoice() {
+  state.captureGeneration += 1;
+  if (assist.voiceKey === "capture" || assist.processingVoice === "capture") {
+    cancelVoice();
+    renderChats();
+  }
+}
+function renderCaptureVoice() {
+  const active = assist.voiceKey === "capture";
+  const recording = active && Boolean(assist.recorder);
+  const busy = state.busy || Boolean(state.unknown) || Boolean(assist.processingVoice)
+    || Boolean(assist.recorder) || assist.acquiringVoice;
+  $("capture-mic").disabled = !assist.available || (busy && !recording);
+  $("capture-mic").setAttribute("aria-pressed", String(recording));
+  $("capture-voice-label").textContent = t(recording ? "stop" : "captureRecord");
+  $("capture-voice-status").textContent = t(
+    active && assist.acquiringVoice ? "voicePermission" : recording ? "recording"
+      : assist.processingVoice === "capture" ? "transcribing"
+        : Array.from($("capture-text").value).length > 2000 ? "captureTooLong" : "captureVoiceHint",
+  );
+  const submit = $("capture-form").querySelector("button[type=submit]");
+  if (submit) submit.disabled = busy;
+}
 function renderChats() {
+  renderCaptureVoice();
   for (const id of ["quick-mic", "header-mic"]) {
     $(id).setAttribute("aria-pressed", String(Boolean(assist.recorder)));
     $(id).setAttribute("aria-label", t(assist.recorder ? "stop" : "record"));
@@ -2716,8 +2766,11 @@ async function toggleVoice(key) {
   if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") { showNotice(t("voiceUnsupported"), "error"); return; }
   const generation = ++assist.voiceGeneration;
   const session = state.sessionGeneration;
+  const captureGeneration = state.captureGeneration;
   const sourceAtCapture = taskReference(key);
   assist.acquiringVoice = true;
+  assist.voiceKey = key;
+  renderChats();
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     if (generation !== assist.voiceGeneration || session !== state.sessionGeneration) { stream.getTracks().forEach((track) => track.stop()); return; }
@@ -2746,20 +2799,37 @@ async function toggleVoice(key) {
       let transcription = null;
       await mutate("assist/voice", { audio, request_id: assistRequestId() }, async (result) => {
         if (typeof result.text !== "string" || !result.text.trim()) throw new Error(t("voiceEmpty"));
-        threadFor(key).draft = result.text;
+        if (session !== state.sessionGeneration || generation !== assist.voiceGeneration) return;
+        if (key === "capture") {
+          if (captureGeneration !== state.captureGeneration || $("capture-section").hidden) return;
+          const draft = $("capture-text");
+          draft.value = draft.value ? `${draft.value}\n${result.text}` : result.text;
+        } else threadFor(key).draft = result.text;
         transcription = result.text;
       }, async () => {
+        if (session !== state.sessionGeneration || generation !== assist.voiceGeneration) return;
         assist.processingVoice = false;
         renderChats();
-        if (session !== state.sessionGeneration) return;
+        if (!transcription) return;
+        if (key === "capture") {
+          if (captureGeneration === state.captureGeneration && !$("capture-section").hidden) {
+            const tooLong = Array.from($("capture-text").value).length > 2000;
+            showNotice(t(tooLong ? "captureTooLong" : "captureVoiceReady", {
+              action: t(state.captureSource ? "reviewCapture" : "addTask"),
+            }), tooLong ? "error" : "");
+          }
+          return;
+        }
         const sourceNow = taskReference(key);
         if (sourceAtCapture && (sourceNow?.path !== sourceAtCapture.path || sourceNow?.revision !== sourceAtCapture.revision)) {
           showNotice(t("voiceSourceChanged"), "pending"); return;
         }
         await sendChat(key, transcription, true);
       });
-      assist.processingVoice = false;
-      renderChats();
+      if (session === state.sessionGeneration && generation === assist.voiceGeneration) {
+        assist.processingVoice = false;
+        renderChats();
+      }
     });
     recorder.start(1000);
     assist.voiceTimer = setTimeout(() => { if (recorder.state === "recording") recorder.stop(); }, 60000);

@@ -119,6 +119,10 @@
           <p id="capture-context" class="notice" hidden></p>
           <form id="capture-form">
             <label for="capture-text" data-i18n="captureQuestion">What do you need to do?</label>
+            <div class="actions ai-feature" hidden>
+              <button id="capture-mic" class="quiet" type="button" aria-controls="capture-text" aria-pressed="false"><span class="mic-glyph" aria-hidden="true"></span><span id="capture-voice-label" data-i18n="captureRecord">Record a task</span></button>
+              <p id="capture-voice-status" class="hint" role="status" aria-live="polite" data-i18n="captureVoiceHint">Speak in English or Russian. The transcript fills this draft; review it before creating a task.</p>
+            </div>
             <textarea id="capture-text" name="text" rows="3" maxlength="2000" required placeholder="Describe the outcome or the question you want to resolve." data-i18n-placeholder="capturePlaceholder"></textarea>
             <label for="capture-title-input" data-i18n="optionalTitle">Title (optional)</label>
             <input id="capture-title-input" name="title" maxlength="120" placeholder="Leave blank to use the first line of your request" data-i18n-placeholder="titlePlaceholder">
