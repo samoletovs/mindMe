@@ -280,15 +280,18 @@ def test_redirect_configuration_is_exact_and_fails_closed(auth_env, value):
     assert failure.value.status == 503
 
 
-def test_navigation_alias_never_becomes_an_authentication_or_csrf_origin(identity, auth_env):
+@pytest.mark.parametrize("origin", [
+    "https://vault.synthetic.example", "https://VAULT.synthetic.example", "https://Synthetic.example",
+])
+def test_navigation_alias_or_host_case_never_becomes_an_authentication_or_csrf_origin(identity, auth_env, origin):
     auth_env["MINDME_WEB_REDIRECT_ORIGINS"] = "https://vault.synthetic.example"
     auth = identity[0]
     auth.config = AuthConfig.load(auth_env)
     for path in ("/api/tasks/auth/login", "/api/tasks/auth/callback", "/api/tasks/api/session"):
         with pytest.raises(AuthError, match="secure_origin_required"):
-            auth.check_transport("https://vault.synthetic.example" + path)
+            auth.check_transport(origin + path)
     with pytest.raises(AuthError, match="csrf_rejected"):
-        auth.csrf({"csrf": "synthetic"}, origin="https://vault.synthetic.example", token="synthetic")
+        auth.csrf({"csrf": "synthetic"}, origin=origin, token="synthetic")
 
 
 @pytest.mark.parametrize("collection,code", [
