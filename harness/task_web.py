@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, urlsplit
 
 import azure.functions as func
 import httpx
@@ -24,7 +24,7 @@ from dashboard_service import DashboardService
 from dashboard_sources import DashboardError
 from execution_budget import BudgetExceeded, execution_budget
 from knowledge_plan import KnowledgeError
-from task_auth import AuthError, TaskAuth
+from task_auth import AuthConfig, AuthError, TaskAuth
 from task_assist import TaskAssistError
 from task_assist_state import AssistStoreError
 from task_service import TaskError, TaskService
@@ -108,6 +108,47 @@ def response(data: object, status: int = 200, *, headers: dict[str, str] | None 
     )
 
 
+def _auth_error(error: AuthError) -> func.HttpResponse:
+    return response({
+        "error": str(error),
+        "message": ERROR_TEXT.get(str(error), "Sign-in could not be verified. Try signing in again."),
+    }, error.status)
+
+
+def navigation_redirect(req: func.HttpRequest, env: Mapping[str, str]) -> func.HttpResponse | None:
+    if req.method.upper() != "GET" or not env.get("MINDME_WEB_REDIRECT_ORIGINS", ""):
+        return None
+    try:
+        config = AuthConfig.load(env)
+        try:
+            parsed = urlsplit(req.url)
+        except ValueError:
+            raise AuthError("secure_origin_required", 400) from None
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if (
+            parsed.scheme != "https" or not req.url.startswith(origin)
+            or any(ord(char) <= 32 or char == "\\" for char in req.url)
+        ):
+            raise AuthError("secure_origin_required", 400)
+        if origin == config.origin:
+            return None
+        target = {
+            "/": "/api/tasks",
+            "/api/tasks": "/api/tasks",
+            "/api/tasks/": "/api/tasks",
+            "/api/tasks/auth/login": "/api/tasks/auth/login",
+            "/api/tasks/auth/login/": "/api/tasks/auth/login",
+        }.get(parsed.path or "/")
+        if origin not in config.redirect_origins or target is None:
+            raise AuthError("secure_origin_required", 400)
+        # No query is copied; omitting a fragment lets browsers retain bookmark navigation.
+        return func.HttpResponse("", status_code=302, headers={
+            **SECURITY_HEADERS, "Location": config.origin + target,
+        })
+    except AuthError as error:
+        return _auth_error(error)
+
+
 def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result = {}
     for key, value in pairs:
@@ -172,7 +213,7 @@ class TaskWeb:
             with execution_budget(120):
                 return self._handle(req, path.strip("/"))
         except AuthError as error:
-            return response({"error": str(error), "message": ERROR_TEXT.get(str(error), "Sign-in could not be verified. Try signing in again.")}, error.status)
+            return _auth_error(error)
         except (TaskAssistError, AssistStoreError) as error:
             code, status = assist_error(error)
             log.warning("task assist rejected code=%s", code)
@@ -203,6 +244,10 @@ class TaskWeb:
 
     def _handle(self, req: func.HttpRequest, path: str) -> func.HttpResponse:
         method = req.method.upper()
+        if path in {"", "auth/login"}:
+            redirected = navigation_redirect(req, self.env)
+            if redirected is not None:
+                return redirected
         if path in {"", "assets/tasks.css", "assets/tasks.js", "assets/dashboard.js"}:
             if method != "GET":
                 return response({"error": "method_not_allowed"}, 405)

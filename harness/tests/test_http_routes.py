@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 from unittest.mock import Mock
+from urllib.parse import urlsplit
 
 import azure.functions as func
 import pytest
 
 import function_app as fa
+from task_auth import AuthConfig
+from test_task_auth import auth_env, identity
 
 ROOT_TEMPLATE = "{ignored:maxlength(0)?}"
 EXPECTED_HTTP = {
@@ -66,11 +70,12 @@ def test_root_matcher_is_optional_zero_length_not_a_catch_all_or_function_name_f
     "https://synthetic.example/",
     "https://synthetic.example/?next=https://untrusted.example/",
 ])
-def test_root_redirect_is_relative_fixed_and_does_not_read_auth_settings_or_set_cookies(monkeypatch, url):
+def test_root_without_aliases_is_relative_fixed_and_does_not_load_auth_or_set_cookies(monkeypatch, url):
     unavailable = Mock(side_effect=AssertionError("Root redirect must not consult services or configuration"))
     monkeypatch.setattr(fa, "_task_web", unavailable)
     monkeypatch.setattr(fa, "_task_auth", unavailable)
-    monkeypatch.setattr(fa, "os", None)
+    monkeypatch.delenv("MINDME_WEB_REDIRECT_ORIGINS", raising=False)
+    monkeypatch.setattr(AuthConfig, "load", unavailable)
     response = fa.task_site_root(func.HttpRequest(method="GET", url=url, body=b""))
     assert response.status_code == 302
     assert response.headers["Location"] == "/api/tasks"
@@ -78,6 +83,147 @@ def test_root_redirect_is_relative_fixed_and_does_not_read_auth_settings_or_set_
     assert response.get_body() == b""
     assert "Set-Cookie" not in response.headers
     unavailable.assert_not_called()
+
+
+@pytest.fixture
+def redirect_env(monkeypatch, auth_env):
+    auth_env.update(
+        MINDME_WEB_ORIGIN="https://mindme.synthetic.example",
+        MINDME_WEB_REDIRECT_ORIGINS="https://vault.synthetic.example",
+    )
+    for name, value in auth_env.items():
+        monkeypatch.setenv(name, value)
+    forbidden = Mock(side_effect=AssertionError("Redirects must not consult auth or task services"))
+    monkeypatch.setattr(fa, "_task_auth", forbidden)
+    monkeypatch.setattr(fa, "_task_service", forbidden)
+    return forbidden
+
+
+@pytest.mark.parametrize("path", ["", "/"])
+def test_legacy_site_root_uses_canonical_shell_without_query_or_cookie(redirect_env, path):
+    response = fa.task_site_root(func.HttpRequest(
+        method="GET",
+        url="https://vault.synthetic.example" + path + "?next=https://attacker.example/&code=synthetic-code&access_token=synthetic-token",
+        headers={"Cookie": "synthetic-cookie", "X-Forwarded-Host": "attacker.example"}, body=b"",
+    ))
+    assert response.status_code == 302
+    assert response.headers["Location"] == "https://mindme.synthetic.example/api/tasks"
+    assert response.headers["Cache-Control"] == "no-store, private"
+    assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert "Set-Cookie" not in response.headers and response.get_body() == b""
+    redirect_env.assert_not_called()
+
+
+def test_canonical_root_keeps_its_existing_relative_shell_redirect(redirect_env):
+    response = fa.task_site_root(func.HttpRequest(method="GET", url="https://mindme.synthetic.example/", body=b""))
+    assert response.status_code == 302 and response.headers["Location"] == "/api/tasks"
+    redirect_env.assert_not_called()
+
+
+@pytest.mark.parametrize("url", [
+    "http://vault.synthetic.example/", "https://unlisted.synthetic.example/",
+    "https://vault.synthetic.example.evil.example/", "https://user@vault.synthetic.example/",
+])
+def test_configured_root_denies_unlisted_or_insecure_actual_origins(redirect_env, url):
+    response = fa.task_site_root(func.HttpRequest(
+        method="GET", url=url, body=b"",
+        headers={"Host": "vault.synthetic.example", "X-Forwarded-Host": "vault.synthetic.example",
+                 "X-Forwarded-Proto": "https"},
+    ))
+    assert response.status_code == 400 and json.loads(response.get_body())["error"] == "secure_origin_required"
+    assert "Location" not in response.headers
+    redirect_env.assert_not_called()
+
+
+def test_root_does_not_redirect_post_even_when_called_outside_the_get_only_binding(redirect_env):
+    response = fa.task_site_root(func.HttpRequest(method="POST", url="https://vault.synthetic.example/", body=b""))
+    assert response.status_code == 405 and "Location" not in response.headers
+    redirect_env.assert_not_called()
+
+
+def test_root_rejects_malformed_redirect_configuration_explicitly(redirect_env, monkeypatch):
+    monkeypatch.setenv("MINDME_WEB_REDIRECT_ORIGINS", "https://vault.synthetic.example/")
+    response = fa.task_site_root(func.HttpRequest(method="GET", url="https://vault.synthetic.example/", body=b""))
+    assert response.status_code == 503 and json.loads(response.get_body())["error"] == "auth_configuration_invalid"
+    assert "Location" not in response.headers
+    redirect_env.assert_not_called()
+
+
+@pytest.mark.parametrize("path", ["", "auth/login"])
+@pytest.mark.asyncio
+async def test_real_task_route_adapters_redirect_legacy_shell_and_login_without_services(redirect_env, path):
+    req = func.HttpRequest(
+        method="GET", url="https://vault.synthetic.example/api/tasks" + ("/" + path if path else ""),
+        route_params={"path": path}, body=b"",
+    )
+    response = await (fa.task_web_route(req) if path else fa.task_web_root(req))
+    assert response.status_code == 302
+    assert response.headers["Location"] == "https://mindme.synthetic.example/api/tasks" + ("/" + path if path else "")
+    redirect_env.assert_not_called()
+
+
+@pytest.mark.parametrize(("path", "fragment"), [
+    ("/", "today"), ("/", "needs"),
+    ("/api/tasks", "knowledge"), ("/api/tasks/", "tasks"),
+    ("/api/tasks", "areas"), ("/api/tasks/auth/login", "activity"),
+])
+@pytest.mark.asyncio
+async def test_browser_retains_bookmark_fragment_but_not_queries_or_legacy_cookies(redirect_env, path, fragment):
+    playwright = pytest.importorskip("playwright.async_api")
+    legacy, canonical = "https://vault.synthetic.example", "https://mindme.synthetic.example"
+    async with playwright.async_playwright() as runtime:
+        try:
+            browser = await runtime.chromium.launch()
+        except playwright.Error as error:
+            if "Executable doesn't exist" in str(error):
+                pytest.skip("Optional Playwright browser is not installed")
+            raise
+        context = await browser.new_context()
+        try:
+            await context.add_cookies([{
+                "name": "__Host-mindme-session", "value": "synthetic-cookie", "url": legacy + "/",
+                "secure": True, "httpOnly": True, "sameSite": "Lax",
+            }])
+            page = await context.new_page()
+            seen = []
+            page.on("request", lambda request: seen.append(request))
+            cdp = await context.new_cdp_session(page)
+
+            async def serve(event):
+                request = event["request"]
+                parsed = urlsplit(request["url"])
+                if parsed.netloc == "vault.synthetic.example":
+                    req = func.HttpRequest(
+                        method=request["method"], url=request["url"], headers=request["headers"], body=b"",
+                    )
+                    result = fa.task_site_root(req) if parsed.path == "/" else fa._task_web().handle(
+                        req, parsed.path.removeprefix("/api/tasks").strip("/"),
+                    )
+                elif parsed.netloc == "mindme.synthetic.example":
+                    result = func.HttpResponse("<title>Synthetic canonical portal</title>", mimetype="text/html")
+                else:
+                    result = func.HttpResponse("", status_code=403)
+                await cdp.send("Fetch.fulfillRequest", {
+                    "requestId": event["requestId"], "responseCode": result.status_code,
+                    "responseHeaders": [{"name": name, "value": value} for name, value in result.headers.items()],
+                    "body": base64.b64encode(result.get_body()).decode("ascii"),
+                })
+
+            # Intercept every hop: ordinary Playwright routing covers only the first redirect URL.
+            cdp.on("Fetch.requestPaused", serve)
+            await cdp.send("Fetch.enable", {"patterns": [{"urlPattern": "*"}]})
+            await page.goto(legacy + path + "?code=synthetic-code&next=https://attacker.example/#" + fragment)
+            target = "/api/tasks/auth/login" if path.endswith("auth/login") else "/api/tasks"
+            assert page.url == canonical + target + "#" + fragment
+            assert len(seen) == 2 and not urlsplit(seen[1].url).query
+            headers = await seen[1].all_headers()
+            assert "cookie" not in headers and "referer" not in headers
+            assert [cookie["name"] for cookie in await context.cookies(legacy)] == ["__Host-mindme-session"]
+            assert await context.cookies(canonical) == []
+            redirect_env.assert_not_called()
+        finally:
+            await context.close()
+            await browser.close()
 
 
 @pytest.mark.parametrize(("method", "suffix"), [

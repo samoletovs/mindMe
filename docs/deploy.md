@@ -46,6 +46,50 @@ required. A larger spend needs its separate justification/approval.
 Rollback disables the two new flags. Preserve the existing private ledger and
 writer receipts so uncertain operations cannot be replayed as new tasks.
 
+## Canonical portal domain cutover
+
+The optional legacy navigation redirect does not provision DNS, TLS or an
+identity registration. The release coordinator owns those live changes and the
+code deployment. Keep one auth/data/action origin, not a multi-origin cookie or
+proxy arrangement. Use this ordering for the approved move from
+`https://vault.naurolabs.com` to `https://mindme.naurolabs.com`:
+
+1. Independently review the narrow routing change, run the focused auth/web/HTTP
+   regressions and privacy audit, and publish through the checked PR process.
+   A merge or passing workflow is not a deployment.
+2. Verify the personal Azure identity and existing budget before any live
+   deployment. Stage the new DNS ownership records, hostname binding and valid
+   HTTPS certificate on the existing Function App. Retain the legacy hostname
+   and certificate; no new hosting plan, model or public storage is needed.
+3. Add the exact Web callback
+   `https://mindme.naurolabs.com/api/tasks/auth/callback` to the existing personal
+   confidential registration before switching origins. Preserve prior callbacks
+   during the transition; do not change owner, audience, permissions, secrets,
+   cookie key, or global EasyAuth.
+4. Deploy the reviewed code while `MINDME_WEB_ORIGIN=https://vault.naurolabs.com`
+   and `MINDME_WEB_REDIRECT_ORIGINS` is unset/empty. Verify existing navigation.
+   Do not list the current canonical origin as its own redirect alias.
+5. Switch these two runtime settings together, only after the new host's HTTPS
+   and callback are ready:
+   `MINDME_WEB_ORIGIN=https://mindme.naurolabs.com` and
+   `MINDME_WEB_REDIRECT_ORIGINS=https://vault.naurolabs.com`.
+   Leave all other approved flags, identity settings, budgets, models, Telegram
+   and tool URLs unchanged. Old host-only cookies are not copied; the owner must
+   start a new sign-in on the canonical host. In-flight old-origin callbacks
+   are rejected and require a fresh sign-in, never code forwarding.
+6. Verify legacy root, bookmarked shell/fragments and sign-in GETs reach their
+   fixed canonical destinations without query data or cookies. Verify canonical
+   owner sign-in and CSRF, and that legacy POSTs/callbacks/data APIs are rejected
+   rather than replayed. Confirm existing Telegram/tool route contracts remain
+   unchanged without executing real work. Record the deployed commit and actual
+   live results separately from offline test evidence.
+
+To roll back the cutover, restore `MINDME_WEB_ORIGIN=https://vault.naurolabs.com`
+and clear `MINDME_WEB_REDIRECT_ORIGINS` together, keeping the old HTTPS binding
+and callback available. Do not delete auth/action receipts or share cookies to
+recover access. Remove obsolete identity callbacks or hostname bindings only
+in a separately approved cleanup, after the rollback window.
+
 ## AI task assistance rollout
 
 This release adds no resource, public storage, OAuth permission, identity role,

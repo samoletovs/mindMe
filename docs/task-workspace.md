@@ -390,11 +390,18 @@ screenshots; do not point it into the repository or use real tasks/audio.
 
 ## Routes
 
-`GET /` is a root-only, anonymous 302 redirect to the fixed relative `/api/tasks`
-path. It reads no configuration, sets no cookies and returns no task data.
-Non-root paths and other HTTP methods are not handled by that redirect. Task
-routes remain below `/api/tasks`; platform-anonymous declarations do not make
+By default (`MINDME_WEB_REDIRECT_ORIGINS` unset or empty), `GET /` is a root-only,
+anonymous 302 redirect to the fixed relative `/api/tasks` path. It loads no
+owner-auth configuration, sets no cookies and returns no task data. Non-root
+paths and other HTTP methods are not handled by that root binding. Task routes
+remain below `/api/tasks`; platform-anonymous declarations do not make
 authenticated task data public.
+
+With [opt-in canonical navigation](#configuration-and-release-gate), GET root,
+bookmarked shell and sign-in requests on an exact configured legacy HTTPS origin
+redirect to fixed canonical destinations without query data or cookies. The
+canonical root retains its relative redirect; canonical shell/sign-in behavior,
+static assets and non-navigation routes remain unchanged.
 
 The host HTTP `routePrefix` is empty so the root can be bound. Every existing HTTP
 route explicitly retains its `api/` prefix: health, Telegram, Function-key tools,
@@ -405,9 +412,10 @@ an empty template would instead default to the function name.
 
 | Route | Method | Result |
 |---|---|---|
-| `/` | GET | Fixed 302 redirect to `/api/tasks`, no cookies or data |
-| `/api/tasks` and `/assets/tasks.css`, `/assets/tasks.js`, `/assets/dashboard.js` | GET | Static shell only |
-| `/auth/login` | GET | Microsoft code+PKCE redirect |
+| `/` | GET | Default/canonical: relative 302 to `/api/tasks`; configured legacy: canonical shell redirect. No cookies or data |
+| `/api/tasks` | GET | Static shell; configured legacy navigation redirects to the canonical shell |
+| `/assets/tasks.css`, `/assets/tasks.js`, `/assets/dashboard.js` | GET | Static assets only, never redirected |
+| `/auth/login` | GET | Canonical Microsoft code+PKCE flow; configured legacy navigation first redirects to canonical sign-in |
 | `/auth/callback` | POST | Bounded form-post callback; exact owner validation |
 | `/auth/logout` | POST | CSRF-protected session revocation |
 | `/api/session` | GET | Authorized session CSRF token and expiry, no OAuth tokens/identity details |
@@ -681,7 +689,8 @@ signature and lifetime checks, never its value, timestamp or decrypted payload.
 | `MINDME_TASKS_ENABLED` | Default false; new task adapters/maintenance require the existing action-briefing flag too |
 | `MINDME_TASKS_TIMEZONE` | Required IANA owner calendar; no inferred zone or silent UTC default |
 | `MINDME_WEB_ENABLED` | Default false; static shell and Microsoft BFF routes |
-| `MINDME_WEB_ORIGIN` | Exact HTTPS origin of the existing host; no trailing slash or proxy-header inference |
+| `MINDME_WEB_ORIGIN` | One exact canonical HTTPS origin on the existing host; no trailing slash or proxy-header inference |
+| `MINDME_WEB_REDIRECT_ORIGINS` | Unset by default; comma-separated exact legacy HTTPS origins for portal GET navigation only, never additional auth/API origins |
 | `MINDME_WEB_TENANT_ID` | Explicit personal directory, never a work tenant or common authority |
 | `MINDME_WEB_CLIENT_ID` | Approved single-tenant confidential web app registration |
 | `MINDME_WEB_OWNER_OBJECT_ID` | Exact owner object ID in that directory, not a guessed consumer subject |
@@ -697,6 +706,40 @@ identity settings are reused. Never infer one Function route's key from another.
 The redirect URI is exactly `${MINDME_WEB_ORIGIN}/api/tasks/auth/callback`.
 Sign-in must produce one of the exact signed personal-provider `idp` values
 above for the configured owner. Email addresses are not authorization keys.
+
+For the canonical-domain cutover, the proposed settings are
+`MINDME_WEB_ORIGIN=https://mindme.naurolabs.com` and
+`MINDME_WEB_REDIRECT_ORIGINS=https://vault.naurolabs.com`. This is configuration
+guidance, not a claim that the cutover is deployed. The callback is then exactly
+`https://mindme.naurolabs.com/api/tasks/auth/callback`; no separate redirect-URI
+setting or second authentication origin is added.
+
+Origins must use lowercase ASCII hostnames (punycode for international names),
+without ports, credentials, wildcards, paths, trailing slashes, queries or
+fragments. Spaces around comma-separated entries are trimmed. Empty entries,
+duplicates and the canonical origin in the legacy list are invalid;
+misconfiguration returns the content-free `auth_configuration_invalid` error.
+An absent or empty setting retains the prior relative root redirect and public
+static shell behavior. Configured navigation requires the existing complete
+owner-auth configuration; missing configuration still fails closed.
+
+Only GET `/`, `/api/tasks`, `/api/tasks/`, `/api/tasks/auth/login` and its
+trailing-slash form redirect from a listed legacy origin. Destinations are fixed
+canonical shell/sign-in paths. All query parameters are discarded, including
+OAuth codes, state, tokens and caller-supplied return URLs. Redirect responses
+are non-cacheable, suppress the referrer, and neither read nor set cookies.
+No fragment is placed in `Location`, so browsers retain existing bookmarks such
+as `#needs`, `#tasks` and `#knowledge`; fragments remain browser-only navigation,
+not redirect destinations or authorization. The actual request URL must match
+an exact configured HTTPS origin; `Host`/forwarded headers do not grant access.
+Unlisted and HTTP navigation is rejected when this opt-in is configured.
+
+POSTs, OAuth callbacks, task/session/dashboard/assist APIs, static assets,
+Telegram and Function-key tools are not redirected or replayed. Auth/data/action
+routes still accept only `MINDME_WEB_ORIGIN`; owner checks and exact-origin CSRF
+are unchanged. `__Host-` cookies remain host-only and are not migrated or shared.
+Sign in afresh on the canonical host. An in-progress callback to the old origin
+fails closed after cutover rather than forwarding an authorization code.
 
 No infrastructure or provisioning helper is part of this implementation.
 Registration, the two secrets, HTTPS-only host configuration, runtime settings,
