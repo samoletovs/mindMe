@@ -151,6 +151,13 @@ def _load_openapi_spec(hostname: str) -> dict[str, Any]:
     return spec
 
 
+def _sampling(model: str) -> dict[str, Any]:
+    """gpt-6-luna agents reject temperature; other deployments keep the previous setting."""
+    if model.startswith("gpt-6-luna"):
+        return {"reasoning": Reasoning(effort="none")}
+    return {"temperature": 0.7}
+
+
 def _build_definition(
     model: str, hostname: str | None, connection_id: str | None = None
 ) -> tuple[PromptAgentDefinition, str, str]:
@@ -173,8 +180,8 @@ def _build_definition(
         definition = PromptAgentDefinition(
             model=model,
             instructions=SYSTEM_PROMPT_PHASE2,
-            reasoning=Reasoning(effort="none"),
             tools=[openapi_tool],
+            **_sampling(model),
         )
         return (
             definition,
@@ -185,7 +192,7 @@ def _build_definition(
     definition = PromptAgentDefinition(
         model=model,
         instructions=SYSTEM_PROMPT_PHASE1,
-        reasoning=Reasoning(effort="none"),
+        **_sampling(model),
     )
     return definition, "phase 1 (no tools)", "mindMe - personal companion. Phase 1 smoke test, no tools yet."
 

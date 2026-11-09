@@ -109,3 +109,13 @@ def test_companion_definition_targets_luna_without_sampling_overrides(monkeypatc
         assert definition.model == "gpt-6-luna"
         assert definition.temperature is None and definition.top_p is None
         assert definition.reasoning.effort == "none"
+    other, _, _ = create_agent._build_definition("existing-model", None)
+    assert other.temperature == 0.7 and other.reasoning is None
+
+
+def test_other_deployments_keep_the_existing_chat_request_shape(monkeypatch):
+    monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-model")
+    create = _capture(monkeypatch, "chat")
+    with pytest.raises(RuntimeError, match="captured"):
+        fa._generate_task_preparation({"source": {"text": "Synthetic task."}, "scope": "Outline only."})
+    assert "reasoning_effort" not in create.call_args.kwargs
