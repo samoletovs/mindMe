@@ -65,57 +65,96 @@ RESPONSES_PATHS = {
 }
 
 
-@pytest.mark.parametrize("name", sorted(RESPONSES_PATHS))
-def test_luna_responses_paths_disable_reasoning_and_never_send_max_tokens(monkeypatch, name):
+OLD_DEPLOYMENTS = {"MINDME_BRIEFING_MODEL": "gpt-4o-mini", "MINDME_KNOWLEDGE_MODEL": "gpt-4.1"}
+# Prompts carry a fresh random data fence per call; every other request parameter must match.
+PROMPT_KEYS = {"model", "input", "messages"}
+
+
+def _assert_luna_sampling_is_safe(body) -> None:
+    """gpt-6-luna returns HTTP 400 for temperature/top_p unless reasoning effort is none."""
+    get = body.get if isinstance(body, dict) else lambda key: getattr(body, key, None)
+    if get("temperature") is not None or get("top_p") is not None:
+        reasoning = get("reasoning")
+        effort = reasoning.get("effort") if isinstance(reasoning, dict) else getattr(reasoning, "effort", None)
+        assert get("reasoning_effort") == "none" or effort == "none"
+
+
+def _responses_body(monkeypatch, name, deployment):
     generate, setting, context = RESPONSES_PATHS[name]
-    monkeypatch.setenv(setting, "gpt-6-luna")
+    monkeypatch.setenv(setting, deployment)
     create = _capture(monkeypatch, "responses")
     with pytest.raises(RuntimeError, match="captured"):
         generate(context)
-    call = create.call_args.kwargs
-    assert call["model"] == "gpt-6-luna"
-    assert call["reasoning"] == {"effort": "none"}
-    assert call["max_output_tokens"] <= 2800
-    assert "max_tokens" not in call and "temperature" not in call and "top_p" not in call
+    return create.call_args.kwargs
 
 
-@pytest.mark.parametrize("name", sorted(RESPONSES_PATHS))
-def test_other_deployments_keep_the_existing_request_shape(monkeypatch, name):
-    generate, setting, context = RESPONSES_PATHS[name]
-    monkeypatch.setenv(setting, "existing-model")
-    create = _capture(monkeypatch, "responses")
-    with pytest.raises(RuntimeError, match="captured"):
-        generate(context)
-    assert "reasoning" not in create.call_args.kwargs
-
-
-def test_luna_task_preparation_uses_completion_token_ceiling_and_no_reasoning(monkeypatch):
-    monkeypatch.setenv("MINDME_BRIEFING_MODEL", "gpt-6-luna")
+def _chat_body(monkeypatch, deployment):
+    monkeypatch.setenv("MINDME_BRIEFING_MODEL", deployment)
     create = _capture(monkeypatch, "chat")
     with pytest.raises(RuntimeError, match="captured"):
         fa._generate_task_preparation({"source": {"text": "Synthetic task."}, "scope": "Outline only."})
-    call = create.call_args.kwargs
+    return create.call_args.kwargs
+
+
+@pytest.mark.parametrize("name", sorted(RESPONSES_PATHS))
+def test_luna_responses_paths_disable_reasoning_and_never_send_max_tokens(monkeypatch, name):
+    call = _responses_body(monkeypatch, name, "gpt-6-luna")
+    assert call["model"] == "gpt-6-luna"
+    assert call["reasoning"] == {"effort": "none"}
+    assert call["max_output_tokens"] <= 2800
+    assert "max_tokens" not in call
+    _assert_luna_sampling_is_safe(call)
+
+
+@pytest.mark.parametrize("name", sorted(RESPONSES_PATHS))
+def test_old_deployment_gets_the_same_responses_body_without_reasoning(monkeypatch, name):
+    setting = RESPONSES_PATHS[name][1]
+    luna = _responses_body(monkeypatch, name, "gpt-6-luna")
+    old = _responses_body(monkeypatch, name, OLD_DEPLOYMENTS[setting])
+    assert "reasoning" not in old and "max_tokens" not in old
+    assert old["model"] == OLD_DEPLOYMENTS[setting]
+    assert {k: v for k, v in old.items() if k not in PROMPT_KEYS} == {
+        k: v for k, v in luna.items() if k not in PROMPT_KEYS | {"reasoning"}
+    }
+
+
+def test_luna_task_preparation_uses_completion_token_ceiling_and_no_reasoning(monkeypatch):
+    call = _chat_body(monkeypatch, "gpt-6-luna")
     assert call["max_completion_tokens"] == 1200
     assert call["reasoning_effort"] == "none"
-    assert "max_tokens" not in call and "temperature" not in call
+    assert "max_tokens" not in call
+    _assert_luna_sampling_is_safe(call)
 
 
-def test_companion_definition_targets_luna_without_sampling_overrides(monkeypatch):
+def test_old_deployment_gets_the_same_chat_body_without_reasoning(monkeypatch):
+    luna = _chat_body(monkeypatch, "gpt-6-luna")
+    old = _chat_body(monkeypatch, "gpt-4o-mini")
+    assert "reasoning_effort" not in old and "max_tokens" not in old
+    assert old["max_completion_tokens"] == 1200
+    assert {k: v for k, v in old.items() if k not in PROMPT_KEYS} == {
+        k: v for k, v in luna.items() if k not in PROMPT_KEYS | {"reasoning_effort"}
+    }
+
+
+def test_companion_definition_keeps_temperature_and_disables_luna_reasoning(monkeypatch):
     spec = importlib.util.spec_from_file_location("create_agent", ROOT / "scripts" / "dev" / "create_agent.py")
     create_agent = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(create_agent)
     for hostname, connection in ((None, None), ("synthetic.example", "/connections/synthetic")):
         definition, _, _ = create_agent._build_definition("gpt-6-luna", hostname, connection)
         assert definition.model == "gpt-6-luna"
-        assert definition.temperature is None and definition.top_p is None
+        assert definition.temperature == 0.7 and definition.top_p is None
         assert definition.reasoning.effort == "none"
-    other, _, _ = create_agent._build_definition("existing-model", None)
-    assert other.temperature == 0.7 and other.reasoning is None
+        _assert_luna_sampling_is_safe(definition)
+    old, _, _ = create_agent._build_definition("gpt-4o-mini", None)
+    assert old.temperature == 0.7 and old.reasoning is None
 
 
-def test_other_deployments_keep_the_existing_chat_request_shape(monkeypatch):
-    monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-model")
-    create = _capture(monkeypatch, "chat")
-    with pytest.raises(RuntimeError, match="captured"):
-        fa._generate_task_preparation({"source": {"text": "Synthetic task."}, "scope": "Outline only."})
-    assert "reasoning_effort" not in create.call_args.kwargs
+@pytest.mark.parametrize("body", [
+    {"model": "gpt-6-luna", "temperature": 0.7},
+    {"model": "gpt-6-luna", "top_p": 0.9, "reasoning": {"effort": "low"}},
+    {"model": "gpt-6-luna", "temperature": 0.2, "reasoning_effort": "low"},
+])
+def test_luna_sampling_guard_rejects_temperature_without_reasoning_none(body):
+    with pytest.raises(AssertionError):
+        _assert_luna_sampling_is_safe(body)

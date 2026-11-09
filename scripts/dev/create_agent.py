@@ -152,9 +152,9 @@ def _load_openapi_spec(hostname: str) -> dict[str, Any]:
 
 
 def _sampling(model: str) -> dict[str, Any]:
-    """gpt-6-luna agents reject temperature; other deployments keep the previous setting."""
+    """Keep the companion's temperature; gpt-6-luna accepts it only with reasoning none."""
     if model.startswith("gpt-6-luna"):
-        return {"reasoning": Reasoning(effort="none")}
+        return {"temperature": 0.7, "reasoning": Reasoning(effort="none")}
     return {"temperature": 0.7}
 
 
