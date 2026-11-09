@@ -299,9 +299,10 @@ control can resolve after publication; no failed request is treated as approval.
 No new SDK, model deployment or infrastructure is required. The optional
 `MINDME_KNOWLEDGE_MODEL` selects an existing deployment only for explicit knowledge
 follow-ups, falling back to the briefing model when empty. The production recipe
-selects the existing `gpt-4.1`: live comparison found the smaller briefing model
-invented a conflict between complementary sources. Routine briefings keep their
-existing model. The template exposes this as `knowledgeModelDeployment`; do not
+originally selected `gpt-4.1` because the smaller briefing model invented a conflict
+between complementary sources. Both retire 2027-04-14; the recipe now selects
+`gpt-6-luna` for both after a synthetic complementary-sources check invented no
+conflict. The template exposes this as `knowledgeModelDeployment`; do not
 redeploy the infrastructure just to change this setting (see the rebuild caveat
 in the parameter file). Model calls remain on demand and bounded.
 
@@ -453,7 +454,7 @@ runtime reads. Legacy manifests without an inventory cannot certify freshness.
 ## Operating constraints
 
 - **Cost cap:** €5–10/month. Azure budget alert set at €8.
-- **Model:** `gpt-4o-mini` only.
+- **Model:** `gpt-6-luna` (routine, `reasoning: none`). `gpt-4o-mini`/`gpt-4.1` retire 2027-04-14.
 - **Region:** `swedencentral` (matches foundrylab-rg).
 - **Identity:** separate Telegram bot from `agentMode`. Allowlist of one. Never has access to family chat or Microsoft work account.
 
