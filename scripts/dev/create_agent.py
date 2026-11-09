@@ -40,6 +40,7 @@ from azure.ai.projects.models import (
     OpenApiProjectConnectionSecurityScheme,
     OpenApiTool,
     PromptAgentDefinition,
+    Reasoning,
 )
 from azure.core.exceptions import AzureError, ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
@@ -172,7 +173,7 @@ def _build_definition(
         definition = PromptAgentDefinition(
             model=model,
             instructions=SYSTEM_PROMPT_PHASE2,
-            temperature=0.7,
+            reasoning=Reasoning(effort="none"),
             tools=[openapi_tool],
         )
         return (
@@ -184,7 +185,7 @@ def _build_definition(
     definition = PromptAgentDefinition(
         model=model,
         instructions=SYSTEM_PROMPT_PHASE1,
-        temperature=0.7,
+        reasoning=Reasoning(effort="none"),
     )
     return definition, "phase 1 (no tools)", "mindMe - personal companion. Phase 1 smoke test, no tools yet."
 
@@ -204,7 +205,7 @@ def main() -> int:
 
     endpoint = os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
     agent_name = os.environ.get("AZURE_AI_AGENT_NAME", "companion")
-    model = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT", "gpt-4o-mini")
+    model = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT", "gpt-6-luna")
     function_hostname = os.environ.get("MINDME_FUNCTION_APP_HOSTNAME")
     connection_name = os.environ.get("MINDME_TOOLS_CONNECTION_NAME", "mindme-tools")
 

@@ -27,13 +27,15 @@ param foundryAccountName = 'foundrylab-aiservices'
 param foundryProjectName = 'mindMe'
 
 // Approved and live-verified production selection; the template default stays off.
+// The previous mini/4.1 deployments retire 2027-04-14; routine calls use gpt-6-luna.
 param actionBriefing = {
   enabled: true
-  modelDeployment: 'gpt-4o-mini'
+  modelDeployment: 'gpt-6-luna'
 }
 
-// Reuse the capture model for explicit source reasoning; keep routine briefings on mini.
-param knowledgeModelDeployment = 'gpt-4.1'
+// Explicit source reasoning uses the same routine deployment; a synthetic
+// complementary-sources check on gpt-6-luna invented no conflict (2026-11-09).
+param knowledgeModelDeployment = 'gpt-6-luna'
 
 // Daily mindVault review approved 2026-09-14; no work-vault scheduling.
 param dailyEvolveEnabled = true
