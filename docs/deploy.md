@@ -208,7 +208,7 @@ record the live sample and deployed/registered versions after rollout.
   idempotent. Final deployed runtime: `c0c7a719`, remote-built for Python 3.11.
 - Full local suites: **558 mindMe tests and 316 memex tests passed**. GitHub checks
   passed before each merge. Bicep and scoped central privacy checks passed.
-- `MINDME_ACTION_BRIEFING_ENABLED=true`, using the existing `gpt-4o-mini`
+- `MINDME_ACTION_BRIEFING_ENABLED=true`, using the existing `gpt-6-luna`
   deployment. `MEMEX_ACTION_URL` resolves the existing vault's `memex-action-url`
   secret with a dedicated function-scoped key, not a reused state-function key.
 - Health/auth checks passed: anonymous tools/action requests rejected, incorrect

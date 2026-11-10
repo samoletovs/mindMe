@@ -128,9 +128,11 @@ EUR 20/month or available credit is insufficient.
 
 Live evaluation found the small briefing model repeatedly invented a conflict
 between complementary DORA and code-review sources, despite valid quote IDs and
-explicit instructions. Explicit knowledge reasoning therefore selects the
-already-deployed `gpt-4.1` through `MINDME_KNOWLEDGE_MODEL`. Routine briefings keep
-their existing model. The optional setting falls back to the briefing model in
+explicit instructions. Explicit knowledge reasoning therefore selected the
+already-deployed `gpt-4.1` through `MINDME_KNOWLEDGE_MODEL`. Because `gpt-4.1` and
+`gpt-4o-mini` retire 2027-04-14, both settings now select `gpt-6-luna` with
+`reasoning: none`; a synthetic complementary-sources check on it invented no conflict.
+The optional setting falls back to the briefing model in
 unconfigured environments; the production Bicep recipe preserves the evaluated
 selection without provisioning any new deployment.
 

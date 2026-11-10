@@ -501,6 +501,7 @@ def test_canonical_feedback_can_be_delivered_later_without_generating_or_publish
     loop = DailyEvolve(
         store=feedback.store, sources=Mock(), generate=generate, publish=publish, send=send,
         revision=subject.repository.evidence_revision,
+        clock=lambda: datetime(TODAY.year, TODAY.month, TODAY.day, tzinfo=timezone.utc),
     )
     assert loop.run(TODAY) == "Knowledge review sent. No proposed work was approved."
     generate.assert_not_called()

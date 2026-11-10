@@ -72,7 +72,7 @@ no collaborators.
 | `log-mindme` | Log Analytics, PerGB2018, 30-day, 1 GB/day cap | Telemetry store |
 | `appi-mindme` | App Insights, workspace-based | Traces / metrics / logs |
 | `id-mindme` | User-assigned managed identity | Auth for Storage, Key Vault, Foundry |
-| Foundry project `mindMe` | Reuses `foundrylab-aiservices`, `gpt-4o-mini` | The `companion` agent |
+| Foundry project `mindMe` | Reuses `foundrylab-aiservices`, `gpt-6-luna` | The `companion` agent |
 
 > The original plan's Container Apps + PostgreSQL + Redis are **not deployed and
 > not needed.** mindMe is a single-user agent reading a few hundred markdown
@@ -233,7 +233,7 @@ actual mindMe footprint is far cheaper.
 | Key Vault (Standard) | A few hundred ops | ~€0 |
 | Log Analytics / App Insights | Light telemetry, 1 GB/day cap, 30-day retention | €0–3 |
 | Managed identity | — | €0 |
-| Foundry `gpt-4o-mini` | Briefing + occasional capture classification | low single-digit € |
+| Foundry `gpt-6-luna` | Briefing + occasional capture classification | low single-digit € |
 | **Total** | | **~€1–4/month** |
 
 - **Cost cap:** €5–10/month. Budget alert already set at **€8**.

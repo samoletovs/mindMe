@@ -155,6 +155,20 @@ def _foundry() -> tuple[AIProjectClient, OpenAI]:
     return _project, _openai
 
 
+ROUTINE_MODEL = "gpt-6-luna"
+
+
+def _routine_reasoning(model: str, *, chat: bool = False) -> dict:
+    """Ask the routine luna deployment for no reasoning; reasoning tokens bill as output.
+
+    Other deployments keep their exact existing request body, so an app still
+    pointed at an older deployment is unaffected until its setting is flipped.
+    """
+    if not model.startswith(ROUTINE_MODEL):
+        return {}
+    return {"reasoning_effort": "none"} if chat else {"reasoning": {"effort": "none"}}
+
+
 def _transcription_client(deployment: str) -> OpenAI:
     _, client = _foundry()
     # Audio uses the account's deployment API, not the project's OpenAI endpoint.
@@ -317,7 +331,7 @@ def _generate_evolve_review(context: dict) -> dict:
     response = client.with_options(
         timeout=bounded_timeout(45.0, stages=4), max_retries=0, http_client=_http_client(),
     ).responses.create(
-        model=model, store=False, max_output_tokens=2400,
+        model=model, store=False, max_output_tokens=2400, **_routine_reasoning(model),
         input=[
             {"type": "message", "role": "system", "content": (
                 TELEGRAM_VOICE + "\n"
@@ -429,6 +443,7 @@ def _generate_action_plan(context: dict) -> dict:
         model=model,
         store=False,
         max_output_tokens=2400 if weekly else 1600,
+        **_routine_reasoning(model),
         input=[
             {
                 "type": "message",
@@ -587,6 +602,7 @@ def _generate_task_preparation(context: dict) -> dict:
     nonce = secrets.token_hex(16)
     request = {
         "model": model, "store": False, "max_completion_tokens": 1200,
+        **_routine_reasoning(model, chat=True),
         "messages": [
             {"role": "system", "content": TELEGRAM_VOICE + "\n"
              "Prepare one modest offline draft for the exact owner-approved scope. You have no tools. "
@@ -623,7 +639,7 @@ def _generate_task_preparation(context: dict) -> dict:
         ) else "unclassified"
         parameter = error.param if error.param in (
             "response_format", "response_format.json_schema.schema", "messages",
-            "model", "max_completion_tokens", "store",
+            "model", "max_completion_tokens", "reasoning_effort", "store",
         ) else "unclassified"
         upstream_message = str(error).lower()
         reason = next((label for label, needles in (
@@ -935,7 +951,7 @@ def _generate_knowledge(context: dict) -> dict:
     response = client.with_options(
         timeout=bounded_timeout(45.0, stages=4), max_retries=0, http_client=_http_client(),
     ).responses.create(
-        model=model, store=False, max_output_tokens=2800,
+        model=model, store=False, max_output_tokens=2800, **_routine_reasoning(model),
         input=[
             {"type": "message", "role": "system", "content": (
                 TELEGRAM_VOICE + "\n" + KNOWLEDGE_DETAIL_GUIDANCE + "\n" +

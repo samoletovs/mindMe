@@ -40,6 +40,7 @@ from azure.ai.projects.models import (
     OpenApiProjectConnectionSecurityScheme,
     OpenApiTool,
     PromptAgentDefinition,
+    Reasoning,
 )
 from azure.core.exceptions import AzureError, ResourceNotFoundError
 from azure.identity import DefaultAzureCredential
@@ -150,6 +151,13 @@ def _load_openapi_spec(hostname: str) -> dict[str, Any]:
     return spec
 
 
+def _sampling(model: str) -> dict[str, Any]:
+    """Keep the companion's temperature; gpt-6-luna accepts it only with reasoning none."""
+    if model.startswith("gpt-6-luna"):
+        return {"temperature": 0.7, "reasoning": Reasoning(effort="none")}
+    return {"temperature": 0.7}
+
+
 def _build_definition(
     model: str, hostname: str | None, connection_id: str | None = None
 ) -> tuple[PromptAgentDefinition, str, str]:
@@ -172,8 +180,8 @@ def _build_definition(
         definition = PromptAgentDefinition(
             model=model,
             instructions=SYSTEM_PROMPT_PHASE2,
-            temperature=0.7,
             tools=[openapi_tool],
+            **_sampling(model),
         )
         return (
             definition,
@@ -184,7 +192,7 @@ def _build_definition(
     definition = PromptAgentDefinition(
         model=model,
         instructions=SYSTEM_PROMPT_PHASE1,
-        temperature=0.7,
+        **_sampling(model),
     )
     return definition, "phase 1 (no tools)", "mindMe - personal companion. Phase 1 smoke test, no tools yet."
 
@@ -204,7 +212,7 @@ def main() -> int:
 
     endpoint = os.environ.get("AZURE_AI_PROJECT_ENDPOINT")
     agent_name = os.environ.get("AZURE_AI_AGENT_NAME", "companion")
-    model = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT", "gpt-4o-mini")
+    model = os.environ.get("AZURE_AI_MODEL_DEPLOYMENT", "gpt-6-luna")
     function_hostname = os.environ.get("MINDME_FUNCTION_APP_HOSTNAME")
     connection_name = os.environ.get("MINDME_TOOLS_CONNECTION_NAME", "mindme-tools")
 

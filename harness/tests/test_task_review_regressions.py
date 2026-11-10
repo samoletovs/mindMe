@@ -318,7 +318,10 @@ def test_telegram_precheck_race_cannot_rebind_old_answer_during_cas():
     execute.assert_not_called()
 
 
-def test_missing_question_token_fails_closed_without_consuming_turn(logged_in):
+def test_missing_question_token_fails_closed_without_consuming_turn(monkeypatch, logged_in):
+    monkeypatch.setattr("task_web.datetime", Mock(now=Mock(return_value=datetime(
+        TODAY.year, TODAY.month, TODAY.day, tzinfo=timezone.utc,
+    ))))
     auth, cookie, csrf = logged_in
     subject, *_ = service(complete=False, stage="clarify")
     question = subject.clarification(PATH, REVISION, TODAY)
