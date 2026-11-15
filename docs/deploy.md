@@ -438,9 +438,9 @@ regression tests. No flag, setting or timer changes.
    transcribes again. Release is best effort and logs only the error class. A failure in an
    earlier handler (assist, task, review, proposal or knowledge reply) keeps the marker on
    purpose: that handler may already hold the update's claim, so a second transcription
-   would be paid for and its result dropped as a duplicate (or refused as a conflicting
-   request when the transcript differs). That retry is answered with the "unconfirmed
-   outcome" message, as before.
+   would be paid for and then dropped as a duplicate, refused as a conflicting request, or
+   run again, depending on how that handler keys its claim. That retry is answered with the
+   "unconfirmed outcome" message, as before.
 4. **An edited `/dig` message opened a second research issue**, and an undeliverable
    confirmation became a 5xx that made Telegram resend the update and open another. Edits
    are now ignored for `/dig` and the confirmation is sent best effort.
