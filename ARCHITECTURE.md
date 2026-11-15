@@ -228,7 +228,8 @@ These are enforced by tests where they can be. [AGENTS.md](AGENTS.md) has the fu
    Telegram's retry transcribes the recording again (it is at most 120 s long) instead of
    being refused as an uncertain request. A handler that fails keeps the marker: it may
    already hold the update's claim, and a retry would pay for a second transcription only to
-   be dropped as a duplicate, so that retry is refused with the "unconfirmed outcome" message.
+   be dropped as a duplicate (or refused as a conflicting request when the transcript
+   differs), so that retry is refused with the "unconfirmed outcome" message instead.
 
 ### 6.3 Adding a Telegram command
 

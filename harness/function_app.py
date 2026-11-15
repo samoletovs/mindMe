@@ -1375,7 +1375,8 @@ def _release_assist_voice(voice_request_id: str | None, audio: bytes, mime_type:
 
     The assist transcript is deliberately never stored, so a retried update could only be
     answered with "unconfirmed outcome" and the recording would be lost. Call this only while
-    no handler can hold the update's claim: a retry of a claimed update is dropped as a duplicate."""
+    no handler can hold the update's claim: a retry of a claimed update is dropped as a
+    duplicate, or refused as a conflicting request when the new transcript differs."""
     if voice_request_id is None:
         return
     try:
@@ -2887,7 +2888,8 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
             except (TaskError, BudgetExceeded, KnowledgeError, EvolveError, StateError, SourceError, LoopError, ActionError, PlanError, AzureError, OpenAIError, httpx.HTTPError, TelegramDeliveryError) as exc:
                 log.error("voice proposal reply failed error=%s", type(exc).__name__)
                 # The failing handler may already hold this update's claim. Releasing the marker
-                # would let the retry pay for a second transcription and then be dropped silently.
+                # would let the retry pay for a second transcription and then be dropped as a
+                # duplicate, or refused as a conflicting request if the transcript differs.
                 return func.HttpResponse("proposal unavailable", status_code=503)
             # Inject the transcript as message text so memex treats it as a
             # plain-text capture. Keep the `voice` / `audio` field so memex

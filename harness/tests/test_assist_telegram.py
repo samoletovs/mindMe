@@ -396,6 +396,20 @@ def test_retried_voice_note_is_captured_once_the_forward_recovers(monkeypatch, e
     assert len(transcriptions) == 2 and forward.call_count == 2
 
 
+@pytest.mark.parametrize("text,reply_to", [
+    ("A synthetic spoken note", None),
+    ("note: a synthetic spoken note", None),
+    ("/dig synthetic topic", None),
+    ("Create a task to write an outline", 5),
+])
+def test_a_transcript_the_assist_handler_declines_leaves_no_claim(text, reply_to):
+    """Releasing the voice marker after a failed memex forward is safe only while this holds."""
+    telegram, assist, messages = adapter()
+    assert not telegram.handle(text=text, reply_to=reply_to, voice=True, event="update:700", today=TODAY)
+    assert assist.store.state.get("telegram", {}).get("events", {}) == {}
+    assert messages == [] and not assist.chat.called and not assist.step.called
+
+
 def test_voice_marker_stays_when_the_transcript_was_delivered(monkeypatch, transcribed_voice):
     monkeypatch.setattr(fa, "_forward_to_memex", Mock(return_value=True))
     response = fa.telegram_webhook(request({"update_id": 700, "message": voice_payload()}))
