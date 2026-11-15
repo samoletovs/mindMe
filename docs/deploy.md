@@ -432,10 +432,14 @@ regression tests. No flag, setting or timer changes.
    which retention never removes. It is now `recorded` with no stored response, so the
    14-day retention reclaims it and a replay is still refused.
 3. **A transcript that could not be delivered was lost.** When a voice note was transcribed
-   but its proposal or capture could not be delivered, the webhook answers 503 so Telegram
+   but could not be forwarded to memex as a capture, the webhook answers 503 so Telegram
    retries, but the marker made the retry refuse the same audio. The webhook now releases
    that exact marker (same audio, no stored response, no reservation), so the retry
-   transcribes again. Release is best effort and logs only the error class.
+   transcribes again. Release is best effort and logs only the error class. A failure in an
+   earlier handler (assist, task, review, proposal or knowledge reply) keeps the marker on
+   purpose: that handler may already hold the update's claim, so a second transcription
+   would be paid for and its result dropped as a duplicate. That retry is answered with the
+   "unconfirmed outcome" message, as before.
 4. **An edited `/dig` message opened a second research issue**, and an undeliverable
    confirmation became a 5xx that made Telegram resend the update and open another. Edits
    are now ignored for `/dig` and the confirmation is sent best effort.
@@ -443,8 +447,10 @@ regression tests. No flag, setting or timer changes.
    timer logged `morning briefing incomplete ...`, still ran the independent knowledge
    review and then failed, but the owner was never told there was no morning plan. It now
    sends "The action briefing could not finish in time ... Try /briefing now." under a
-   fresh 10 s budget. Only action-briefing mode can end this way; the legacy briefing falls
-   back to a locally composed one. The run is still reported as failed.
+   fresh 10 s budget, and the run is still reported as failed. The notice is sent only when
+   action briefings are on, because it points at `/briefing now`. The legacy briefing falls
+   back to a locally composed one when its model call is slow, and ends without a notice if
+   its budget runs out later.
 
 Caveats:
 

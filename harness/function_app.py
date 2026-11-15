@@ -1371,10 +1371,11 @@ def _download_assist_audio(file_id: str) -> bytes:
 
 
 def _release_assist_voice(voice_request_id: str | None, audio: bytes, mime_type: str) -> None:
-    """Let Telegram's retry of a failed delivery transcribe again instead of being refused.
+    """Let Telegram's retry of an uncaptured recording transcribe again instead of being refused.
 
     The assist transcript is deliberately never stored, so a retried update could only be
-    answered with "unconfirmed outcome" and the recording would be lost."""
+    answered with "unconfirmed outcome" and the recording would be lost. Call this only while
+    no handler can hold the update's claim: a retry of a claimed update is dropped as a duplicate."""
     if voice_request_id is None:
         return
     try:
@@ -2885,13 +2886,15 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
                     return func.HttpResponse("ok", status_code=200)
             except (TaskError, BudgetExceeded, KnowledgeError, EvolveError, StateError, SourceError, LoopError, ActionError, PlanError, AzureError, OpenAIError, httpx.HTTPError, TelegramDeliveryError) as exc:
                 log.error("voice proposal reply failed error=%s", type(exc).__name__)
-                _release_assist_voice(assist_voice_id, audio_bytes, mime_type)
+                # The failing handler may already hold this update's claim. Releasing the marker
+                # would let the retry pay for a second transcription and then be dropped silently.
                 return func.HttpResponse("proposal unavailable", status_code=503)
             # Inject the transcript as message text so memex treats it as a
             # plain-text capture. Keep the `voice` / `audio` field so memex
             # can archive the original.  Hard Rule 1: never log the text.
             fwd_update = {**update, "message": {**message, "text": transcript}}
             if not _forward_to_memex(fwd_update):
+                # Every handler declined, so none holds this update's claim and a retry may run again.
                 _release_assist_voice(assist_voice_id, audio_bytes, mime_type)
                 return func.HttpResponse("capture unavailable", status_code=503)
             _capture_feedback(chat_id, f"\U0001f3a4 {transcript}")

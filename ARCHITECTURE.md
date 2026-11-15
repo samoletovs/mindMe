@@ -223,9 +223,12 @@ These are enforced by tests where they can be. [AGENTS.md](AGENTS.md) has the fu
 3. The transcript goes through the same handlers as typed text: assist, task reply, review
    and proposal reply, knowledge reply. If none claims it, it is forwarded to memex as a
    text capture and echoed back with a microphone prefix.
-4. If a handler fails after the transcript was recorded, `_release_assist_voice` releases
-   that exact marker and the webhook returns `503`. Telegram's retry then transcribes the
-   recording again (it is at most 120 s long) instead of being refused as an uncertain request.
+4. If every handler declines and the transcript cannot be forwarded to memex,
+   `_release_assist_voice` releases that exact marker and the webhook returns `503`, so
+   Telegram's retry transcribes the recording again (it is at most 120 s long) instead of
+   being refused as an uncertain request. A handler that fails keeps the marker: it may
+   already hold the update's claim, and a retry would pay for a second transcription only to
+   be dropped as a duplicate, so that retry is refused with the "unconfirmed outcome" message.
 
 ### 6.3 Adding a Telegram command
 
@@ -282,8 +285,10 @@ make test                 # same as: python -m pytest -q
 ## 8. When production misbehaves
 
 Telemetry is in the `appi-mindme` Application Insights resource; the log lines are the
-only record of a model call. [docs/deploy.md](docs/deploy.md#reliability-pass-2026-11-15)
-has the query recipe and how to read each line.
+only record of a model call. The query recipe is under *Querying telemetry* in
+[docs/deploy.md](docs/deploy.md#production-confirmation-2026-09-07), and the
+[reliability pass](docs/deploy.md#reliability-pass-2026-11-15) explains how to read each
+review line.
 
 | Symptom | Search `traces` for | Code |
 |---|---|---|

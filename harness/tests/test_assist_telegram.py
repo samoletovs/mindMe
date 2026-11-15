@@ -10,6 +10,7 @@ from test_briefing_webhook import request
 from test_task_service import service, PATH, REVISION, refine_payload, TODAY
 from test_assist_host import model
 from test_briefing_state import FakeBlob
+from test_task_assist import voice_subject
 
 
 @pytest.mark.parametrize("text", [
@@ -333,7 +334,7 @@ def test_voice_marker_is_released_when_the_transcript_cannot_be_forwarded(monkey
     )
 
 
-def test_voice_marker_is_released_when_a_transcript_handler_fails(monkeypatch, transcribed_voice):
+def test_voice_marker_stays_when_a_transcript_handler_fails(monkeypatch, transcribed_voice):
     monkeypatch.setattr(
         fa, "_task_assist_message", Mock(side_effect=fa.TelegramDeliveryError("synthetic")),
     )
@@ -341,10 +342,58 @@ def test_voice_marker_is_released_when_a_transcript_handler_fails(monkeypatch, t
     monkeypatch.setattr(fa, "_forward_to_memex", forward)
     response = fa.telegram_webhook(request({"update_id": 700, "message": voice_payload()}))
     assert response.status_code == 503
-    transcribed_voice.release_voice.assert_called_once_with(
-        b"synthetic", "audio/ogg", transcribed_voice.voice.call_args.args[2],
-    )
+    transcribed_voice.release_voice.assert_not_called()
     forward.assert_not_called()
+
+
+def test_retried_voice_note_after_a_failed_assist_reply_is_refused_not_silently_dropped(monkeypatch, enabled):
+    transcriptions = []
+
+    def transcribed(audio, _mime):
+        transcriptions.append(audio)
+        return {"text": "Create a task to write a synthetic outline", "language": "en"}
+
+    subject, _ = voice_subject(monkeypatch, transcribe=transcribed)
+    send = Mock(side_effect=[fa.TelegramDeliveryError("synthetic"), 101])
+    monkeypatch.setattr(fa, "_task_assist", lambda: subject)
+    monkeypatch.setattr(fa, "_assist_telegram", lambda: TaskAssistTelegram(subject, send=send))
+    monkeypatch.setattr(fa, "_download_assist_audio", lambda _: b"synthetic")
+    forward = Mock()
+    monkeypatch.setattr(fa, "_forward_to_memex", forward)
+    update = {"update_id": 700, "message": voice_payload()}
+
+    assert fa.telegram_webhook(request(update)).status_code == 503
+    retry = fa.telegram_webhook(request(update))
+
+    assert retry.status_code == 200
+    assert len(transcriptions) == 1
+    assert "unconfirmed outcome" in fa._telegram_send.call_args.args[1]
+    assert send.call_count == 1
+    forward.assert_not_called()
+
+
+def test_retried_voice_note_is_captured_once_the_forward_recovers(monkeypatch, enabled):
+    transcriptions = []
+
+    def transcribed(audio, _mime):
+        transcriptions.append(audio)
+        return {"text": "A synthetic spoken note", "language": "en"}
+
+    subject, _ = voice_subject(monkeypatch, transcribe=transcribed)
+    monkeypatch.setattr(fa, "_task_assist", lambda: subject)
+    monkeypatch.setattr(fa, "_download_assist_audio", lambda _: b"synthetic")
+    unclaimed_transcript(monkeypatch)
+    forward = Mock(side_effect=[False, True])
+    monkeypatch.setattr(fa, "_forward_to_memex", forward)
+    update = {"update_id": 700, "message": voice_payload()}
+
+    assert fa.telegram_webhook(request(update)).status_code == 503
+    assert fa.telegram_webhook(request(update)).status_code == 200
+
+    assert len(transcriptions) == 2
+    assert forward.call_count == 2
+    assert fa.telegram_webhook(request(update)).status_code == 200
+    assert len(transcriptions) == 2 and forward.call_count == 2
 
 
 def test_voice_marker_stays_when_the_transcript_was_delivered(monkeypatch, transcribed_voice):

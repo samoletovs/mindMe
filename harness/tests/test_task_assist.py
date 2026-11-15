@@ -347,6 +347,29 @@ def test_settlement_uses_claimed_month_and_day_without_releasing_new_reservation
         assert ledger["day_history"]["2026-10-31"]["daily_spent_micro_eur"] > 0
 
 
+def test_releasing_a_claim_from_an_earlier_period_leaves_the_new_reservation():
+    from task_assist_state import request_key
+    subject = assistant(lambda _: model_output())
+    request_a = "f3ef6340-657f-4124-b6fa-826d54aa98e0"
+    request_b = "6c70b835-57e0-4e24-9cf0-49e848443859"
+    thread_a, _ = subject._claim(request_a, "a" * 64, None, date(2026, 10, 31), voice=False)
+    thread_b, _ = subject._claim(request_b, "b" * 64, None, date(2026, 11, 1), voice=False)
+    before = subject.store.read()["ledger"]
+
+    assert subject._release_claim(request_a, new_thread_id=thread_a)
+
+    state = subject.store.read()
+    ledger = state["ledger"]
+    assert ledger["month"] == "2026-11"
+    assert ledger["reserved_micro_eur"] == before["reserved_micro_eur"] > 0
+    assert ledger["daily_reserved_micro_eur"] == before["daily_reserved_micro_eur"] > 0
+    assert ledger["month_history"]["2026-10"]["reserved_micro_eur"] == 0
+    assert ledger["day_history"]["2026-10-31"]["daily_reserved_micro_eur"] == 0
+    assert request_key(request_a) not in state["requests"]
+    assert request_key(request_b) in state["requests"]
+    assert thread_a not in state["threads"] and thread_b in state["threads"]
+
+
 def test_uncertain_model_call_is_not_retried_and_reservation_is_preserved():
     calls = []
 

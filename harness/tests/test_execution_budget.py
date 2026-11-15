@@ -453,11 +453,14 @@ def test_the_timeout_notice_is_only_for_action_briefings(clock, monkeypatch) -> 
     assert sent == []
 
 
-def test_an_undeliverable_timeout_notice_does_not_stop_the_independent_review(clock, monkeypatch) -> None:
+@pytest.mark.parametrize("failure", ["rejected", "overran"])
+def test_an_undeliverable_timeout_notice_does_not_stop_the_independent_review(clock, monkeypatch, failure) -> None:
     reviewed = []
 
     def undeliverable(*_args) -> None:
-        raise fa.TelegramDeliveryError("synthetic")
+        if failure == "rejected":
+            raise fa.TelegramDeliveryError("synthetic")
+        clock[0] += 11  # past the notice's own 10 s budget
 
     def original() -> None:
         clock[0] = 75
