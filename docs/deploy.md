@@ -552,11 +552,12 @@ Until now a failure was visible only as a Telegram notice, so the worst failures
 silent: a briefing that never runs sends nothing. On 2026-11-13 and 11-14 the 07:30
 `morning_briefing_timer` failed and nothing reported it.
 [`infrastructure/alerts.bicep`](../infrastructure/alerts.bicep) adds three log search alert
-rules on `appi-mindme`, plus the action group `ag-mindme` that they notify.
+rules on `appi-mindme`. They notify the existing, already verified action group
+`prime-alerts`.
 
 | Rule | Severity | Window | Fires when |
 |---|---|---|---|
-| `alert-mindme-scheduled-run-failed` | 2 | 30 min | any `*_timer` request has `success == false` |
+| `alert-mindme-scheduled-run-failed` | 2 | 30 min | a `*_timer` request has `success == false` (one alert per timer) |
 | `alert-mindme-heartbeat-missing` | 1 | 2 h | no `reaper_poll_timer` request at all (it runs every 30 min) |
 | `alert-mindme-http-server-errors` | 2 | 1 h | any 5xx other than 503, or 503 at least three times |
 
@@ -569,13 +570,25 @@ rules on `appi-mindme`, plus the action group `ag-mindme` that they notify.
 - **No content in alerts.** The queries project only timestamps, function names and
   counts. A notification never carries message or task text.
 - **Behaviour.** Each rule evaluates every 15 minutes and is stateful (`autoMitigate`). It
-  notifies once when it fires, and once more when it resolves. The scheduled-run rule's
-  window is twice its frequency, so a run whose telemetry lands late is still counted.
-- **Who is notified.** The action group emails the subscription's **Owner** role, so no
-  address lives in the repository. To add a recipient, pass it at deploy time:
-  `-p alertEmail=<address>`. Never commit it.
-- **Cost.** USD 0.50 a month per rule at a 15-minute frequency, so **USD 1.50 a month**.
-  The first 1,000 action-group emails a month are free.
+  notifies once when it fires, and once more when it resolves. An open alert does not
+  notify again, so the scheduled-run rule is split by timer name. Otherwise a reaper that
+  keeps failing (for example with an expired GitHub token) would hide a failed morning
+  briefing. Its window is twice its frequency, so a run whose telemetry lands late is still
+  counted.
+- **Who is notified.** The rules use the existing action group `prime-alerts` in
+  `prime-rg`. It already holds the owner's verified email receiver and an Azure mobile app
+  push receiver. A new group would not work without the owner present:
+  - a new email receiver needs a one-time code confirmed within 30 minutes;
+  - the subscription Owner's Entra profile has no email address, so an Owner-role
+    receiver would reach nobody.
+
+  Reusing the verified group keeps addresses out of the repository and survives redeploys.
+  If `prime-alerts` is ever removed, pass another verified group:
+  `-p actionGroupName=<group> actionGroupResourceGroup=<rg>`.
+- **Cost.** A log search alert at a 15-minute frequency is USD 0.50 a month per monitored
+  time series. The heartbeat and HTTP rules are one series each. The scheduled-run rule is
+  billed only for timers that actually fail, because its query returns only failing timers.
+  That makes **USD 1.50 to 2.50 a month**.
 - **Validated against real data.** Over the past 72 hours the scheduled-run query returns
   the two pre-fix `morning_briefing_timer` failures. The heartbeat query sees four reaper
   runs in any two hours. The HTTP query returns nothing; over 30 days the only 5xx were two
@@ -583,15 +596,16 @@ rules on `appi-mindme`, plus the action group `ag-mindme` that they notify.
 
 The template is standalone on purpose. Do **not** redeploy `main.bicep` to add alerts: it
 is the clean-rebuild recipe, and it would create a new plan and replace the live app
-settings. `alerts.bicep` only touches the four resources above and is idempotent:
+settings. `alerts.bicep` only creates the three rules and is idempotent:
 
 ```powershell
 az deployment group what-if -g foundrylab-rg -f infrastructure/alerts.bicep
 az deployment group create  -g foundrylab-rg -f infrastructure/alerts.bicep --name mindme-alerts
 ```
 
-**Reading an alert.** The email's results link opens the matching rows in
-`appi-mindme`. For a failed timer, find that run's traces with the
+**Reading an alert.** The notification names the rule and, for a failed timer, which
+timer. Its results link opens the matching rows in `appi-mindme`. For a failed timer, find
+that run's traces with the
 [Querying telemetry](#production-confirmation-2026-09-07) recipe and the table in
 [ARCHITECTURE.md §8](../ARCHITECTURE.md#8-when-production-misbehaves). A missing heartbeat
 means the host is down, timers stopped firing, or telemetry stopped arriving. Check the
@@ -599,7 +613,8 @@ health endpoint first, then the deploy-readiness script.
 
 **Turning alerts off.** Disable a single rule with
 `az monitor scheduled-query update -g foundrylab-rg -n <rule> --disabled true`. To remove
-them all, delete the three rules and `ag-mindme`. Nothing in the app depends on them.
+them all, delete the three rules; leave `prime-alerts` alone, because prime uses it too.
+Nothing in the app depends on the rules.
 
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the

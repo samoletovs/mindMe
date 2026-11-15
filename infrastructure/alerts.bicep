@@ -2,17 +2,22 @@
 //
 // Standalone on purpose. main.bicep is the clean-rebuild recipe and must not be redeployed
 // against the live app: it would provision a new plan and replace the live app settings.
-// This template only adds one action group and three log search alert rules.
+// This template only adds three log search alert rules.
 //
 // Deploy (idempotent):
 //   az deployment group what-if -g foundrylab-rg -f infrastructure/alerts.bicep
-//   az deployment group create  -g foundrylab-rg -f infrastructure/alerts.bicep
+//   az deployment group create  -g foundrylab-rg -f infrastructure/alerts.bicep --name mindme-alerts
 //
-// Notifications email the subscription's Owner role, so no address lives in source. To add
-// another recipient pass -p alertEmail=<address> at deploy time; never commit it.
+// Notifications go to an existing action group whose receivers are already verified
+// (prime-alerts: the owner's email and Azure mobile app push). A new email receiver would
+// need a one-time code confirmed within 30 minutes, and the subscription Owner's Entra
+// profile has no email address, so an Owner-role receiver would reach nobody. Reusing the
+// verified group keeps every address out of this repository and survives redeploys.
 //
-// Cost: a log search alert evaluated every 15 minutes is USD 0.50 a month, so three rules
-// are USD 1.50. Action-group email is free for the first 1,000 a month.
+// Cost: a log search alert evaluated every 15 minutes is USD 0.50 a month per monitored
+// time series. The heartbeat and HTTP rules are one series each. The scheduled-run rule is
+// split per timer and its query returns only failing timers, so it is billed only for the
+// timers that fail: USD 1.50 to 2.50 a month in total.
 
 targetScope = 'resourceGroup'
 
@@ -22,8 +27,11 @@ param appInsightsName string = 'appi-mindme'
 @description('Region for the alert rules. Keep it the same as the Application Insights component (swedencentral).')
 param location string = resourceGroup().location
 
-@description('Optional extra email recipient. Empty means the subscription Owner only. Pass at deploy time; never commit an address.')
-param alertEmail string = ''
+@description('Existing action group to notify. Its receivers must already be verified.')
+param actionGroupName string = 'prime-alerts'
+
+@description('Resource group of that action group, in this subscription.')
+param actionGroupResourceGroup string = 'prime-rg'
 
 @description('Tags applied to all resources.')
 param tags object = {
@@ -35,21 +43,30 @@ param tags object = {
 
 var alertTags = union(tags, { managedBy: 'bicep' })
 
-// Built-in Owner role. The action group emails users who hold it at subscription scope.
-var ownerRoleId = '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'
-
 // Every query returns only timestamps, function names or counts: never message content.
 var rules = [
   {
     name: 'alert-mindme-scheduled-run-failed'
     displayName: 'mindMe scheduled run failed'
-    description: 'A timer function (morning_briefing_timer, weekly_review_timer or reaper_poll_timer) failed. Open the results link to see which, then read that run\'s traces (docs/deploy.md, Alerts).'
+    description: 'A timer function (morning_briefing_timer, weekly_review_timer or reaper_poll_timer) failed. The alert names the timer; read that run\'s traces (docs/deploy.md, Alerts).'
     severity: 2
     // Twice the evaluation frequency, so a run whose telemetry arrives late is still seen.
     windowSize: 'PT30M'
     query: 'requests | where name endswith "_timer" and success == false | project timestamp, name'
     operator: 'GreaterThan'
     threshold: 0
+    // One alert per timer. A single combined alert stays open while any timer keeps
+    // failing, and an open stateful alert does not notify again, so a persistently failing
+    // reaper would hide a failed morning briefing.
+    dimensions: [
+      {
+        name: 'name'
+        operator: 'Include'
+        values: [
+          '*'
+        ]
+      }
+    ]
   }
   {
     name: 'alert-mindme-heartbeat-missing'
@@ -60,6 +77,7 @@ var rules = [
     query: 'requests | where name == "reaper_poll_timer" | project timestamp'
     operator: 'LessThan'
     threshold: 1
+    dimensions: []
   }
   {
     name: 'alert-mindme-http-server-errors'
@@ -70,6 +88,7 @@ var rules = [
     query: 'requests | where toint(resultCode) >= 500 | summarize server_errors = countif(toint(resultCode) != 503), unavailable = countif(toint(resultCode) == 503) | where server_errors > 0 or unavailable >= 3'
     operator: 'GreaterThan'
     threshold: 0
+    dimensions: []
   }
 ]
 
@@ -77,28 +96,9 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = {
   name: appInsightsName
 }
 
-resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
-  name: 'ag-mindme'
-  location: 'Global'
-  tags: alertTags
-  properties: {
-    groupShortName: 'mindme'
-    enabled: true
-    armRoleReceivers: [
-      {
-        name: 'subscription-owner'
-        roleId: ownerRoleId
-        useCommonAlertSchema: true
-      }
-    ]
-    emailReceivers: empty(alertEmail) ? [] : [
-      {
-        name: 'extra-recipient'
-        emailAddress: alertEmail
-        useCommonAlertSchema: true
-      }
-    ]
-  }
+resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' existing = {
+  name: actionGroupName
+  scope: resourceGroup(actionGroupResourceGroup)
 }
 
 resource alertRules 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = [for rule in rules: {
@@ -122,6 +122,7 @@ resource alertRules 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = [for r
         {
           query: rule.query
           timeAggregation: 'Count'
+          dimensions: rule.dimensions
           operator: rule.operator
           threshold: rule.threshold
           failingPeriods: {
