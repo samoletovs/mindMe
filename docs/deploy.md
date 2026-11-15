@@ -478,17 +478,22 @@ appeared once or twice a day on 2026-11-11 to 2026-11-14; there was no
 **Not yet confirmed by traffic.** Two paths are covered by tests only, and neither can be
 provoked safely on demand:
 
-- Releasing an assist voice marker needs a voice note whose forward to memex fails. Look
-  for a `capture forward rejected` or `capture forward failed` error, then a 503
-  `telegram_webhook` request. A successful release logs nothing; the warning
-  `assist voice marker release failed error=<class>` means the release itself failed.
+- Releasing an assist voice marker needs a voice note whose forward to memex fails: memex
+  unreachable or rejecting the capture, or `MEMEX_WEBHOOK_URL` unset. Look for
+  `capture forward failed error=<class>`, `capture forward rejected status=<code>` or
+  `capture forward skipped` followed by a 503 `telegram_webhook` request. Text captures fail
+  the same way, so the 503 alone does not identify a voice note. A release that worked logs
+  nothing: Telegram's retry of the note is transcribed again and echoed with 🎤. A release
+  that failed logs `task assist voice release failed error=<class>`
+  (`harness/task_assist.py`), and the retry is refused with the "unconfirmed outcome" reply.
 - The owner notice for a briefing timeout needs the 07:30 UTC briefing to outrun its 75 s
   budget. That logs `morning briefing incomplete error=BudgetExceeded
   reason=execution_budget_exhausted`; `action briefing timeout notice unavailable` appears
   only if the notice itself could not be sent.
 
-Neither had happened by 15:05 UTC on 2026-11-15: the only `telegram_webhook` request since
-the swap was an unauthenticated probe that returned 403.
+Neither had happened by 15:05 UTC on 2026-11-15. The only `telegram_webhook` request since
+the swap was an unauthenticated probe that returned 403, so no voice note had arrived, and
+the next 07:30 UTC briefing is on 2026-11-16.
 
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the
