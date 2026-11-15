@@ -280,8 +280,15 @@ make test                 # same as: python -m pytest -q
 - Test files mirror the modules (`test_briefing_loop.py`, `test_task_service.py`, …).
   Regression tests pin the behaviour of a fixed defect, not its implementation.
 - Tests that need Node (static UI checks) or a Playwright browser skip themselves when
-  they are missing. Playwright is not in `requirements-dev.txt`, so the browser tests do
-  not run in CI or on a default install.
+  they are missing. To run the browser tests locally, also install
+  [requirements-ui.txt](harness/requirements-ui.txt) and run
+  `python -m playwright install chromium`. CI has a second job, *browser UI tests*, that
+  installs Chromium and fails if any test skips, so the UI is checked on every push and
+  pull request.
+- The pytest header line `runtime pins:` names every installed package whose version
+  differs from [harness/requirements.txt](harness/requirements.txt). CI installs the exact
+  pins, so a local pass under drift (for example an older `openai`) is weaker evidence than
+  the CI run.
 - Passing the suite says nothing about live behaviour or model quality; record live
   checks separately (see [docs/deploy.md](docs/deploy.md)).
 

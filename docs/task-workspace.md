@@ -166,7 +166,11 @@ not browser storage. The sidecar has a 512 KiB ceiling, forty threads,
 300 Telegram delivery guards. Capacity fails explicitly. Source-version
 bindings must be rechecked before recalled or cached task content is exposed;
 obsolete/private sources cannot become fresh authority through thread recall.
-Unconfirmed non-content operation guards remain protected from silent retry.
+Unconfirmed non-content operation guards remain protected from silent retry: a
+request whose outcome is unconfirmed refuses a replay of its request ID for 35 days.
+A replay can only come from the original sender, which holds the ID for at most a
+one-hour web session or Telegram's one-day redelivery. After that the guard frees its
+request receipt slot. Recorded responses are reclaimed after fourteen days.
 Capture/detail produce a single batched task definition/edit. Estimates and
 plans are drafts, not commitments or evidence of completion. Execute prepares
 a work product (such as a checklist or email draft), never sends it or performs

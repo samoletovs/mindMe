@@ -400,6 +400,7 @@ Follow-ups that are deliberately not part of this change:
 - **memex `build_open_loops`** (`memex/functions/state.py`) reads up to 100 items from
   GitHub one after another, which is why `/state` takes 12-15 s. Reading them concurrently,
   or caching by source revision, removes the delay at its source. memex deploys separately.
+  *Resolved by memex#42, see [Follow-up pass](#follow-up-pass-2026-11-15-chat-budget-weather-request-guards-browser-ci).*
 - **No alert rules exist on `appi-mindme`.** A failing timer is visible only as a Telegram
   notice (or its absence).
 - **`mindme-task-web-client-secret`** in `kv-mindme-ymcpt` expires **2027-01-07**. Task web
@@ -460,7 +461,8 @@ Caveats:
   not migrated. Each pins one of the ledger's **160** request slots; if they ever filled it,
   assist would answer `assist_request_capacity` until the stale rows were removed from
   `system/mindme/task-assist-state-v1.json`. Production assist use has been sparse, so this
-  is not expected to happen.
+  is not expected to happen. *Resolved by the 35-day guard retention in the
+  [Follow-up pass](#follow-up-pass-2026-11-15-chat-budget-weather-request-guards-browser-ci).*
 - Rollback is safe. A `recorded` voice row without a response is refused on replay exactly
   as the old `uncertain` row was.
 
@@ -494,6 +496,52 @@ provoked safely on demand:
 Neither had happened by 15:05 UTC on 2026-11-15. The only `telegram_webhook` request since
 the swap was an unauthenticated probe that returned 403, so no voice note had arrived, and
 the next 07:30 UTC briefing is on 2026-11-16.
+
+## Follow-up pass: 2026-11-15 (chat budget, weather, request guards, browser CI)
+
+This pass closes the follow-ups left open by the two passes above. No flag, setting or timer
+changes.
+
+1. **memex `/state` read open loops one at a time.** memex#42 reads the up to 100 GitHub
+   items concurrently, so `fetch_open_loops` should drop from 12-15 s to a few seconds.
+   memex is deployed separately. mindMe keeps its 25 s `fetch_open_loops` limit as
+   headroom for a slow GitHub. Confirm after a 07:30 UTC run: the `fetch_open_loops`
+   dependency duration in `appi-mindme`.
+2. **A Telegram chat reply had no time limit.** Outside a budget, `_ask_companion` used
+   the OpenAI SDK defaults (600 s, two retries), so a slow model outlived the HTTP front
+   end and Telegram redelivered the message while the first answer was still pending. A chat
+   reply now runs under a 60 s execution budget with one model attempt of at most 45 s.
+   When it runs out the owner gets the usual fallback reply and the webhook answers 200.
+3. **A weather outage cancelled the action briefing.** `_action_briefing_extras` let a
+   wttr.in `ConnectError` or bad payload escape, which aborted the whole briefing context.
+   The briefing now goes ahead without weather and carries the
+   warning "Weather is unavailable right now." A malformed wttr.in payload (a list, a string,
+   a missing index) used to raise `AttributeError` or `KeyError`. It is now a `ValueError`,
+   so `/api/tools/weather` answers 503 instead of 500.
+4. **`/api/tools/briefing-context` answered 500 for an unavailable source.** It now also
+   answers 503 for `httpx.HTTPError` (memex or weather unreachable) and `KeyError` (a
+   source without an expected field).
+5. **Unrecorded assist requests held a request slot for good.** Retention removed only
+   `recorded` rows, so every `claimed` or `uncertain` row, including the pre-fix voice rows
+   in the caveat above, kept one of the **160** request slots indefinitely. Those rows are
+   replay guards, and a replay can only come from the original sender: a web session holds
+   its request ID for at most an hour, and Telegram stops redelivering an update after a
+   day. They are now removed after **35 days** (`GUARD_RETENTION_DAYS`); `recorded` rows
+   still go after 14. A removed row's reservation stays in its ledger bucket, so monthly
+   spend is never under-counted. Pruning runs when assist is next used, so the old voice
+   rows are cleared lazily, with no migration.
+6. **The 134 browser UI tests never ran in CI.** They skip without Playwright and Chromium,
+   and the `tests` job has neither. A new `browser UI tests` job installs
+   `harness/requirements-ui.txt` and Chromium on `ubuntu-24.04` and fails if any test is
+   skipped, so a broken browser setup cannot pass as green.
+7. **The local venv drifted from the runtime pins** (for example `openai` 1.109.1 against
+   the pinned 2.36.0). A newer interpreter could not be provisioned here because package
+   downloads are blocked on this machine. Instead, pytest prints a `runtime pins:` header
+   that lists every pin the running interpreter does not satisfy. CI installs the exact
+   pins, so CI is the authority for SDK behavior.
+
+Rollback is safe. Older code reads the same state file and only stops pruning unrecorded
+rows; rows already pruned stay gone, and their reservations remain counted in the ledger.
 
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the

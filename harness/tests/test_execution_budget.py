@@ -506,6 +506,34 @@ def test_original_companion_keeps_existing_client_outside_evolve_deadline(monkey
     client.with_options.assert_not_called()
 
 
+def test_chat_reply_has_one_bounded_model_attempt_and_a_fallback(clock, monkeypatch) -> None:
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "synthetic")
+    monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "false")
+    monkeypatch.setattr(fa, "_knowledge_reply", lambda *_: False)
+    monkeypatch.setattr(fa, "_evolve_reply", lambda *_: None)
+    monkeypatch.setattr(fa, "_claim_onboarding", lambda *_: False)
+    sent = []
+    monkeypatch.setattr(fa, "_telegram_send", lambda chat_id, text: sent.append(text))
+    calls = []
+
+    def timeout(request: httpx.Request) -> httpx.Response:
+        calls.append(request.extensions["timeout"])
+        raise httpx.ReadTimeout("synthetic remote content", request=request)
+
+    with client_for(timeout) as http:
+        client = OpenAI(api_key="synthetic", base_url="https://synthetic.example", http_client=http)
+        monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
+        monkeypatch.setattr(fa, "_http_client", lambda: http)
+        response = fa.telegram_webhook(request({"message": {"chat": {"id": 7}, "text": "Hello"}}))
+
+    assert response.status_code == 200
+    # One attempt, capped well inside the HTTP front end's limit, instead of three 600 s attempts.
+    assert calls == [{"connect": 1, "write": 1, "pool": 1, "read": 45}]
+    assert sent == ["I could not answer just now. Please try again later."]
+    assert budget.remaining_seconds() is None
+
+
 def test_original_mirror_reads_use_bounded_sdk_options_only_with_active_deadline(clock, monkeypatch) -> None:
     blob = Mock()
     blob.download_blob.return_value.readall.return_value = b"synthetic"

@@ -903,17 +903,80 @@ def test_async_receipt_refreshes_same_poll_uuid_and_unlocks_only_confirmed_undo(
         assert subject.store.read()["operations"][card["receipt_id"]]["applied_revision"] == "e" * 40
 
 
-def test_uncertain_request_guard_survives_retention_without_cached_content():
-        from task_assist_state import empty_assist_state, prune_assist_state, request_key
-        state = empty_assist_state()
-        key = request_key(REQUEST_ID)
-        state["requests"][key] = {
-            "digest": "a" * 64, "status": "uncertain", "created_on": "2026-01-01",
+def test_unrecorded_request_guards_outlive_response_retention_then_free_their_slots():
+    from task_assist_state import empty_assist_state, prune_assist_state, request_key
+
+    def row(status, created_on):
+        return {
+            "digest": "a" * 64, "status": status, "created_on": created_on,
             "thread_id": THREAD_ID, "response": None, "reserved_micro_eur": 0,
         }
-        prune_assist_state(state, TODAY)
-        assert key in state["requests"]
-        assert state["requests"][key]["response"] is None
+
+    state = empty_assist_state()
+    rows = {
+        "kept-guard": row("uncertain", "2026-09-09"),
+        "expired-guard": row("uncertain", "2026-09-08"),
+        "abandoned-claim": row("claimed", "2026-09-08"),
+        "expired-response": row("recorded", "2026-09-29"),
+    }
+    state["requests"] = {request_key(name): copy.deepcopy(item) for name, item in rows.items()}
+    prune_assist_state(state, TODAY)
+    assert state["requests"] == {request_key("kept-guard"): rows["kept-guard"]}
+
+
+def pre_fix_voice_rows(created_on):
+    import uuid
+
+    from task_assist_state import MAX_REQUESTS, request_key
+    rows = {}
+    for _ in range(MAX_REQUESTS):
+        rows[request_key(str(uuid.uuid4()))] = {
+            "digest": "b" * 64, "status": "uncertain", "created_on": created_on,
+            "thread_id": str(uuid.uuid4()), "response": None, "reserved_micro_eur": 0,
+            "accounting_month": created_on[:7], "accounting_day": created_on,
+        }
+    return rows
+
+
+def test_stale_pre_fix_voice_rows_no_longer_exhaust_assist_capacity(monkeypatch):
+    subject, transcriptions = voice_subject(monkeypatch)
+    subject.store.update(lambda state: state["requests"].update(pre_fix_voice_rows("2026-09-08")))
+
+    assert subject.voice(b"synthetic-audio", "audio/ogg", REQUEST_ID, TODAY)["text"]
+    assert len(transcriptions) == 1
+    assert len(subject.store.read()["requests"]) == 1
+
+
+def test_recent_unrecorded_rows_still_hold_capacity(monkeypatch):
+    subject, transcriptions = voice_subject(monkeypatch)
+    subject.store.update(lambda state: state["requests"].update(pre_fix_voice_rows("2026-09-09")))
+
+    with pytest.raises(TaskAssistError, match="assist_request_capacity"):
+        subject.voice(b"synthetic-audio", "audio/ogg", REQUEST_ID, TODAY)
+    assert transcriptions == []
+
+
+def test_uncertain_voice_guard_refuses_replays_until_it_expires(monkeypatch):
+    from datetime import timedelta
+
+    attempts = []
+
+    def flaky(audio, _mime):
+        attempts.append(audio)
+        if len(attempts) == 1:
+            raise TimeoutError
+        return {"text": "A synthetic spoken request", "language": "en"}
+
+    subject, _ = voice_subject(monkeypatch, transcribe=flaky)
+    with pytest.raises(TaskAssistError, match="assist_transcription_unavailable"):
+        subject.voice(b"synthetic-audio", "audio/ogg", REQUEST_ID, TODAY)
+    with pytest.raises(TaskAssistError, match="assist_request_uncertain"):
+        subject.voice(b"synthetic-audio", "audio/ogg", REQUEST_ID, TODAY + timedelta(days=34))
+    assert len(attempts) == 1
+
+    later = TODAY + timedelta(days=35)
+    assert subject.voice(b"synthetic-audio", "audio/ogg", REQUEST_ID, later)["text"]
+    assert len(attempts) == 2
 
 
 class FlakySourceService(FakeTaskService):
