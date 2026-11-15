@@ -559,6 +559,56 @@ class TaskAssist:
 
         return self.store.update(claim)
 
+    @staticmethod
+    def _accounting_buckets(
+        state: dict[str, Any], record: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Return the month and day ledger buckets a claimed request was reserved in."""
+        ledger = state["ledger"]
+        accounting_month = record.get("accounting_month", record["created_on"][:7])
+        accounting_day = record.get("accounting_day", record["created_on"])
+        if ledger["month"] == accounting_month:
+            month_bucket = ledger
+        else:
+            month_bucket = ledger.get("month_history", {}).get(accounting_month)
+        if ledger["day"] == accounting_day:
+            day_bucket = ledger
+        else:
+            day_bucket = ledger.get("day_history", {}).get(accounting_day)
+        if month_bucket is None or day_bucket is None:
+            raise TaskAssistError("assist_accounting_period_unavailable")
+        return month_bucket, day_bucket
+
+    def _release_claim(self, identifier: str, *, new_thread_id: str | None = None) -> bool:
+        """Undo a claim whose request failed before any provider call was made.
+
+        Nothing was spent and nothing external happened, so the reservation is returned and
+        the request may be retried. Returns False, leaving the claim to ``_mark_uncertain``,
+        whenever it cannot be undone safely."""
+        key = request_key(identifier)
+
+        def release(state: dict[str, Any]) -> None:
+            record = state["requests"].get(key)
+            if not record or record["status"] != "claimed":
+                raise TaskAssistError("assist_request_uncertain")
+            reserved = record["reserved_micro_eur"]
+            month_bucket, day_bucket = self._accounting_buckets(state, record)
+            month_bucket["reserved_micro_eur"] = max(0, month_bucket["reserved_micro_eur"] - reserved)
+            day_bucket["daily_reserved_micro_eur"] = max(
+                0, day_bucket["daily_reserved_micro_eur"] - reserved,
+            )
+            del state["requests"][key]
+            thread = state["threads"].get(new_thread_id) if new_thread_id else None
+            if thread is not None and not thread["turns"]:
+                del state["threads"][new_thread_id]
+
+        try:
+            self.store.update(release)
+        except Exception as error:
+            log.warning("task assist claim release failed error=%s", type(error).__name__)
+            return False
+        return True
+
     def _settle(
         self, identifier: str, today: date, *, input_tokens: int, output_tokens: int,
         model: str | None = None,
@@ -582,20 +632,8 @@ class TaskAssist:
             record = state["requests"].get(key)
             if not record or record["status"] != "claimed":
                 raise TaskAssistError("assist_request_uncertain")
-            ledger = state["ledger"]
             reserved = record["reserved_micro_eur"]
-            accounting_month = record.get("accounting_month", record["created_on"][:7])
-            accounting_day = record.get("accounting_day", record["created_on"])
-            if ledger["month"] == accounting_month:
-                month_bucket = ledger
-            else:
-                month_bucket = ledger.get("month_history", {}).get(accounting_month)
-            if ledger["day"] == accounting_day:
-                day_bucket = ledger
-            else:
-                day_bucket = ledger.get("day_history", {}).get(accounting_day)
-            if month_bucket is None or day_bucket is None:
-                raise TaskAssistError("assist_accounting_period_unavailable")
+            month_bucket, day_bucket = self._accounting_buckets(state, record)
             month_bucket["reserved_micro_eur"] = max(
                 0, month_bucket["reserved_micro_eur"] - reserved,
             )
@@ -744,10 +782,62 @@ class TaskAssist:
             record = state["requests"].get(key)
             if not record or record["status"] != "claimed":
                 raise TaskAssistError("assist_request_uncertain")
-            record["status"] = "uncertain"
+            # The transcript is never stored, so a replay can only be refused. A recorded request
+            # without a response keeps that refusal but, unlike an uncertain one, is reclaimed by
+            # retention instead of pinning a request slot forever.
+            record["status"] = "recorded"
             record["response"] = None
 
         self.store.update(finish)
+
+    @staticmethod
+    def _voice_digest(audio: bytes, mime: str, language: str) -> str:
+        return _safe_digest({
+            "mode": "voice-transcribe", "audio_sha256": hashlib.sha256(audio).hexdigest(),
+            "mime": mime, "language": language,
+        })
+
+    def release_voice(self, audio: bytes, mime: str, request_id: str, **options: Any) -> bool:
+        """Forget a settled voice request whose transcript never reached its destination.
+
+        Telegram retries a webhook that answered with an error, but the transcript is not stored,
+        so the retry would only be refused and the recording lost. Removing the marker lets the
+        retry transcribe again. Only the marker created for exactly this audio, with no stored
+        response and no outstanding reservation, is removed. Best effort: returns False when the
+        marker is absent, different, or cannot be removed."""
+        language = options.get("language", "auto")
+        if (
+            not self.enabled or not isinstance(audio, bytes) or not options.keys() <= {"language"}
+            or language not in LANGUAGES
+        ):
+            return False
+        try:
+            key = request_key(_uuid(request_id))
+        except TaskAssistError:
+            return False
+        digest = self._voice_digest(audio, mime, language)
+
+        def releasable(state: dict[str, Any]) -> bool:
+            record = state["requests"].get(key)
+            return (
+                record is not None and record["digest"] == digest
+                and record["status"] in {"recorded", "uncertain"}
+                and record["response"] is None and record["reserved_micro_eur"] == 0
+            )
+
+        def release(state: dict[str, Any]) -> bool:
+            if not releasable(state):
+                return False
+            del state["requests"][key]
+            return True
+
+        try:
+            if not releasable(self.store.read()):
+                return False
+            return bool(self.store.update(release))
+        except Exception as error:
+            log.warning("task assist voice release failed error=%s", type(error).__name__)
+            return False
 
     def _mark_uncertain(self, identifier: str) -> None:
         key = request_key(identifier)
@@ -882,11 +972,11 @@ class TaskAssist:
             "language": "en", "cards": [], "suggestions": [], "usage": self.usage(today),
         }
 
-    def _generate(
+    def _build_context(
         self, *, mode: str, action: str | None, message: str, language: str,
         thread_id: str, today: date, task_path_value: str | None,
         task_revision: str | None, model: str, candidates: list[dict[str, Any]],
-    ) -> tuple[dict[str, Any], int, int]:
+    ) -> dict[str, Any]:
         state = self.store.read()
         thread = state["threads"].get(thread_id, {})
         turns = copy.deepcopy(thread.get("turns", []))[-MAX_TURNS:]
@@ -920,6 +1010,11 @@ class TaskAssist:
             model_input["sources"] = sources
         if len(json.dumps(model_input, ensure_ascii=False)) > 24000:
             raise TaskAssistError("assist_context_limit")
+        return context
+
+    def _invoke_model(
+        self, context: dict[str, Any], action: str | None,
+    ) -> tuple[dict[str, Any], int, int]:
         try:
             raw = self.generate(context)
         except TaskAssistError:
@@ -1338,17 +1433,20 @@ class TaskAssist:
                 return safe_response
             return cached
 
+        provider_called = False
         try:
             if not self._recheck_thread(resolved_thread):
                 raise TaskAssistError("assist_thread_context_invalidated")
             candidates = self._overview_candidates(owner_today) if task_path_value is None and (
                 mode == "chat" or action == "next"
             ) else []
-            item, input_tokens, output_tokens = self._generate(
+            context = self._build_context(
                 mode=mode, action=action, message=clean_message, language=language,
                 thread_id=resolved_thread, today=owner_today, task_path_value=task_path_value,
                 task_revision=task_revision, model=model_name, candidates=candidates,
             )
+            provider_called = True
+            item, input_tokens, output_tokens = self._invoke_model(context, action)
             if output_tokens > self.max_output_tokens:
                 raise TaskAssistError("assist_model_usage_invalid")
             self._settle(
@@ -1411,7 +1509,12 @@ class TaskAssist:
             self._finish(identifier, today, resolved_thread, clean_message, response, task_refs)
             return response
         except Exception:
-            self._mark_uncertain(identifier)
+            # Before the provider call nothing was spent and nothing external happened, so the
+            # reservation and request slot are returned instead of being pinned as uncertain.
+            if provider_called or not self._release_claim(
+                identifier, new_thread_id=resolved_thread if thread_id is None else None,
+            ):
+                self._mark_uncertain(identifier)
             raise
 
     def chat(self, payload: dict[str, Any], today: date) -> dict[str, Any]:
@@ -1692,10 +1795,7 @@ class TaskAssist:
             "request_id": identifier, "language": language,
         }
         payload = _strict_payload(payload, {"request_id"}, {"language"})
-        digest = _safe_digest({
-            "mode": "voice-transcribe", "audio_sha256": hashlib.sha256(audio).hexdigest(),
-            "mime": mime, "language": language,
-        })
+        digest = self._voice_digest(audio, mime, language)
         resolved_thread, cached = self._claim(
             identifier, digest, None, today, voice=True,
             audio_seconds=float(duration), create_thread=False,

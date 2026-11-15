@@ -1370,6 +1370,19 @@ def _download_assist_audio(file_id: str) -> bytes:
     return bytes(audio)
 
 
+def _release_assist_voice(voice_request_id: str | None, audio: bytes, mime_type: str) -> None:
+    """Let Telegram's retry of a failed delivery transcribe again instead of being refused.
+
+    The assist transcript is deliberately never stored, so a retried update could only be
+    answered with "unconfirmed outcome" and the recording would be lost."""
+    if voice_request_id is None:
+        return
+    try:
+        _task_assist().release_voice(audio, mime_type, voice_request_id)
+    except Exception as exc:
+        log.warning("assist voice marker release failed error=%s", type(exc).__name__)
+
+
 def _transcribe_voice(audio_bytes: bytes, mime_type: str = "audio/ogg") -> str | None:
     """Transcribe audio using the configured, supported Azure deployment.
 
@@ -2818,6 +2831,8 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         file_id: str | None = media.get("file_id")
         mime_type: str = media.get("mime_type") or "audio/ogg"
         transcript: str | None = None
+        audio_bytes = b""
+        assist_voice_id: str | None = None
         if file_id:
             try:
                 if _assist_enabled() and _task_owner(message):
@@ -2835,11 +2850,12 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
                         raise TaskError("assist_audio_too_long")
                     with execution_budget(110):
                         audio_bytes = _download_assist_audio(file_id)
+                        voice_request_id = str(uuid5(NAMESPACE_URL, "mindme-assist-voice:" + knowledge_event))
                         transcript = _task_assist().voice(
-                            audio_bytes, mime_type,
-                            str(uuid5(NAMESPACE_URL, "mindme-assist-voice:" + knowledge_event)),
+                            audio_bytes, mime_type, voice_request_id,
                             datetime.now(timezone.utc).date(),
                         )["text"]
+                        assist_voice_id = voice_request_id
                 else:
                     audio_bytes = _download_telegram_file(file_id)
                     transcript = _transcribe_voice(audio_bytes, mime_type)
@@ -2869,12 +2885,14 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
                     return func.HttpResponse("ok", status_code=200)
             except (TaskError, BudgetExceeded, KnowledgeError, EvolveError, StateError, SourceError, LoopError, ActionError, PlanError, AzureError, OpenAIError, httpx.HTTPError, TelegramDeliveryError) as exc:
                 log.error("voice proposal reply failed error=%s", type(exc).__name__)
+                _release_assist_voice(assist_voice_id, audio_bytes, mime_type)
                 return func.HttpResponse("proposal unavailable", status_code=503)
             # Inject the transcript as message text so memex treats it as a
             # plain-text capture. Keep the `voice` / `audio` field so memex
             # can archive the original.  Hard Rule 1: never log the text.
             fwd_update = {**update, "message": {**message, "text": transcript}}
             if not _forward_to_memex(fwd_update):
+                _release_assist_voice(assist_voice_id, audio_bytes, mime_type)
                 return func.HttpResponse("capture unavailable", status_code=503)
             _capture_feedback(chat_id, f"\U0001f3a4 {transcript}")
         else:
@@ -2992,9 +3010,15 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
         question = user_text[4:].strip()
         if not question:
             _telegram_send(chat_id, "Use /dig <question> to request research.")
+        elif "edited_message" in update:
+            # Telegram re-sends an edited message as a new update; acting on it would
+            # open a second research issue for the same request.
+            _capture_feedback(chat_id, "Edits to a /dig request are ignored, so research is not requested twice. Send a new /dig message instead.")
         else:
             issue_url, dig_status = _create_dig_issue(question)
-            _telegram_send(
+            # The issue now exists (or failed): a reply that cannot be delivered must not
+            # turn into a 5xx, or Telegram retries the update and opens another issue.
+            _capture_feedback(
                 chat_id,
                 f"Research requested: {issue_url}\nCopilot will prepare a report for review in mindVault."
                 if issue_url

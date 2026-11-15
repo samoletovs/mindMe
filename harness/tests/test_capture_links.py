@@ -182,3 +182,30 @@ def test_dig_with_named_link_preserves_research_command(monkeypatch, capture):
     })).status_code == 200
     dig.assert_called_once_with(ARTICLE)
     forward.assert_not_called()
+
+
+def test_edited_dig_request_is_ignored_instead_of_opening_a_second_issue(monkeypatch, capture):
+    forward, _ = capture
+    dig = Mock(side_effect=AssertionError("An edit must not request research again"))
+    send = Mock()
+    monkeypatch.setattr(fa, "_create_dig_issue", dig)
+    monkeypatch.setattr(fa, "_telegram_send", send)
+    response = fa.telegram_webhook(request({
+        "update_id": 124,
+        "edited_message": {"chat": {"id": 7}, "message_id": 19, "edit_date": 5, "text": "/dig a sharper question"},
+    }))
+    assert response.status_code == 200
+    dig.assert_not_called()
+    forward.assert_not_called()
+    assert "Edits to a /dig request are ignored" in send.call_args.args[1]
+
+
+def test_undeliverable_dig_reply_does_not_make_telegram_resend_the_update(monkeypatch, capture):
+    dig = Mock(return_value=("https://example.invalid/research/1", "created"))
+    monkeypatch.setattr(fa, "_create_dig_issue", dig)
+    monkeypatch.setattr(fa, "_telegram_send", Mock(side_effect=fa.TelegramDeliveryError("unconfirmed")))
+    response = fa.telegram_webhook(request({
+        "update_id": 125, "message": {"chat": {"id": 7}, "message_id": 20, "text": "/dig a question"},
+    }))
+    assert response.status_code == 200
+    dig.assert_called_once_with("a question")
