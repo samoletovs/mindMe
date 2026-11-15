@@ -475,12 +475,20 @@ since the swap were the old worker's `ConnectionAbortedException` and
 appeared once or twice a day on 2026-11-11 to 2026-11-14; there was no
 `RequestFailedException`.
 
-**Not yet confirmed by traffic.** No real voice note or briefing timeout has occurred since
-the swap, and neither can be exercised safely on demand, so those two paths are covered by
-tests only. Their log signals are `assist voice marker release failed error=<class>`
-(warning, only when releasing the marker failed; a successful release logs nothing) and
-`action briefing timeout notice unavailable` (error, only when the notice could not be
-sent). A timeout itself logs `morning briefing incomplete ... reason=...`.
+**Not yet confirmed by traffic.** Two paths are covered by tests only, and neither can be
+provoked safely on demand:
+
+- Releasing an assist voice marker needs a voice note whose forward to memex fails. Look
+  for a `capture forward rejected` or `capture forward failed` error, then a 503
+  `telegram_webhook` request. A successful release logs nothing; the warning
+  `assist voice marker release failed error=<class>` means the release itself failed.
+- The owner notice for a briefing timeout needs the 07:30 UTC briefing to outrun its 75 s
+  budget. That logs `morning briefing incomplete error=BudgetExceeded
+  reason=execution_budget_exhausted`; `action briefing timeout notice unavailable` appears
+  only if the notice itself could not be sent.
+
+Neither had happened by 15:05 UTC on 2026-11-15: the only `telegram_webhook` request since
+the swap was an unauthenticated probe that returned 403.
 
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the
