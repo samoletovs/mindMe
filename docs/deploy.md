@@ -403,6 +403,7 @@ Follow-ups that are deliberately not part of this change:
   *Resolved by memex#42, see [Follow-up pass](#follow-up-pass-2026-11-15-chat-budget-weather-request-guards-browser-ci).*
 - **No alert rules exist on `appi-mindme`.** A failing timer is visible only as a Telegram
   notice (or its absence).
+  *Resolved by `infrastructure/alerts.bicep`, see [Alerts](#alerts-2026-11-15).*
 - **`mindme-task-web-client-secret`** in `kv-mindme-ymcpt` expires **2027-01-07**. Task web
   sign-in stops when it lapses, so rotate it before then.
 
@@ -544,6 +545,61 @@ changes.
 
 Rollback is safe. Older code reads the same state file and only stops pruning unrecorded
 rows; rows already pruned stay gone, and their reservations remain counted in the ledger.
+
+## Alerts: 2026-11-15
+
+Until now a failure was visible only as a Telegram notice, so the worst failures were
+silent: a briefing that never runs sends nothing. On 2026-11-13 and 11-14 the 07:30
+`morning_briefing_timer` failed and nothing reported it.
+[`infrastructure/alerts.bicep`](../infrastructure/alerts.bicep) adds three log search alert
+rules on `appi-mindme`, plus the action group `ag-mindme` that they notify.
+
+| Rule | Severity | Window | Fires when |
+|---|---|---|---|
+| `alert-mindme-scheduled-run-failed` | 2 | 30 min | any `*_timer` request has `success == false` |
+| `alert-mindme-heartbeat-missing` | 1 | 2 h | no `reaper_poll_timer` request at all (it runs every 30 min) |
+| `alert-mindme-http-server-errors` | 2 | 1 h | any 5xx other than 503, or 503 at least three times |
+
+- **Why these three.** Every timer writes a `requests` row with a `success` flag, so the
+  first rule covers the briefing, the weekly review and the reaper. The heartbeat rule
+  catches what the first cannot: a host that is down writes no failed rows either. The HTTP
+  rule tolerates an isolated 503, because 503 is the designed answer for a dependency that
+  is briefly unreachable (memex, the model, the weather). Only a run of them is a problem.
+- **The counts are exact.** `host.json` excludes `Request` from sampling.
+- **No content in alerts.** The queries project only timestamps, function names and
+  counts. A notification never carries message or task text.
+- **Behaviour.** Each rule evaluates every 15 minutes and is stateful (`autoMitigate`). It
+  notifies once when it fires, and once more when it resolves. The scheduled-run rule's
+  window is twice its frequency, so a run whose telemetry lands late is still counted.
+- **Who is notified.** The action group emails the subscription's **Owner** role, so no
+  address lives in the repository. To add a recipient, pass it at deploy time:
+  `-p alertEmail=<address>`. Never commit it.
+- **Cost.** USD 0.50 a month per rule at a 15-minute frequency, so **USD 1.50 a month**.
+  The first 1,000 action-group emails a month are free.
+- **Validated against real data.** Over the past 72 hours the scheduled-run query returns
+  the two pre-fix `morning_briefing_timer` failures. The heartbeat query sees four reaper
+  runs in any two hours. The HTTP query returns nothing; over 30 days the only 5xx were two
+  503s on 2026-10-19.
+
+The template is standalone on purpose. Do **not** redeploy `main.bicep` to add alerts: it
+is the clean-rebuild recipe, and it would create a new plan and replace the live app
+settings. `alerts.bicep` only touches the four resources above and is idempotent:
+
+```powershell
+az deployment group what-if -g foundrylab-rg -f infrastructure/alerts.bicep
+az deployment group create  -g foundrylab-rg -f infrastructure/alerts.bicep --name mindme-alerts
+```
+
+**Reading an alert.** The email's results link opens the matching rows in
+`appi-mindme`. For a failed timer, find that run's traces with the
+[Querying telemetry](#production-confirmation-2026-09-07) recipe and the table in
+[ARCHITECTURE.md §8](../ARCHITECTURE.md#8-when-production-misbehaves). A missing heartbeat
+means the host is down, timers stopped firing, or telemetry stopped arriving. Check the
+health endpoint first, then the deploy-readiness script.
+
+**Turning alerts off.** Disable a single rule with
+`az monitor scheduled-query update -g foundrylab-rg -n <rule> --disabled true`. To remove
+them all, delete the three rules and `ag-mindme`. Nothing in the app depends on them.
 
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the
