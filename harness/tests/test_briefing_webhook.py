@@ -7,9 +7,11 @@ from unittest.mock import Mock
 import azure.functions as func
 import pytest
 import httpx
+from openai import APIConnectionError, APITimeoutError, AuthenticationError, InternalServerError
 
 import function_app as fa
 from briefing_plan import render_proposal
+from execution_budget import execution_budget
 
 
 def request(payload):
@@ -228,6 +230,66 @@ def test_model_refusal_is_distinct_from_retryable_invalid_json(monkeypatch):
 
     with pytest.raises(fa.PlanError, match="briefing_model_refused"):
         fa._generate_action_plan({"sources": []})
+
+
+def plan_model(monkeypatch, *replies):
+    client = Mock()
+    client.with_options.return_value = client
+    client.responses.create.side_effect = list(replies)
+    monkeypatch.setenv("MINDME_BRIEFING_MODEL", "existing-model")
+    monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
+    monkeypatch.setattr(fa, "_http_client", Mock())
+    return client
+
+
+EMPTY_PLAN = {"focus": None, "changes": [], "proposal": None}
+
+
+def plan_reply():
+    return SimpleNamespace(output_text=json.dumps(EMPTY_PLAN), output=[])
+
+
+def model_failure(kind):
+    sent = httpx.Request("POST", "https://synthetic.example/responses")
+    if kind == "timeout":
+        return APITimeoutError(request=sent)
+    if kind == "connect":
+        return APIConnectionError(request=sent)
+    if kind == "denied":
+        return AuthenticationError("synthetic", response=httpx.Response(401, request=sent), body=None)
+    return InternalServerError("synthetic", response=httpx.Response(503, request=sent), body=None)
+
+
+@pytest.mark.parametrize("kind", ["timeout", "connect", "server"])
+def test_a_transient_model_failure_is_repeated_once_with_more_time(monkeypatch, kind):
+    # 2026-10-22 (APITimeoutError) and 2026-11-03 (ConnectError): one transient failure
+    # abandoned the whole briefing with most of its time budget unused.
+    client = plan_model(monkeypatch, model_failure(kind), plan_reply())
+    with execution_budget(60):
+        assert fa._generate_action_plan({"sources": []}) == EMPTY_PLAN
+    first, second = [call.kwargs["timeout"] for call in client.with_options.call_args_list]
+    assert 0 < first < second <= 45.0
+
+
+def test_a_model_call_is_repeated_at_most_once(monkeypatch):
+    client = plan_model(monkeypatch, model_failure("timeout"), model_failure("timeout"), plan_reply())
+    with pytest.raises(APITimeoutError), execution_budget(60):
+        fa._generate_action_plan({"sources": []})
+    assert client.responses.create.call_count == 2
+
+
+def test_a_model_call_is_not_repeated_when_too_little_time_remains(monkeypatch):
+    client = plan_model(monkeypatch, model_failure("timeout"), plan_reply())
+    with pytest.raises(APITimeoutError), execution_budget(20):
+        fa._generate_action_plan({"sources": []})
+    assert client.responses.create.call_count == 1
+
+
+def test_a_failure_that_repeating_cannot_fix_is_not_repeated(monkeypatch):
+    client = plan_model(monkeypatch, model_failure("denied"), plan_reply())
+    with pytest.raises(AuthenticationError), execution_budget(60):
+        fa._generate_action_plan({"sources": []})
+    assert client.responses.create.call_count == 1
 
 
 def test_model_schema_allows_only_visible_changes_and_kind_appropriate_sources():

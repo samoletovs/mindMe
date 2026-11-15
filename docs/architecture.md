@@ -144,8 +144,10 @@ composition respects an empty selection and does not fetch disabled weather.
   including at month/year boundaries.
 - Telegram messages are split without discarding characters. Delivery failures
   surface as sanitized errors; timers cannot report success after a failed send.
-- The legacy capture queue refuses unsupported messages rather than deleting
-  them. Check its poison queue if an old producer is still writing to it.
+- The legacy `capture_drain` queue trigger was removed on 2026-11-15: nothing enqueues
+  to `capture-events`, and the queue does not exist on the host storage the trigger
+  listened to, so it only raised errors. Captures go to memex over HTTP. The queue
+  resource itself is still declared in Bicep.
 - Linux Flex timers currently run at 07:30 UTC daily and Sunday 18:00 UTC,
   not Stockholm or Riga local time.
 

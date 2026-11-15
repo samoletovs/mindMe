@@ -338,13 +338,33 @@ def test_real_model_sdk_does_not_retry_timeout_with_default_ten_minute_settings(
         monkeypatch.setenv("MINDME_BRIEFING_MODEL", "synthetic")
         monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
         monkeypatch.setattr(fa, "_http_client", lambda: http)
-        with budget.execution_budget(40), pytest.raises(APITimeoutError):
+        # Under 25 s left the review does not repeat a call itself, so one request means the
+        # SDK's own default of two retries is off.
+        with budget.execution_budget(20), pytest.raises(APITimeoutError):
             if companion:
                 fa._ask_companion("Synthetic briefing.")
             else:
                 fa._generate_evolve_review({"sources": []})
     assert len(calls) == 1
-    assert calls[0] == {"connect": 1, "write": 1, "pool": 1, "read": 10}
+    assert calls[0] == {"connect": 1, "write": 1, "pool": 1, "read": 5}
+
+
+def test_review_repeats_a_timed_out_call_itself_with_one_request_per_attempt(clock, monkeypatch) -> None:
+    calls = []
+
+    def timeout(request: httpx.Request) -> httpx.Response:
+        calls.append(request.extensions["timeout"]["read"])
+        raise httpx.ReadTimeout("synthetic remote content", request=request)
+
+    with client_for(timeout) as http:
+        client = OpenAI(api_key="synthetic", base_url="https://synthetic.example", http_client=http)
+        monkeypatch.setenv("MINDME_BRIEFING_MODEL", "synthetic")
+        monkeypatch.setattr(fa, "_foundry", lambda: (None, client))
+        monkeypatch.setattr(fa, "_http_client", lambda: http)
+        with budget.execution_budget(40), pytest.raises(APITimeoutError):
+            fa._generate_evolve_review({"sources": []})
+    # Three attempts, each a single request; with the SDK's retries on this would be nine.
+    assert calls == [10, 20, 20]
 
 
 def test_real_model_body_cannot_keep_running_by_trickling_chunks(clock, monkeypatch) -> None:

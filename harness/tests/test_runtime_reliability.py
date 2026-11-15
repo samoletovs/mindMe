@@ -12,7 +12,7 @@ import pytest
 from azure.core.exceptions import ClientAuthenticationError, ResourceNotFoundError
 
 import function_app as fa
-
+from execution_budget import execution_budget, http_request_hook
 
 def request(payload: object, *, params: dict | None = None) -> func.HttpRequest:
     return func.HttpRequest(
@@ -206,6 +206,42 @@ def test_missing_open_loop_config_is_visible(monkeypatch):
     assert state["ideas"]["open_count"] is None
 
 
+def open_loops_read_limit(monkeypatch, budget: float | None) -> float:
+    monkeypatch.setenv("MEMEX_STATE_URL", "https://example.invalid/state")
+    payload = {
+        "ideas": {"open_count": 0, "oldest_age_days": 0, "items": []},
+        "tasks": {"open_count": 0, "items": []},
+    }
+    limits = []
+
+    def respond(req):
+        limits.append(req.extensions["timeout"]["read"])
+        return httpx.Response(200, json=payload)
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(respond), timeout=15.0, event_hooks={"request": [http_request_hook]},
+    )
+    monkeypatch.setattr(fa, "_http_client", lambda: client)
+    with client:
+        if budget is None:
+            state = fa._fetch_open_loops()
+        else:
+            with execution_budget(budget):
+                state = fa._fetch_open_loops()
+    assert state["status"] == "available"
+    return limits[0]
+
+
+def test_open_loops_wait_longer_than_memex_normally_takes(monkeypatch):
+    # memex builds /state from up to 100 sequential GitHub reads: 12-15 s on a healthy day.
+    # The shared client's 15 s limit timed it out on three mornings in 30 days.
+    assert open_loops_read_limit(monkeypatch, None) >= 20.0
+
+
+def test_a_slow_open_loops_call_still_cannot_outlive_its_execution_budget(monkeypatch):
+    assert open_loops_read_limit(monkeypatch, 10) <= 10.0
+
+
 def test_all_sections_off_does_not_fetch_weather(monkeypatch):
     monkeypatch.setattr(fa, "_load_briefing", lambda: {"sections": []})
     weather = Mock()
@@ -302,10 +338,18 @@ def test_vault_read_reports_truncation(monkeypatch):
     assert payload["content"] == text[:fa._VAULT_READ_MAX_CHARS]
 
 
-def test_legacy_queue_never_discards_a_capture():
-    message = SimpleNamespace(id="test", get_body=lambda: b"synthetic")
-    with pytest.raises(RuntimeError, match="unsupported"):
-        fa.capture_drain(message)
+def test_no_function_listens_to_the_unfed_legacy_capture_queue(monkeypatch):
+    # Nothing enqueues to `capture-events` and the queue does not exist on the host storage
+    # account, so its trigger only produced a start-up error and scale-controller
+    # exceptions. Captures go to memex over HTTP.
+    monkeypatch.setattr(fa.app, "functions_bindings", {}, raising=False)
+    triggers = [
+        function.get_function_name()
+        for function in fa.app.get_functions()
+        for binding in function.get_bindings()
+        if binding.type == "queueTrigger"
+    ]
+    assert triggers == []
 
 
 def test_old_mirror_is_reported_as_stale_without_source_paths(monkeypatch):

@@ -54,7 +54,7 @@ SDK telemetry regression alongside any tracing changes.
 | Folder | Purpose | Who edits it |
 |---|---|---|
 | `agent/` | Foundry agent-facing metadata and tool schema | Foundry workflows / manual updates |
-| `harness/` | Azure Functions (Telegram receiver, timers, queue drain) | Functions deploy workflow |
+| `harness/` | Azure Functions (Telegram receiver, timers, agent tools, task web) | Functions deploy workflow |
 | `infrastructure/` | Bicep deployment definitions | Manual `az deployment` or `azd up` |
 | `scripts/local/` | Runs on the laptop on demand — accesses `%USERPROFILE%\OneDrive\.vscode\.me` directly (override via `ME_OS_ROOT`) | Manual local use |
 | `scripts/dev/` | Local smoke-test and bootstrap helpers | Manual local use |
@@ -66,7 +66,7 @@ SDK telemetry regression alongside any tracing changes.
 - "update the agent/tool contract" → edit `agent/openapi-tools.json`, then redeploy the hosted agent via the Foundry workflow or local bootstrap flow.
 - Agent tools require Function auth and the Foundry `mindme-tools` Custom Keys connection (`x-functions-key`). Never restore anonymous tool access to work around a missing connection.
 - Timers run in UTC on the current Linux Flex app: daily 07:30 and Sunday 18:00. Do not describe them as local time.
-- Captures are forwarded to memex, not written by the legacy queue handler. A forwarding failure must remain retryable, and callback queries must pass the same chat allowlist.
+- Captures are forwarded to memex. There is no queue handler (the legacy `capture_drain` was removed). A forwarding failure must remain retryable, and callback queries must pass the same chat allowlist.
 - `harness/capture_links.py` normalizes Telegram URL/text-link entities (UTF-16
   offsets) before routing text or media captions. Preserve update/message IDs,
   commentary and command/reply precedence; remove stale entity offsets only

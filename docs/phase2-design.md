@@ -57,9 +57,10 @@ Telegram inbound is identical: a webhook on `harness/telegram_webhook` replaces 
 | Function | Trigger | Purpose |
 |---|---|---|
 | `telegram_webhook` | HTTP (POST, anonymous + secret token in URL) | Replaces long-poll. Telegram sends updates here. Verifies `X-Telegram-Bot-Api-Secret-Token` header. |
-| `morning_briefing_timer` | Timer (`0 30 7 * * *` Sweden time) | Calls Foundry agent with seed prompt "compose today's briefing"; sends result via Telegram Bot API. |
-| `capture_drain` | Queue (`capture-events`) | (Phase 3 — scaffolded but no real work yet). |
+| `morning_briefing_timer` | Timer (`0 30 7 * * *`, UTC) | Calls Foundry agent with seed prompt "compose today's briefing"; sends result via Telegram Bot API. |
 | `health` | HTTP GET (anonymous) | `200 OK` for uptime checks. |
+
+`capture_drain` (queue `capture-events`) was scaffolded here and removed on 2026-11-15; captures go to memex.
 
 All functions use the **user-assigned managed identity** for Foundry, Storage, Key Vault. Bot token comes from Key Vault via Function App app setting `@Microsoft.KeyVault(...)` reference (no plain-text secret in app settings).
 
