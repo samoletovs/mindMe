@@ -233,8 +233,9 @@ def open_loops_read_limit(monkeypatch, budget: float | None) -> float:
 
 
 def test_open_loops_wait_longer_than_memex_normally_takes(monkeypatch):
-    # memex builds /state from up to 100 sequential GitHub reads: 12-15 s on a healthy day.
-    # The shared client's 15 s limit timed it out on three mornings in 30 days.
+    # memex built /state from up to 100 sequential GitHub reads (12-15 s), and the shared
+    # client's 15 s limit timed it out on three mornings in 30 days. Reads are concurrent
+    # since memex#42, but a slow GitHub can still push a single call past 15 s.
     assert open_loops_read_limit(monkeypatch, None) >= 20.0
 
 
@@ -273,6 +274,61 @@ def test_weather_outage_preserves_personal_fallback(monkeypatch):
     text = fa._compose_local_briefing()
     assert "Finish synthetic exercise" in text
     assert "Weather is unavailable" in text
+
+
+def weather_request() -> func.HttpRequest:
+    return func.HttpRequest(
+        method="GET", url="https://example.invalid/api/tools/weather",
+        params={"location": "Synthetic City"}, body=b"",
+    )
+
+
+def serve_weather(monkeypatch, payload: object) -> None:
+    client = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(200, json=payload)))
+    monkeypatch.setattr(fa, "_http_client", lambda: client)
+
+
+def test_weather_tool_normalizes_the_expected_shape(monkeypatch):
+    serve_weather(monkeypatch, {"current_condition": [{
+        "temp_C": "4", "FeelsLikeC": "1", "weatherDesc": [{"value": "Light rain"}],
+        "windspeedKmph": "12", "humidity": "80",
+    }]})
+    response = fa.tool_weather(weather_request())
+    assert response.status_code == 200
+    assert json.loads(response.get_body()) == {
+        "location": "Synthetic City", "temp_c": "4", "feels_like_c": "1",
+        "description": "Light rain", "wind_kph": "12", "humidity_pct": "80",
+    }
+
+
+@pytest.mark.parametrize("payload", [
+    [],
+    {"current_condition": {"temp_C": "4"}},
+    {"current_condition": ["not an object"]},
+    {"current_condition": [{"weatherDesc": "Light rain"}]},
+])
+def test_malformed_weather_is_unavailable_not_a_server_error(monkeypatch, payload):
+    serve_weather(monkeypatch, payload)
+    response = fa.tool_weather(weather_request())
+    assert response.status_code == 503
+    assert json.loads(response.get_body()) == {"error": "weather unavailable"}
+
+
+@pytest.mark.parametrize("failure", [httpx.ConnectError("synthetic"), ValueError("unexpected weather response")])
+def test_weather_outage_does_not_stop_the_action_briefing(monkeypatch, failure):
+    monkeypatch.setattr(fa, "_home_location", lambda: "Synthetic City")
+    monkeypatch.setattr(fa, "_weather_summary", Mock(side_effect=failure))
+    extras = fa._action_briefing_extras(["weather"])
+    assert extras["warnings"] == ["Weather is unavailable right now."]
+    assert "weather" not in extras
+
+
+@pytest.mark.parametrize("failure", [httpx.ConnectError("synthetic"), KeyError("title")])
+def test_briefing_tool_reports_source_failures_as_unavailable(monkeypatch, failure):
+    monkeypatch.setattr(fa, "_load_briefing", Mock(side_effect=failure))
+    response = fa.tool_briefing_context(request({}))
+    assert response.status_code == 503
+    assert json.loads(response.get_body()) == {"error": "briefing not available"}
 
 
 def test_loop_only_fallback_is_not_reported_as_switched_off(monkeypatch):

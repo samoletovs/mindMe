@@ -67,10 +67,14 @@ make test                 # from the repo root; runs: python -m pytest -q
 `make test PYTHON=<interpreter>` selects another interpreter. Without `make` (a plain
 Windows install has none), run `python -m pytest -q` from the repository root. Both
 read `pytest.ini`, which points at `harness/tests`, so the command is the same
-everywhere. Tests that need Node or a Playwright browser skip when it is missing.
+everywhere. Tests that need Node or a Playwright browser skip when it is missing; install
+`harness/requirements-ui.txt` and run `python -m playwright install chromium` to include
+the browser tests. The `runtime pins:` header line names any installed package whose
+version differs from `requirements.txt`.
 
 CI runs `python -m pytest` on every push and pull request
-(`.github/workflows/tests.yml`). For how the code fits together, see
+(`.github/workflows/tests.yml`), once without a browser and once with Chromium, where a
+skipped test fails the job. For how the code fits together, see
 [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Deploy

@@ -414,6 +414,7 @@ mindMe/
 │   ├── vault-layout.json
 │   ├── requirements.txt
 │   ├── requirements-dev.txt  # pytest deps for the unit tests
+│   ├── requirements-ui.txt   # Playwright for the browser UI tests
 │   └── README.md
 ├── infrastructure/           # Bicep deployment definitions
 │   ├── main.bicep

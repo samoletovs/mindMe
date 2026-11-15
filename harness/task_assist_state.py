@@ -24,6 +24,12 @@ MAX_TELEGRAM_BINDINGS = 200
 MAX_TELEGRAM_EVENTS = 300
 MAX_TURNS = 12
 RETENTION_DAYS = 14
+# Unrecorded requests (claimed or uncertain) are replay guards: the same request ID must be
+# refused rather than run twice. A replay can only arrive while the original sender still holds
+# that ID: a web session lasts at most an hour and Telegram stops redelivering an update after a
+# day. Holding guards for 35 days covers that with a wide margin, and stops each guard from
+# occupying one of the MAX_REQUESTS slots for good.
+GUARD_RETENTION_DAYS = 35
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z")
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _TASK_ID = re.compile(r"[0-9a-f]{24}\Z")
@@ -281,11 +287,15 @@ def _json_bytes(value: object) -> bytes:
 
 def prune_assist_state(state: dict[str, Any], today: date) -> None:
     cutoff = today - timedelta(days=RETENTION_DAYS)
+    guard_cutoff = today - timedelta(days=GUARD_RETENTION_DAYS)
     for identifier, thread in list(state["threads"].items()):
         if date.fromisoformat(thread["last_on"]) <= cutoff:
             del state["threads"][identifier]
     for key, item in list(state["requests"].items()):
-        if item["status"] == "recorded" and date.fromisoformat(item["created_on"]) <= cutoff:
+        # A pruned row's reservation stays in its ledger bucket, so spend is never under-counted.
+        if date.fromisoformat(item["created_on"]) <= (
+            cutoff if item["status"] == "recorded" else guard_cutoff
+        ):
             del state["requests"][key]
     for key, item in list(state["operations"].items()):
         if date.fromisoformat(item["created_on"]) <= cutoff:

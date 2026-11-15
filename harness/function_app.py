@@ -591,8 +591,13 @@ def _generate_action_plan(context: dict) -> dict:
 def _action_briefing_extras(sections: list[str]) -> dict:
     result: dict = {"warnings": [], "signals": []}
     if "weather" in sections:
-        weather = _weather_summary(_home_location())
-        if weather:
+        try:
+            weather = _weather_summary(_home_location())
+        except (httpx.HTTPError, ValueError) as exc:
+            # Weather is an optional third-party extra: an outage must not stop the briefing.
+            log.error("briefing weather unavailable error=%s", type(exc).__name__)
+            result["warnings"].append("Weather is unavailable right now.")
+        else:
             result["weather"] = (
                 f"{weather['location']}: {weather['description']}, "
                 f"{weather['temp_c']} C (feels like {weather['feels_like_c']} C)."
@@ -1542,8 +1547,16 @@ def _create_dig_issue(question: str) -> tuple[str | None, str]:
 
 # --- Foundry call -----------------------------------------------------------
 
-def _ask_companion(user_text: str, conversation_id: str | None = None) -> str:
+_CHAT_REPLY_BUDGET_SECONDS = 60
+
+
+def _ask_companion(
+    user_text: str, conversation_id: str | None = None, *, stages: int = 4,
+) -> str:
     """Forward to the hosted prompt agent. Returns plain text; rejects empty replies.
+
+    Under an execution budget the call gets one attempt and at most 45 s, or
+    1/``stages`` of the remaining budget when the caller has later steps.
 
     Span attributes carry agent name, input/output **lengths**, and conversation
     presence flag only (Hard Rule 9) — NEVER prompts or completions."""
@@ -1557,7 +1570,7 @@ def _ask_companion(user_text: str, conversation_id: str | None = None) -> str:
         _, openai_client = _foundry()
         if remaining_seconds() is not None:
             openai_client = openai_client.with_options(
-                timeout=bounded_timeout(45.0, stages=4), max_retries=0,
+                timeout=bounded_timeout(45.0, stages=stages), max_retries=0,
                 http_client=_http_client(),
             )
         agent_name = os.environ.get("AZURE_AI_AGENT_NAME", "companion")
@@ -2043,8 +2056,9 @@ def _empty_open_loops(status: str = "unavailable") -> dict:
     }
 
 
-# memex builds this projection from up to 100 sequential GitHub reads, so a healthy
-# call takes 12-15 s. The shared client's 15 s limit timed out three mornings in 30.
+# memex used to build this projection from up to 100 sequential GitHub reads (12-15 s), and
+# the shared client's 15 s limit timed out three mornings in 30. memex#42 made the reads
+# concurrent; the longer limit stays as headroom for a slow GitHub.
 _OPEN_LOOPS_TIMEOUT = httpx.Timeout(25.0, connect=5.0)
 
 
@@ -2514,19 +2528,30 @@ def _select_briefing_view(data: dict, tier: str, include_meta: bool) -> dict:
     return result
 
 
+def _first_weather_entry(value: object) -> dict:
+    """First object of a wttr.in list field: empty when absent, ValueError when malformed."""
+    if not value:
+        return {}
+    if isinstance(value, list) and isinstance(value[0], dict):
+        return value[0]
+    raise ValueError("unexpected weather response")
+
+
 def _weather_summary(location: str) -> dict:
     """Fetch and normalize weather summary data for a location.
 
     Raises:
         httpx.HTTPError: If wttr.in is unreachable or returns non-2xx.
-        ValueError: If response parsing fails unexpectedly.
+        ValueError: If the response is not JSON in wttr.in's expected shape.
     """
     safe_location = quote(location, safe="")
     resp = _http_client().get(f"https://wttr.in/{safe_location}?format=j1")
     resp.raise_for_status()
     full = resp.json()
-    current = (full.get("current_condition") or [{}])[0]
-    description = (current.get("weatherDesc") or [{}])[0].get("value") or "N/A"
+    if not isinstance(full, dict):
+        raise ValueError("unexpected weather response")
+    current = _first_weather_entry(full.get("current_condition"))
+    description = _first_weather_entry(current.get("weatherDesc")).get("value") or "N/A"
     return {
         "location": location,
         "temp_c": current.get("temp_C") or "N/A",
@@ -3086,7 +3111,10 @@ def telegram_webhook(req: func.HttpRequest) -> func.HttpResponse:
                 )
             )
         else:
-            reply = _ask_companion(user_text)
+            # Without a budget the SDK default (600 s, two retries) outlives the HTTP front end,
+            # and Telegram would redeliver the message while the first answer is still pending.
+            with execution_budget(_CHAT_REPLY_BUDGET_SECONDS):
+                reply = _ask_companion(user_text, stages=1)
     except Exception as exc:
         log.error("agent error chat=%s error=%s", chat_id, type(exc).__name__)
         _telegram_send(chat_id, "I could not answer just now. Please try again later.")
@@ -3441,7 +3469,7 @@ def tool_briefing_context(req: func.HttpRequest) -> func.HttpResponse:
     try:
         data = _load_briefing()
         view = _select_briefing_view(data, tier=tier, include_meta=include_meta)
-    except (AzureError, ValueError, SourceError, StateError, ActionError) as exc:
+    except (AzureError, httpx.HTTPError, ValueError, KeyError, SourceError, StateError, ActionError) as exc:
         log.error("briefing_context build failed error=%s", type(exc).__name__)
         return func.HttpResponse(
             json.dumps({"error": "briefing not available"}),

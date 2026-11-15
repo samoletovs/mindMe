@@ -250,7 +250,7 @@ def test_first_ordinary_chat_still_receives_deferred_onboarding(monkeypatch: pyt
     monkeypatch.setattr(fa, "_knowledge_reply", lambda *_: False)
     monkeypatch.setattr(fa, "_evolve_reply", lambda *_: None)
     monkeypatch.setattr(fa, "_claim_onboarding", Mock(return_value=True))
-    monkeypatch.setattr(fa, "_ask_companion", lambda *_: "How can I help?")
+    monkeypatch.setattr(fa, "_ask_companion", lambda *_, **__: "How can I help?")
     sent = Mock()
     monkeypatch.setattr(fa, "_telegram_send", sent)
 

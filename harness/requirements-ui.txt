@@ -1,0 +1,8 @@
+# Browser test dependency for the Playwright UI tests. Without it, those tests skip.
+#
+#   python -m pip install -r harness/requirements-ui.txt
+#   python -m playwright install --with-deps chromium
+#
+# Never deployed - `func azure functionapp publish` only reads requirements.txt.
+
+playwright==1.65.2
