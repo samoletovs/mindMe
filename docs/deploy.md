@@ -518,9 +518,11 @@ changes.
    warning "Weather is unavailable right now." A malformed wttr.in payload (a list, a string,
    a missing index) used to raise `AttributeError` or `KeyError`. It is now a `ValueError`,
    so `/api/tools/weather` answers 503 instead of 500.
-4. **`/api/tools/briefing-context` answered 500 for an unavailable source.** It now also
-   answers 503 for `httpx.HTTPError` (memex or weather unreachable) and `KeyError` (a
-   source without an expected field).
+4. **`/api/tools/briefing_context` could still answer 500 for an unexpected source failure.**
+   Known memex, weather and GitHub failures are already turned into an "unavailable" result
+   or a `SourceError` before they reach the handler. As a safety net it now also answers 503
+   instead of 500 for any other `httpx.HTTPError` and for `KeyError` (a source without an
+   expected field).
 5. **Unrecorded assist requests held a request slot for good.** Retention removed only
    `recorded` rows, so every `claimed` or `uncertain` row, including the pre-fix voice rows
    in the caveat above, kept one of the **160** request slots indefinitely. Those rows are
@@ -531,7 +533,7 @@ changes.
    spend is never under-counted. Pruning runs when assist is next used, so the old voice
    rows are cleared lazily, with no migration.
 6. **The 134 browser UI tests never ran in CI.** They skip without Playwright and Chromium,
-   and the `tests` job has neither. A new `browser UI tests` job installs
+   and the `pytest` (harness unit tests) job has neither. A new `browser UI tests` job installs
    `harness/requirements-ui.txt` and Chromium on `ubuntu-24.04` and fails if any test is
    skipped, so a broken browser setup cannot pass as green.
 7. **The local venv drifted from the runtime pins** (for example `openai` 1.109.1 against
