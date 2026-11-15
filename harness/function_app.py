@@ -3167,12 +3167,28 @@ def morning_briefing_timer(timer: func.TimerRequest) -> None:
         return
     with execution_budget(270):
         failed = False
+        briefing_finished = False
         try:
             with execution_budget(75):
                 _deliver_morning_briefing()
-        except (RuntimeError, TelegramDeliveryError):
+                briefing_finished = True
+        except (RuntimeError, TelegramDeliveryError) as exc:
             failed = True
-            log.error("morning briefing incomplete; independent knowledge review still eligible")
+            log.error(
+                "morning briefing incomplete error=%s reason=%s; independent knowledge review still eligible",
+                type(exc).__name__, _failure_code(exc),
+            )
+            # The action briefing reports its other failures itself. A spent budget leaves it no
+            # time to, and a budget that only expired after delivery completed has nothing to report.
+            if isinstance(exc, BudgetExceeded) and not briefing_finished and _action_briefing_enabled():
+                try:
+                    with execution_budget(10):
+                        _telegram_send(
+                            int(os.environ["TELEGRAM_ALLOWED_CHAT_ID"]),
+                            "The action briefing could not finish in time. I could not confirm delivery. No new action was started. Try /briefing now.",
+                        )
+                except (BudgetExceeded, TelegramDeliveryError):
+                    log.error("action briefing timeout notice unavailable")
         try:
             with execution_budget(170, reserve=20):
                 if "knowledge" in _briefing_prefs():
