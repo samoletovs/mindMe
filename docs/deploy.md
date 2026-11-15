@@ -546,6 +546,38 @@ changes.
 Rollback is safe. Older code reads the same state file and only stops pruning unrecorded
 rows; rows already pruned stay gone, and their reservations remain counted in the ledger.
 
+**Deployed** 2026-11-15 20:06 UTC from `eb1dc48` with
+`func azure functionapp publish func-mindme-ymcptc --python` (12 functions;
+`check-deploy-readiness.ps1` reported READY first). Afterwards:
+
+- `/api/health` returned 200 on both the `azurewebsites.net` and `mindme.naurolabs.com` hosts.
+- Anonymous probes were refused as before: 403 from the webhook, 401 from
+  `/api/tools/weather` and from a POST to `/api/tools/briefing_context`.
+- The 50 app settings were unchanged.
+- The `reaper_poll_timer` tick at 20:30 UTC, the first on the new build, succeeded.
+
+The only exceptions were two `ConnectionAbortedException` /
+`Exception encountered while listening to EventStream` pairs (20:10:30 and 20:10:39 UTC).
+They came from two instances shutting down during scale-in. The same exception pair, from an
+instance shutting down, also appeared after the previous deploy.
+
+**memex#42 confirmed.** memex was deployed separately at 19:34 UTC. One authenticated call to
+`/api/tools/briefing_context` at 20:13 UTC measured a **935 ms** `fetch_open_loops`
+dependency, against 12-15 s before. The `/state` response was complete, with 17 open
+tasks. On the memex side, before the deploy the median `/state` request took 9.2 s. After it,
+four cold calls had a median of 4.5 s: the function itself ran for about 2.7 s, and the rest
+was instance cold start. A warm call, mindMe's own at 20:13:58 UTC, took 0.86 s.
+
+The whole briefing-context call still took 11.2 s:
+
+- about 1.9 s was instance cold start;
+- about 8.1 s went to `_load_briefing`'s source reads before `fetch_open_loops`. These are
+  the sequential GitHub calls of `load_sources()` plus three small blob reads. Telemetry
+  does not break them down: the only exported spans are `fetch_open_loops` and
+  `telegram.send`.
+
+The 07:30 UTC run on 2026-11-16 is the first warm measurement to check.
+
 ## Alerts: 2026-11-15
 
 Until now a failure was visible only as a Telegram notice, so the worst failures were
@@ -615,6 +647,18 @@ health endpoint first, then the deploy-readiness script.
 `az monitor scheduled-query update -g foundrylab-rg -n <rule> --disabled true`. To remove
 them all, delete the three rules; leave `prime-alerts` alone, because prime uses it too.
 Nothing in the app depends on the rules.
+
+**Deployed** 2026-11-15 20:37 UTC from `0347b99` with the `create` command above. The three
+rules are enabled, scoped to `appi-mindme`, and each notifies `prime-alerts`. The
+scheduled-run rule splits by `name`.
+
+**Proved end to end.** A temporary copy of the scheduled-run rule
+(`alert-mindme-test-verify`, severity 4, a two-day window) was deployed at 20:39 UTC so that
+it would catch the real `morning_briefing_timer` failure of 2026-11-14 07:30 UTC. It fired at
+20:45 UTC with the dimension `name=morning_briefing_timer` and a count of 1. The alert
+history records "Action group prime-alerts executed" about a second later. The temporary rule
+was then deleted and its alert closed. That one notification, to the owner, was the only
+one sent.
 
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the
