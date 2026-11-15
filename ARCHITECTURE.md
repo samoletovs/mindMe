@@ -298,6 +298,6 @@ review line.
 | Morning message missing | `morning briefing incomplete`, `action briefing failed` | `morning_briefing_timer`, `_deliver_morning_briefing` |
 | Daily review failed | `daily review model call attempt=`, `daily knowledge review failed` | `_generate_evolve_review`, [evolve_loop.py](harness/evolve_loop.py) |
 | A model call retried | `model call failed attempt=` | `_create_response` |
-| Telegram keeps resending an update | `webhook rejected`, `capture forward rejected`, `request failed error=`, `reply failed error=` | the matching `except` in `telegram_webhook` |
+| Telegram keeps resending an update | `webhook rejected`, `capture forward rejected`, `capture forward failed`, `request failed error=`, `reply failed error=` | the matching `except` in `telegram_webhook` |
 | Reapers not dispatching | `reaper poll complete checked=` | [github_reapers.py](harness/github_reapers.py) |
 | A deploy returns 503 | the readiness script in [docs/deploy.md](docs/deploy.md) | `scripts/dev/check-deploy-readiness.ps1` |

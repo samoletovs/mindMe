@@ -464,6 +464,37 @@ Caveats:
 - Rollback is safe. A `recorded` voice row without a response is refused on replay exactly
   as the old `uncertain` row was.
 
+**Deployed** 2026-11-15 14:49 UTC from `e66c79a` with
+`func azure functionapp publish func-mindme-ymcptc --python` (12 functions;
+`check-deploy-readiness.ps1` reported READY first). Afterwards `/api/health` returned 200 on
+both the `azurewebsites.net` and `mindme.naurolabs.com` hosts, anonymous probes answered
+200 / 401 / 403 as before, the 50 app settings and the `MINDME_*` flags were unchanged, and
+the `reaper_poll_timer` tick at 15:00 UTC succeeded. The only exception and error trace
+since the swap were the old worker's `ConnectionAbortedException` and
+`Exception encountered while listening to EventStream` pair (14:49:18 UTC), which also
+appeared once or twice a day on 2026-11-11 to 2026-11-14; there was no
+`RequestFailedException`.
+
+**Not yet confirmed by traffic.** Two paths are covered by tests only, and neither can be
+provoked safely on demand:
+
+- Releasing an assist voice marker needs a voice note whose forward to memex fails: memex
+  unreachable or rejecting the capture, or `MEMEX_WEBHOOK_URL` unset. Look for
+  `capture forward failed error=<class>`, `capture forward rejected status=<code>` or
+  `capture forward skipped` followed by a 503 `telegram_webhook` request. Text captures fail
+  the same way, so the 503 alone does not identify a voice note. A release that worked logs
+  nothing: Telegram's retry of the note is transcribed again and echoed with 🎤. A release
+  that failed logs `task assist voice release failed error=<class>`
+  (`harness/task_assist.py`), and the retry is refused with the "unconfirmed outcome" reply.
+- The owner notice for a briefing timeout needs the 07:30 UTC briefing to outrun its 75 s
+  budget. That logs `morning briefing incomplete error=BudgetExceeded
+  reason=execution_budget_exhausted`; `action briefing timeout notice unavailable` appears
+  only if the notice itself could not be sent.
+
+Neither had happened by 15:05 UTC on 2026-11-15. The only `telegram_webhook` request since
+the swap was an unauthenticated probe that returned 403, so no voice note had arrived, and
+the next 07:30 UTC briefing is on 2026-11-16.
+
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the
 > Foundry `companion` agent calls back to this app. Do not infer the current
