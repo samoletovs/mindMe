@@ -558,15 +558,15 @@ rows; rows already pruned stay gone, and their reservations remain counted in th
 
 The only exceptions were two `ConnectionAbortedException` /
 `Exception encountered while listening to EventStream` pairs (20:10:30 and 20:10:39 UTC).
-They came from two instances shutting down during scale-in, the same pattern seen after the
-previous deploy.
+They came from two instances shutting down during scale-in. The same exception pair, from an
+instance shutting down, also appeared after the previous deploy.
 
 **memex#42 confirmed.** memex was deployed separately at 19:34 UTC. One authenticated call to
 `/api/tools/briefing_context` at 20:13 UTC measured a **935 ms** `fetch_open_loops`
 dependency, against 12-15 s before. The `/state` response was complete, with 17 open
-tasks. On the memex side, the median `/state` request fell from 9.2 s to 4.4 s. Each of
-those slow calls ran on a newly started instance: the function itself ran for 2.66 s, and
-the rest was instance cold start. A warm call, mindMe's own at 20:13:58 UTC, took 0.86 s.
+tasks. On the memex side, before the deploy the median `/state` request took 9.2 s. After it,
+four cold calls had a median of 4.5 s: the function itself ran for about 2.7 s, and the rest
+was instance cold start. A warm call, mindMe's own at 20:13:58 UTC, took 0.86 s.
 
 The whole briefing-context call still took 11.2 s:
 
