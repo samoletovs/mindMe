@@ -12,7 +12,6 @@ mindMe. Replaces the long-poll `scripts/dev/telegram_bridge.py` in production.
 | Timer `0 30 7 * * *` | `morning_briefing_timer` | Sends the daily briefing at 07:30 UTC. |
 | Timer `0 0 18 * * 0` | `weekly_review_timer` | Weekly-review nudge, Sunday 18:00 UTC. |
 | Timer `0 */30 * * * *` | `reaper_poll_timer` | Polls GitHub for finished Copilot-agent PRs in mindVault/familyVault and fires the existing reaper workflow via `workflow_dispatch`. Moves the reapers' idle polling off metered GitHub Actions minutes. See [github_reapers.py](github_reapers.py). |
-| Queue `capture-events` | `capture_drain` | Legacy, unsupported. Raises instead of consuming and discarding messages; Functions retries then retains them in the poison queue. Active captures go to memex. |
 | HTTP GET `/api/health` | `health` | Uptime probe. |
 | HTTP `/api/tasks` and `/api/tasks/*` | `task_web_root`, `task_web_route` | Default-off single-owner task shell and Microsoft-authenticated BFF. Data/actions independently enforce exact owner authorization and CSRF; existing tool/webhook auth is unchanged. |
 | HTTP POST `/api/tools/briefing_context?tier=core|extended|deep&include_meta=true|false` | `tool_briefing_context` | Foundry agent tool: returns the requested sanitized briefing view built in-process from `personal-os/` (`core` default). |

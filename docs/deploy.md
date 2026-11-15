@@ -319,12 +319,90 @@ Two defects surfaced in that run:
    zero" change made it visible.
 2. **`capture_drain` fails to register its `queueTrigger` binding.** Pre-existing
    and not on the active capture path (captures go to memex over HTTP), but the
-   host logs it as an error on every start. Left alone deliberately — the queue
-   is legacy and the handler already refuses to discard messages.
+   host logs it as an error on every start. Left alone at the time; removed in the
+   2026-11-15 reliability pass below, because it kept raising scale-controller errors
+   all day against a queue that does not exist on the host storage.
 
-**Telemetry is unreliable on this app.** A 30-minute timer shows only sporadic
-`requests` rows, and `-o table` renders these queries as blank — use `-o json`.
-Treat absence of telemetry as absence of evidence, not evidence of absence.
+**Querying telemetry.** Telemetry is present and complete; the CLI hid it. Unless
+`--offset` is given, `az monitor app-insights query` searches only the last **hour**,
+and `-o table` renders these results as blank — always pass `--offset 30d -o json`.
+On Windows, `az.cmd` re-parses its arguments (the same problem as the `&` note above) and
+breaks KQL, so call the CLI's Python directly. Keep the KQL on one line, and avoid `first` /
+`kind` as column aliases (they fail to parse). Log lines appear twice in `traces`, so
+count distinct `timestamp` values rather than rows.
+
+```powershell
+$q = "traces | where timestamp > ago(2d) | where message has 'daily review model call' or message has 'daily knowledge review' | project timestamp, message | order by timestamp asc"
+& "C:\Program Files\Microsoft SDKs\Azure\CLI2\python.exe" -IBm azure.cli monitor app-insights query `
+  --app appi-mindme -g foundrylab-rg --analytics-query $q --offset 30d -o json --query "tables[0].rows"
+```
+
+Model calls are not recorded as dependencies; only the custom `fetch_open_loops` and
+`telegram.send` spans are. The log lines are therefore the only record of a model call.
+
+## Reliability pass: 2026-11-15
+
+A 30-day review of `appi-mindme` found four defects in how failures are handled and
+reported. They are fixed together:
+
+1. **The morning knowledge review failed without saying why.** After the briefing
+   moved to `gpt-6-luna` on 2026-11-10 the review ended in `invalid_model_review` on
+   11-11, 11-13 and 11-14, and with an unconfirmed result on 11-12. A 200 response was
+   either accepted or called "invalid" with no record of its status or stop reason, so a
+   truncated, filtered or refused answer looked exactly like bad JSON. The review now
+   inspects the response (`harness/model_response.py`) and logs one
+   `daily review model call attempt=N ...` line per call with the status, stop reason and
+   token counts, never any text. A cut-off or unusable answer is retried up to three times
+   with a progressively shorter brief and a larger output cap (2400, then 4000, then 6000
+   tokens); a connection error is retried unchanged; a refusal or
+   content filter is not retried. The failure notice names the failed check, for example
+   `(review_output_truncated)`.
+2. **One transient model error cancelled the whole briefing.** 10-22 (`APITimeoutError`)
+   and 11-03 (`ConnectError`) lost the morning plan. The plan call now repeats once after a
+   connection error, timeout or 5xx while at least 25 seconds of the run's budget remain.
+3. **`fetch_open_loops` timed out.** memex `/state` takes 12-15 s every day against the
+   shared 15 s client timeout, so any slow GitHub day failed it (10-26, 10-30, 11-13). The
+   call now waits up to 25 s, still clamped by the run's execution budget.
+4. **`capture_drain` raised scale-controller errors all day.** Its queue trigger listened
+   to `capture-events`, which does not exist on the host storage, and nothing enqueued to
+   it, so the scale controller logged about 100 `RequestFailedException`s a day. The function
+   is removed; the app now registers 12 functions. The queue definition in Bicep is untouched.
+
+Also fixed: an anonymous request to `/api/tasks/auth/callback` with a non-ASCII `state`
+(or an owner request with a non-ASCII `X-MindMe-CSRF` header) made `secrets.compare_digest`
+raise and returned HTTP 500. Both now fail closed as `auth_state_invalid` / `csrf_rejected`.
+
+**Confirming the review fix.** Whether `gpt-6-luna` truncates the review on real data
+cannot be tested without reading the private vault, which the repo rules forbid for smoke
+tests, so the scheduled run is the test. After the 07:30 UTC run, query
+`daily review model call` and `daily knowledge review` (see *Querying telemetry* above):
+
+- `status=incomplete reason=max_output_tokens` on all three attempts, each with
+  `output_tokens` equal to its cap, means the model does not stop writing even with 6000
+  tokens. The prompt asks for statements under 700 characters but the schema does not
+  enforce a length, so look at the model's behaviour, not the cap.
+- `reason=content_filter` or `refused=yes` points at the packet content, not the code.
+- `status=completed` followed by `invalid_model_review` means the service called the
+  answer complete but it was not a JSON object.
+
+Follow-ups that are deliberately not part of this change:
+
+- **memex `build_open_loops`** (`memex/functions/state.py`) reads up to 100 items from
+  GitHub one after another, which is why `/state` takes 12-15 s. Reading them concurrently,
+  or caching by source revision, removes the delay at its source. memex deploys separately.
+- **No alert rules exist on `appi-mindme`.** A failing timer is visible only as a Telegram
+  notice (or its absence).
+- **`mindme-task-web-client-secret`** in `kv-mindme-ymcpt` expires **2027-01-07**. Task web
+  sign-in stops when it lapses, so rotate it before then.
+
+### Rotating the host storage key without downtime
+
+`AzureWebJobsStorage` and `DEPLOYMENT_STORAGE_CONNECTION_STRING` hold a key of
+`stmindmedepymcpt` (the shared-key host storage; the data storage stays MI-only). To rotate:
+point both settings at the *other* key, confirm `/api/health` returns 200 and the host
+starts cleanly, and only then renew the old key. Build the connection string in a script
+variable and set it from there. `az functionapp config appsettings list` prints secret
+values in full, so never run it unfiltered; select the names you need explicitly.
 
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the
@@ -466,7 +544,10 @@ Expect ~2–4 minutes for a Python Flex Consumption publish. Watch for these
 markers in the output:
 
 - `The deployment was successful!`
-- `Functions in func-mindme-ymcptc: telegram_webhook, morning_briefing_timer, capture_drain, health, tool_briefing_context, tool_weather, weekly_review_timer`
+- `Functions in func-mindme-ymcptc:` followed by the 12 functions in `harness/function_app.py`
+  (order varies): `health`, `morning_briefing_timer`, `reaper_poll_timer`, `task_site_root`,
+  `task_web_root`, `task_web_route`, `telegram_webhook`, `tool_briefing_context`,
+  `tool_vault_read`, `tool_vault_recent`, `tool_weather`, `weekly_review_timer`
 
 > The local Python is 3.14; the app targets 3.11. `func` prints a version-mismatch
 > warning — it's harmless for this app (remote build installs against 3.11).
@@ -567,8 +648,9 @@ stale_areas). Same shape `scripts/local/test_briefing_snapshot.py` produces.
 
 ### 3. The 07:30 timer (the moment of truth)
 
-The morning briefing timer fires at `0 30 7 * * *` Sweden time. The next run is
-the next 07:30 in `Europe/Stockholm`. Watch in two places:
+The morning briefing timer fires at `0 30 7 * * *`, which is **07:30 UTC** (Flex
+Consumption has no `WEBSITE_TIME_ZONE`; the 2026-09-07 run above fired at 07:30:00 UTC).
+Watch in two places:
 
 - Telegram: a message from `@mindMeTo_bot` ~07:30.
 - App Insights: filter on `mindMe.harness` source and `briefing sent` /
