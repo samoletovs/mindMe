@@ -327,9 +327,9 @@ Two defects surfaced in that run:
 `--offset` is given, `az monitor app-insights query` searches only the last **hour**,
 and `-o table` renders these results as blank — always pass `--offset 30d -o json`.
 On Windows, `az.cmd` re-parses its arguments (the same problem as the `&` note above) and
-breaks KQL, so call the CLI's Python directly. Keep the KQL on one line, and avoid `first` /
-`kind` as column aliases (they fail to parse). Log lines appear twice in `traces`, so
-count distinct `timestamp` values rather than rows.
+breaks KQL, so call the CLI's Python directly. Keep the KQL on one line, and avoid `first`,
+`last` and `kind` as column aliases (they fail to parse; `latest` works). Log lines appear
+twice in `traces`, so count distinct `timestamp` values rather than rows.
 
 ```powershell
 $q = "traces | where timestamp > ago(2d) | where message has 'daily review model call' or message has 'daily knowledge review' | project timestamp, message | order by timestamp asc"
@@ -372,6 +372,16 @@ Also fixed: an anonymous request to `/api/tasks/auth/callback` with a non-ASCII 
 (or an owner request with a non-ASCII `X-MindMe-CSRF` header) made `secrets.compare_digest`
 raise and returned HTTP 500. Both now fail closed as `auth_state_invalid` / `csrf_rejected`.
 
+**Deployed** 2026-11-15 12:51 UTC from `cfb397b` with
+`func azure functionapp publish func-mindme-ymcptc --python` (12 functions). Afterwards
+`/api/health` returned 200 on both the `azurewebsites.net` and `mindme.naurolabs.com` hosts,
+anonymous probes of the health, tool and webhook endpoints answered 200 / 401 / 403 as
+before, the 50 app settings and the `MINDME_*` flags were unchanged, and every
+`reaper_poll_timer` tick through 13:00 UTC succeeded. The only error at the host swap was
+the old host's `capture_drain ... queueTrigger ... not registered` line (12:50:43 UTC); the
+scale controller's `QueueRestClient.GetPropertiesAsync` `RequestFailedException`s (16 in
+the four hours before) had not recurred when checked 25 minutes later.
+
 **Confirming the review fix.** Whether `gpt-6-luna` truncates the review on real data
 cannot be tested without reading the private vault, which the repo rules forbid for smoke
 tests, so the scheduled run is the test. After the 07:30 UTC run, query
@@ -403,6 +413,56 @@ point both settings at the *other* key, confirm `/api/health` returns 200 and th
 starts cleanly, and only then renew the old key. Build the connection string in a script
 variable and set it from there. `az functionapp config appsettings list` prints secret
 values in full, so never run it unfiltered; select the names you need explicitly.
+
+## Hardening pass: 2026-11-15 (assist, voice, `/dig`, briefing timeout)
+
+A second review of the same period covered the paths production telemetry rarely
+exercises: task assist, voice notes and `/dig`. It found five more defects, each fixed with
+regression tests. No flag, setting or timer changes.
+
+1. **A failed assist request kept its money and its slot.** A request that failed *before*
+   the model call (stale task revision, unreadable source, context limit) stayed
+   `uncertain` and kept its reservation (the worst case: 100,000 input tokens plus the
+   output cap at the model's price), so repeated failures could exhaust the monthly assist
+   budget, and the 160-request ledger, without a single model call. Such a request now
+   returns both. A failure after a provider call that may have been billed still stays
+   `uncertain`, so a paid call is never repeated.
+2. **A settled voice request was never reclaimed.** The transcript is not stored, so the
+   marker that refuses a replay of the same audio can only say no. It was left `uncertain`,
+   which retention never removes. It is now `recorded` with no stored response, so the
+   14-day retention reclaims it and a replay is still refused.
+3. **A transcript that could not be delivered was lost.** When a voice note was transcribed
+   but could not be forwarded to memex as a capture, the webhook answers 503 so Telegram
+   retries, but the marker made the retry refuse the same audio. The webhook now releases
+   that exact marker (same audio, no stored response, no reservation), so the retry
+   transcribes again. Release is best effort and logs only the error class. A failure in an
+   earlier handler (assist, task, review, proposal or knowledge reply) keeps the marker on
+   purpose: that handler may already hold the update's claim, so a second transcription
+   would be paid for and then dropped as a duplicate, refused as a conflicting request, or
+   run again, depending on how that handler keys its claim. That retry is answered with the
+   "unconfirmed outcome" message, as before.
+4. **An edited `/dig` message opened a second research issue**, and an undeliverable
+   confirmation became a 5xx that made Telegram resend the update and open another. Edits
+   are now ignored for `/dig` and the confirmation is sent best effort.
+5. **A timed-out action briefing was silent.** When the 75 s briefing budget ran out the
+   timer logged `morning briefing incomplete ...`, still ran the independent knowledge
+   review and then failed, but the owner was never told there was no morning plan. It now
+   sends "The action briefing could not finish in time ... Try /briefing now." under a
+   fresh 10 s budget, and the run is still reported as failed. The notice is sent only when
+   action briefings are on, because it points at `/briefing now`. The legacy briefing falls
+   back to a locally composed one when its model call is slow, and ends without a notice if
+   its budget runs out later.
+
+Caveats:
+
+- Voice rows written before this change stay `uncertain`, and retention removes only
+  `recorded` rows. They cannot be told apart from the guard rows that must stay, so they are
+  not migrated. Each pins one of the ledger's **160** request slots; if they ever filled it,
+  assist would answer `assist_request_capacity` until the stale rows were removed from
+  `system/mindme/task-assist-state-v1.json`. Production assist use has been sparse, so this
+  is not expected to happen.
+- Rollback is safe. A `recorded` voice row without a response is refused on replay exactly
+  as the old `uncertain` row was.
 
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the

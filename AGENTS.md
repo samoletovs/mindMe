@@ -1,6 +1,7 @@
 # AGENTS.md — guidance for coding agents working on `mindMe`
 
 > Read this before editing. This repo has strict boundaries that protect personal data.
+> For how the code is organised (entry points, webhook routing, modules, worked examples), read [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## What this repo is
 
@@ -46,7 +47,7 @@ SDK telemetry regression alongside any tracing changes.
 - **Python 3.11+** with pinned `requirements.txt` files. Type hints required on public functions.
 - **Async** for I/O (HTTP, Storage, Telegram, Foundry calls). No blocking calls in Function handlers.
 - **Structured logging** via `structlog` or `logging` with JSON formatter. App Insights consumes this.
-- **Tests** use `pytest` + `pytest-asyncio` when present; don't document or rely on test paths that are not checked into this repo.
+- **Tests** use `pytest` + `pytest-asyncio`. From the repo root, `make test` (the same as `python -m pytest -q`) runs the offline suite in `harness/tests`; the install command is in `harness/README.md`. Don't document or rely on test paths that are not checked into this repo.
 - **Bicep** for IaC. Keep infrastructure definitions in `infrastructure/`. No ARM JSON.
 
 ## Directory ownership
@@ -54,7 +55,8 @@ SDK telemetry regression alongside any tracing changes.
 | Folder | Purpose | Who edits it |
 |---|---|---|
 | `agent/` | Foundry agent-facing metadata and tool schema | Foundry workflows / manual updates |
-| `harness/` | Azure Functions (Telegram receiver, timers, agent tools, task web) | Functions deploy workflow |
+| `harness/` | Azure Functions app (Telegram receiver, timers, agent tools, task web): `function_app.py` wires and routes, the sibling modules hold the rules ([ARCHITECTURE.md](ARCHITECTURE.md) §4), `web/` is the static shell, `tests/` the offline suite | Functions deploy workflow |
+| `docs/`, `ARCHITECTURE.md` | Design records, the deployment runbook and the code map. Change them in the same PR as the behaviour they describe | Same PR as the code |
 | `infrastructure/` | Bicep deployment definitions | Manual `az deployment` or `azd up` |
 | `scripts/local/` | Runs on the laptop on demand — accesses `%USERPROFILE%\OneDrive\.vscode\.me` directly (override via `ME_OS_ROOT`) | Manual local use |
 | `scripts/dev/` | Local smoke-test and bootstrap helpers | Manual local use |
@@ -63,6 +65,7 @@ SDK telemetry regression alongside any tracing changes.
 
 - "deploy" → run `infrastructure/main.bicep` then `func azure functionapp publish`. Never deploy without verifying budget first.
 - "test the bot" → use `scripts/dev/smoke_agent.py` for a Foundry round-trip or DM `/ping` to the deployed Telegram bot.
+- "run the tests" → `make test` from the repo root (or `python -m pytest -q`). It is offline and needs no secrets; it says nothing about live behaviour.
 - "update the agent/tool contract" → edit `agent/openapi-tools.json`, then redeploy the hosted agent via the Foundry workflow or local bootstrap flow.
 - Agent tools require Function auth and the Foundry `mindme-tools` Custom Keys connection (`x-functions-key`). Never restore anonymous tool access to work around a missing connection.
 - Timers run in UTC on the current Linux Flex app: daily 07:30 and Sunday 18:00. Do not describe them as local time.

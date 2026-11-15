@@ -391,7 +391,13 @@ def test_real_model_body_cannot_keep_running_by_trickling_chunks(clock, monkeypa
 def test_expired_original_briefing_leaves_independent_review_and_receipt_time(clock, monkeypatch) -> None:
     events = []
     monkeypatch.setenv("MINDME_DAILY_EVOLVE_ENABLED", "true")
+    monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "true")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
     monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["knowledge"])
+    monkeypatch.setattr(
+        fa, "_telegram_send",
+        lambda _chat, text: events.append(("notice", budget.remaining_seconds(), text)),
+    )
 
     def original() -> None:
         events.append(("original", budget.remaining_seconds()))
@@ -407,9 +413,69 @@ def test_expired_original_briefing_leaves_independent_review_and_receipt_time(cl
     monkeypatch.setattr(fa, "_evolve_loop", lambda: SimpleNamespace(run=review))
     with pytest.raises(RuntimeError, match="Morning delivery incomplete"):
         fa.morning_briefing_timer(Mock())
-    assert events == [("original", 75), ("review", 170)]
+    assert [event[:2] for event in events] == [("original", 75), ("notice", 10), ("review", 170)]
+    assert "could not finish in time" in events[1][2]
     assert clock[0] < 270 < 300
     assert budget.remaining_seconds() is None
+
+
+def test_a_briefing_delivered_just_after_its_deadline_is_not_reported_as_unfinished(clock, monkeypatch) -> None:
+    sent = []
+    monkeypatch.setenv("MINDME_DAILY_EVOLVE_ENABLED", "true")
+    monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "true")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["knowledge"])
+    monkeypatch.setattr(fa, "_telegram_send", lambda *args: sent.append(args))
+    monkeypatch.setattr(fa, "_deliver_morning_briefing", lambda: clock.__setitem__(0, 75))
+    monkeypatch.setattr(fa, "_evolve_loop", lambda: SimpleNamespace(run=lambda today: None))
+    with pytest.raises(RuntimeError, match="Morning delivery incomplete"):
+        fa.morning_briefing_timer(Mock())
+    assert sent == []
+
+
+def test_the_timeout_notice_is_only_for_action_briefings(clock, monkeypatch) -> None:
+    # The notice points at /briefing now, which only exists when action briefings are on.
+    sent = []
+
+    def original() -> None:
+        clock[0] = 75
+        budget.checkpoint()
+
+    monkeypatch.setenv("MINDME_DAILY_EVOLVE_ENABLED", "true")
+    monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "false")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["knowledge"])
+    monkeypatch.setattr(fa, "_telegram_send", lambda *args: sent.append(args))
+    monkeypatch.setattr(fa, "_deliver_morning_briefing", original)
+    monkeypatch.setattr(fa, "_evolve_loop", lambda: SimpleNamespace(run=lambda today: None))
+    with pytest.raises(RuntimeError, match="Morning delivery incomplete"):
+        fa.morning_briefing_timer(Mock())
+    assert sent == []
+
+
+@pytest.mark.parametrize("failure", ["rejected", "overran"])
+def test_an_undeliverable_timeout_notice_does_not_stop_the_independent_review(clock, monkeypatch, failure) -> None:
+    reviewed = []
+
+    def undeliverable(*_args) -> None:
+        if failure == "rejected":
+            raise fa.TelegramDeliveryError("synthetic")
+        clock[0] += 11  # past the notice's own 10 s budget
+
+    def original() -> None:
+        clock[0] = 75
+        budget.checkpoint()
+
+    monkeypatch.setenv("MINDME_DAILY_EVOLVE_ENABLED", "true")
+    monkeypatch.setenv("MINDME_ACTION_BRIEFING_ENABLED", "true")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "7")
+    monkeypatch.setattr(fa, "_briefing_prefs", lambda: ["knowledge"])
+    monkeypatch.setattr(fa, "_telegram_send", undeliverable)
+    monkeypatch.setattr(fa, "_deliver_morning_briefing", original)
+    monkeypatch.setattr(fa, "_evolve_loop", lambda: SimpleNamespace(run=lambda today: reviewed.append(today)))
+    with pytest.raises(RuntimeError, match="Morning delivery incomplete"):
+        fa.morning_briefing_timer(Mock())
+    assert len(reviewed) == 1
 
 
 def test_on_demand_expiration_returns_retryable_failure_with_reserved_notice_time(clock, monkeypatch) -> None:

@@ -347,6 +347,29 @@ def test_settlement_uses_claimed_month_and_day_without_releasing_new_reservation
         assert ledger["day_history"]["2026-10-31"]["daily_spent_micro_eur"] > 0
 
 
+def test_releasing_a_claim_from_an_earlier_period_leaves_the_new_reservation():
+    from task_assist_state import request_key
+    subject = assistant(lambda _: model_output())
+    request_a = "f3ef6340-657f-4124-b6fa-826d54aa98e0"
+    request_b = "6c70b835-57e0-4e24-9cf0-49e848443859"
+    thread_a, _ = subject._claim(request_a, "a" * 64, None, date(2026, 10, 31), voice=False)
+    thread_b, _ = subject._claim(request_b, "b" * 64, None, date(2026, 11, 1), voice=False)
+    before = subject.store.read()["ledger"]
+
+    assert subject._release_claim(request_a, new_thread_id=thread_a)
+
+    state = subject.store.read()
+    ledger = state["ledger"]
+    assert ledger["month"] == "2026-11"
+    assert ledger["reserved_micro_eur"] == before["reserved_micro_eur"] > 0
+    assert ledger["daily_reserved_micro_eur"] == before["daily_reserved_micro_eur"] > 0
+    assert ledger["month_history"]["2026-10"]["reserved_micro_eur"] == 0
+    assert ledger["day_history"]["2026-10-31"]["daily_reserved_micro_eur"] == 0
+    assert request_key(request_a) not in state["requests"]
+    assert request_key(request_b) in state["requests"]
+    assert thread_a not in state["threads"] and thread_b in state["threads"]
+
+
 def test_uncertain_model_call_is_not_retried_and_reservation_is_preserved():
     calls = []
 
@@ -891,3 +914,177 @@ def test_uncertain_request_guard_survives_retention_without_cached_content():
         prune_assist_state(state, TODAY)
         assert key in state["requests"]
         assert state["requests"][key]["response"] is None
+
+
+class FlakySourceService(FakeTaskService):
+    """A task service whose canonical task read fails the first time it is asked."""
+
+    def __init__(self):
+        super().__init__()
+        self.failures = 1
+
+    def _source(self, path, revision=None):
+        if path == TASK_PATH and self.failures:
+            self.failures -= 1
+            raise TaskError("task_source_unavailable")
+        return super()._source(path, revision)
+
+
+def test_failure_before_the_provider_call_returns_the_reservation_and_allows_a_retry():
+    from task_assist_state import request_key
+    calls = []
+    subject = assistant(
+        lambda context: calls.append(context) or model_output(), service=FlakySourceService(),
+    )
+    payload = {
+        "request_id": REQUEST_ID, "message": "Show this task",
+        "task": {"path": TASK_PATH, "revision": TASK_REVISION},
+    }
+    with pytest.raises(TaskAssistError, match="task_source_unavailable"):
+        subject.chat(payload, TODAY)
+
+    state = subject.store.read()
+    assert calls == []
+    assert request_key(REQUEST_ID) not in state["requests"]
+    assert state["threads"] == {}
+    assert state["ledger"]["reserved_micro_eur"] == 0
+    assert state["ledger"]["daily_reserved_micro_eur"] == 0
+    assert state["ledger"]["spent_micro_eur"] == 0
+
+    assert subject.chat(payload, TODAY)["reply"] == "A short synthetic answer."
+    assert len(calls) == 1
+
+
+def test_releasing_a_failed_claim_keeps_the_thread_it_did_not_create():
+    service = FlakySourceService()
+    service.failures = 0
+    subject = assistant(lambda _: model_output(), service=service)
+    first = subject.chat({"request_id": REQUEST_ID, "message": "Hello", "task": None}, TODAY)
+    thread_id = first["thread_id"]
+    service.failures = 1
+
+    with pytest.raises(TaskAssistError, match="task_source_unavailable"):
+        subject.chat({
+            "request_id": "62c73c00-bad0-4d04-a718-2b63de34d15c", "thread_id": thread_id,
+            "message": "Show this task", "task": {"path": TASK_PATH, "revision": TASK_REVISION},
+        }, TODAY)
+
+    state = subject.store.read()
+    assert state["threads"][thread_id]["turns"]
+    assert state["ledger"]["reserved_micro_eur"] == 0
+
+
+def test_failure_after_the_provider_call_stays_uncertain_and_is_not_retried_for_free():
+    from task_assist_state import request_key
+    subject = assistant(
+        lambda _: model_output(intent="detail", task_path="tasks/2026-10-14-invented.md"),
+    )
+    payload = {
+        "request_id": REQUEST_ID, "message": "Show this task",
+        "task": {"path": TASK_PATH, "revision": TASK_REVISION},
+    }
+    with pytest.raises(TaskAssistError, match="assist_model_output_invalid"):
+        subject.chat(payload, TODAY)
+
+    state = subject.store.read()
+    assert state["requests"][request_key(REQUEST_ID)]["status"] == "uncertain"
+    assert state["ledger"]["spent_micro_eur"] > 0
+    with pytest.raises(TaskAssistError, match="assist_request_uncertain"):
+        subject.chat(payload, TODAY)
+
+
+def voice_subject(monkeypatch, transcribe=None):
+    audio_module = types.ModuleType("assist_audio")
+    audio_module.audio_duration = lambda *_: 9.5
+    monkeypatch.setitem(sys.modules, "assist_audio", audio_module)
+    transcriptions = []
+
+    def transcribed(audio, _mime):
+        transcriptions.append(audio)
+        return {"text": "A synthetic spoken request", "language": "en"}
+
+    subject = TaskAssist(
+        FakeTaskService(), {"MINDME_ASSIST_ENABLED": "true"},
+        lambda _: model_output(), transcribe or transcribed,
+    )
+    return subject, transcriptions
+
+
+def test_settled_voice_marker_refuses_replay_but_is_reclaimed_by_retention(monkeypatch):
+    from task_assist_state import request_key
+    subject, transcriptions = voice_subject(monkeypatch)
+    subject.voice(b"synthetic-audio", "audio/ogg", REQUEST_ID, TODAY)
+
+    record = subject.store.read()["requests"][request_key(REQUEST_ID)]
+    assert (record["status"], record["response"], record["reserved_micro_eur"]) == ("recorded", None, 0)
+    with pytest.raises(TaskAssistError, match="assist_request_uncertain"):
+        subject.voice(b"synthetic-audio", "audio/ogg", REQUEST_ID, TODAY)
+    assert len(transcriptions) == 1
+
+    subject.voice(
+        b"another recording", "audio/ogg", "2c921d00-2b0a-47fa-99a5-38a2af3d94c5", date(2026, 10, 27),
+    )
+    state = subject.store.read()
+    assert request_key(REQUEST_ID) not in state["requests"]
+    assert len(state["requests"]) == 1
+
+
+def test_released_voice_marker_lets_a_telegram_retry_transcribe_again(monkeypatch):
+    from task_assist_state import request_key
+    subject, transcriptions = voice_subject(monkeypatch)
+    audio = b"synthetic-audio"
+    subject.voice(audio, "audio/ogg", REQUEST_ID, TODAY)
+
+    assert subject.release_voice(audio, "audio/ogg", REQUEST_ID) is True
+    assert request_key(REQUEST_ID) not in subject.store.read()["requests"]
+    assert subject.voice(audio, "audio/ogg", REQUEST_ID, TODAY)["text"] == "A synthetic spoken request"
+    assert len(transcriptions) == 2
+    assert subject.usage(TODAY)["monthly_used"] == pytest.approx(2 * 0.00095)
+    assert subject.usage(TODAY)["monthly_reserved"] == 0
+
+
+def test_voice_release_only_removes_the_marker_made_for_exactly_that_recording(monkeypatch):
+    from task_assist_state import request_key
+    subject, _ = voice_subject(monkeypatch)
+    audio = b"synthetic-audio"
+    subject.voice(audio, "audio/ogg", REQUEST_ID, TODAY)
+
+    assert subject.release_voice(b"a different recording", "audio/ogg", REQUEST_ID) is False
+    assert subject.release_voice(audio, "audio/ogg", "2c921d00-2b0a-47fa-99a5-38a2af3d94c5") is False
+    assert subject.release_voice(audio, "audio/ogg", "not-a-request-id") is False
+    assert subject.release_voice(audio, "audio/ogg", REQUEST_ID, language="not-a-language") is False
+    assert subject.release_voice(audio, "audio/ogg", REQUEST_ID, unexpected="option") is False
+    assert subject.release_voice("not bytes", "audio/ogg", REQUEST_ID) is False
+    assert request_key(REQUEST_ID) in subject.store.read()["requests"]
+
+    assert subject.release_voice(audio, "audio/ogg", REQUEST_ID) is True
+    assert subject.release_voice(audio, "audio/ogg", REQUEST_ID) is False
+
+
+def test_voice_release_leaves_a_failed_transcription_guard_and_its_reservation_alone(monkeypatch):
+    def unavailable(_audio, _mime):
+        raise TimeoutError
+
+    subject, _ = voice_subject(monkeypatch, transcribe=unavailable)
+    audio = b"synthetic-audio"
+    with pytest.raises(TaskAssistError, match="assist_transcription_unavailable"):
+        subject.voice(audio, "audio/ogg", REQUEST_ID, TODAY)
+    reserved = subject.usage(TODAY)["monthly_reserved"]
+    assert reserved > 0
+
+    assert subject.release_voice(audio, "audio/ogg", REQUEST_ID) is False
+    assert subject.usage(TODAY)["monthly_reserved"] == reserved
+    with pytest.raises(TaskAssistError, match="assist_request_uncertain"):
+        subject.voice(audio, "audio/ogg", REQUEST_ID, TODAY)
+
+
+def test_voice_release_reports_an_unavailable_store_instead_of_raising(monkeypatch):
+    subject, _ = voice_subject(monkeypatch)
+    audio = b"synthetic-audio"
+    subject.voice(audio, "audio/ogg", REQUEST_ID, TODAY)
+
+    def unavailable(*_args, **_kwargs):
+        raise AssistStoreError("assist_state_unavailable")
+
+    monkeypatch.setattr(subject.store, "read", unavailable)
+    assert subject.release_voice(audio, "audio/ogg", REQUEST_ID) is False
