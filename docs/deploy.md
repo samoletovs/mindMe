@@ -464,6 +464,24 @@ Caveats:
 - Rollback is safe. A `recorded` voice row without a response is refused on replay exactly
   as the old `uncertain` row was.
 
+**Deployed** 2026-11-15 14:49 UTC from `e66c79a` with
+`func azure functionapp publish func-mindme-ymcptc --python` (12 functions;
+`check-deploy-readiness.ps1` reported READY first). Afterwards `/api/health` returned 200 on
+both the `azurewebsites.net` and `mindme.naurolabs.com` hosts, anonymous probes answered
+200 / 401 / 403 as before, the 50 app settings and the `MINDME_*` flags were unchanged, and
+the `reaper_poll_timer` tick at 15:00 UTC succeeded. The only exception and error trace
+since the swap were the old worker's `ConnectionAbortedException` and
+`Exception encountered while listening to EventStream` pair (14:49:18 UTC), which also
+appeared once or twice a day on 2026-11-11 to 2026-11-14; there was no
+`RequestFailedException`.
+
+**Not yet confirmed by traffic.** No real voice note or briefing timeout has occurred since
+the swap, and neither can be exercised safely on demand, so those two paths are covered by
+tests only. Their log signals are `assist voice marker release failed error=<class>`
+(warning, only when releasing the marker failed; a successful release logs nothing) and
+`action briefing timeout notice unavailable` (error, only when the notice could not be
+sent). A timeout itself logs `morning briefing incomplete ... reason=...`.
+
 > **Status (2026-06-30): LIVE.** The bot runs on **`func-mindme-ymcptc`** in
 > `foundrylab-rg` / `swedencentral`. Telegram webhook is connected and the
 > Foundry `companion` agent calls back to this app. Do not infer the current
