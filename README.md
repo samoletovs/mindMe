@@ -417,6 +417,7 @@ mindMe/
 │   ├── requirements-ui.txt   # Playwright for the browser UI tests
 │   └── README.md
 ├── infrastructure/           # Bicep deployment definitions
+│   ├── alerts.bicep          # alert rules; deploys on its own
 │   ├── main.bicep
 │   └── main.bicepparam
 ├── scripts/

@@ -295,7 +295,9 @@ make test                 # same as: python -m pytest -q
 ## 8. When production misbehaves
 
 Telemetry is in the `appi-mindme` Application Insights resource; the log lines are the
-only record of a model call. The query recipe is under *Querying telemetry* in
+only record of a model call. Three alert rules notify the owner when a timer fails, the
+30-minute heartbeat stops, or HTTP functions return server errors (see
+[Alerts](docs/deploy.md#alerts-2026-11-15)). The query recipe is under *Querying telemetry* in
 [docs/deploy.md](docs/deploy.md#production-confirmation-2026-09-07), and the
 [reliability pass](docs/deploy.md#reliability-pass-2026-11-15) explains how to read each
 review line.
