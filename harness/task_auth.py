@@ -118,6 +118,11 @@ class _IdentityHTTP:
         return self.client.post(url, **kwargs, follow_redirects=False, timeout=bounded_timeout(10, stages=4))
 
 
+def _same_secret(candidate: str, expected: str) -> bool:
+    # compare_digest raises TypeError for non-ASCII text, which would turn a forged value into a 500.
+    return candidate.isascii() and expected.isascii() and secrets.compare_digest(candidate, expected)
+
+
 def cookie_header(name: str, value: str, *, max_age: int, flow: bool = False) -> str:
     cookie: SimpleCookie = SimpleCookie()
     cookie[name] = value
@@ -281,7 +286,7 @@ class TaskAuth:
         ):
             raise AuthError("auth_flow_invalid")
         flow = envelope["flow"]
-        if not isinstance(flow.get("state"), str) or not secrets.compare_digest(response["state"], flow["state"]):
+        if not isinstance(flow.get("state"), str) or not _same_secret(response["state"], flow["state"]):
             raise AuthError("auth_state_invalid")
         nonce_hash = hashlib.sha256(envelope["nonce"].encode()).hexdigest()
         if nonce_hash in workspace(self.store.read())["auth_nonces"]:
@@ -360,7 +365,7 @@ class TaskAuth:
         return session
 
     def csrf(self, session: dict[str, Any], *, origin: str, token: str) -> None:
-        if origin != self.config.origin or not token or not secrets.compare_digest(token, session["csrf"]):
+        if origin != self.config.origin or not token or not _same_secret(token, session["csrf"]):
             raise AuthError("csrf_rejected", 403)
 
     def logout(self, session: dict[str, Any]) -> str:

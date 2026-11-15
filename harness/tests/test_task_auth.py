@@ -240,6 +240,15 @@ def test_state_csrf_and_untrusted_proxy_headers_do_not_authenticate(identity):
         auth.authenticate("")
 
 
+def test_non_ascii_state_or_csrf_token_is_refused_not_a_server_error(identity):
+    auth, _, _, _, _, _ = identity
+    _, header = auth.login()
+    with pytest.raises(AuthError, match="auth_state_invalid"):
+        auth.callback(cookie_pair(header, FLOW_COOKIE), {"state": "forged-\u00e9", "code": "synthetic"})
+    with pytest.raises(AuthError, match="csrf_rejected"):
+        auth.csrf({"csrf": "expected"}, origin=auth.config.origin, token="wrong-\u00e9")
+
+
 def test_configuration_has_no_first_visitor_or_local_demo_fallback():
     with pytest.raises(AuthError, match="auth_unconfigured"):
         AuthConfig.load({})
