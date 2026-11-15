@@ -61,11 +61,17 @@ have to be installed alongside the test deps:
 
 ```powershell
 python -m pip install -r harness/requirements.txt -r harness/requirements-dev.txt
-python -m pytest          # config in pytest.ini at the repo root
+make test                 # from the repo root; runs: python -m pytest -q
 ```
 
-CI runs the same command on every push and pull request
-(`.github/workflows/tests.yml`).
+`make test PYTHON=<interpreter>` selects another interpreter. Without `make` (a plain
+Windows install has none), run `python -m pytest -q` from the repository root. Both
+read `pytest.ini`, which points at `harness/tests`, so the command is the same
+everywhere. Tests that need Node or a Playwright browser skip when it is missing.
+
+CI runs `python -m pytest` on every push and pull request
+(`.github/workflows/tests.yml`). For how the code fits together, see
+[ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Deploy
 

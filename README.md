@@ -332,9 +332,10 @@ published test source):
    Verify submission versus canonical completion separately. An uncertain card
    can be explicitly re-presented with `/knowledge proposal <id>`.
 
-Offline regression: run the existing compatible interpreter with
-`-m pytest harness\tests -q` from the repository root. No live deployment or model
-quality claim follows from passing synthetic tests; record those checks separately.
+Offline regression: from the repository root run `make test` (the same as
+`python -m pytest -q`; the install command is in [harness/README.md](harness/README.md#tests)).
+No live deployment or model quality claim follows from passing synthetic tests; record
+those checks separately.
 
 ---
 
@@ -398,35 +399,34 @@ Dashboard bullets and area/project titles can reach the companion and Telegram.
 
 ```
 mindMe/
+├── ARCHITECTURE.md           # code map: entry points, routing, modules, rules, examples
+├── AGENTS.md                 # hard rules for anyone changing the code (read first)
+├── Makefile                  # `make test`
+├── pytest.ini                # test discovery: harness/tests
 ├── agent/                    # Foundry agent-facing tool schema / metadata
 │   └── openapi-tools.json
-├── harness/                  # Azure Functions (Telegram receiver + timers)
-│   ├── README.md
+├── harness/                  # the Azure Functions app (webhook, timers, task web)
+│   ├── function_app.py       # entry points and wiring
+│   ├── *.py                  # one module per concern (see ARCHITECTURE.md §4)
+│   ├── web/                  # static task workspace and dashboard shell
+│   ├── tests/                # offline pytest suite
+│   ├── host.json
+│   ├── vault-layout.json
 │   ├── requirements.txt
 │   ├── requirements-dev.txt  # pytest deps for the unit tests
-│   ├── host.json
-│   ├── function_app.py
-│   └── tests/                # `python -m pytest` (see harness/README.md)
+│   └── README.md
 ├── infrastructure/           # Bicep deployment definitions
 │   ├── main.bicep
 │   └── main.bicepparam
 ├── scripts/
-│   ├── dev/                  # local bootstrap + smoke-test helpers
-│   │   ├── create_agent.py
-│   │   ├── smoke_agent.py
-│   │   └── telegram_bridge.py
+│   ├── audit-leaks.ps1       # personal-data scan, run before every push
+│   ├── dev/                  # bootstrap, deploy-readiness and smoke-test helpers
 │   └── local/                # runs on laptop on demand
-│       ├── briefing_builder.py
-│       ├── sync_os_to_blob.py
-│       └── test_briefing_snapshot.py
-├── docs/
-│   ├── architecture.md
-│   ├── deploy.md
-│   ├── personal-os-azure-plan.md
-│   └── phase2-design.md
+├── knowledge/wiki/           # pages added by the memex pipeline (not code)
+└── docs/                     # architecture, deployment record, one design doc per feature
 ```
 
-Layout borrows patterns from [`agentMode`](https://github.com/samoletovs/agentMode) and [`foundryLab`](https://github.com/samoletovs/foundryLab), but this repo currently keeps the runnable cloud logic almost entirely in `harness/function_app.py`.
+Layout borrows patterns from [`agentMode`](https://github.com/samoletovs/agentMode) and [`foundryLab`](https://github.com/samoletovs/foundryLab). `harness/function_app.py` registers the functions, routes Telegram updates and injects every external effect; the rules live in the sibling modules. Start with [ARCHITECTURE.md](ARCHITECTURE.md) before changing either.
 
 ---
 
