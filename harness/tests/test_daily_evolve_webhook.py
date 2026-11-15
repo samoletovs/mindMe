@@ -6,7 +6,7 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
-from openai import APITimeoutError, InternalServerError
+from openai import APIConnectionError, APITimeoutError, InternalServerError
 
 import function_app as fa
 from execution_budget import BudgetExceeded, execution_budget
@@ -260,6 +260,18 @@ def test_each_attempt_logs_what_the_service_said_but_never_the_text(review_model
 
 def test_a_spent_budget_is_a_nameable_failure():
     assert fa._failure_code(BudgetExceeded()) == "execution_budget_exhausted"
+
+
+def test_a_budget_spent_inside_a_model_call_is_still_nameable():
+    sdk_request = httpx.Request("POST", "https://example.invalid/responses")
+    with pytest.raises(APIConnectionError) as wrapped:
+        try:
+            raise BudgetExceeded()
+        except BudgetExceeded as spent:
+            raise APIConnectionError(request=sdk_request) from spent
+    assert fa._failure_code(wrapped.value) == "execution_budget_exhausted"
+    assert fa._failure_reason(wrapped.value) == " (execution_budget_exhausted)"
+    assert fa._failure_code(APIConnectionError(request=sdk_request)) == "-"
 
 
 def test_existing_timer_runs_review_once_without_adding_a_schedule(monkeypatch, owner):

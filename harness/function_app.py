@@ -312,6 +312,10 @@ def _failure_code(exc: BaseException) -> str:
     codes, so logging them names the failing check without logging content. SDK and
     HTTP errors can carry URLs or payloads, so they are never logged beyond the type.
     """
+    # A budget that runs out inside a model call reaches the caller as the SDK's
+    # APIConnectionError, with the budget error only as its cause.
+    if isinstance(exc.__cause__, BudgetExceeded):
+        exc = exc.__cause__
     if not isinstance(exc, (BudgetExceeded, EvolveError, SourceError, StateError, PlanError, LoopError, ActionError)):
         return "-"
     reason = str(exc)
