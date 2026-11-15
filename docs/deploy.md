@@ -554,20 +554,29 @@ rows; rows already pruned stay gone, and their reservations remain counted in th
 - Anonymous probes were refused as before: 403 from the webhook, 401 from
   `/api/tools/weather` and from a POST to `/api/tools/briefing_context`.
 - The 50 app settings were unchanged.
-- The `reaper_poll_timer` ticks at 20:00 and 20:30 UTC succeeded.
+- The `reaper_poll_timer` tick at 20:30 UTC, the first on the new build, succeeded.
 
-The only exception was the old worker's `ConnectionAbortedException` and
-`Exception encountered while listening to EventStream` pair (20:10 UTC), the same one seen
-after the previous deploy.
+The only exceptions were two `ConnectionAbortedException` /
+`Exception encountered while listening to EventStream` pairs (20:10:30 and 20:10:39 UTC).
+They came from two instances shutting down during scale-in, the same pattern seen after the
+previous deploy.
 
-**memex#42 confirmed.** memex was deployed separately at 19:36 UTC. One authenticated call to
+**memex#42 confirmed.** memex was deployed separately at 19:34 UTC. One authenticated call to
 `/api/tools/briefing_context` at 20:13 UTC measured a **935 ms** `fetch_open_loops`
 dependency, against 12-15 s before. The `/state` response was complete, with 17 open
-tasks. On the memex side, the median `/state` request fell from 9.2 s to 4.4 s; the function
-itself ran for 2.66 s, and the rest is host front-end overhead. The whole briefing-context
-call still took 11.2 s. Most of that came before `fetch_open_loops`, in the blob reads of
-`_load_briefing`, and may only be the first call after the deploy. The 07:30 UTC run on
-2026-11-16 is the first warm measurement to check.
+tasks. On the memex side, the median `/state` request fell from 9.2 s to 4.4 s. Each of
+those slow calls ran on a newly started instance: the function itself ran for 2.66 s, and
+the rest was instance cold start. A warm call, mindMe's own at 20:13:58 UTC, took 0.86 s.
+
+The whole briefing-context call still took 11.2 s:
+
+- about 1.9 s was instance cold start;
+- about 8.1 s went to `_load_briefing`'s source reads before `fetch_open_loops`. These are
+  the sequential GitHub calls of `load_sources()` plus three small blob reads. Telemetry
+  does not break them down: the only exported spans are `fetch_open_loops` and
+  `telegram.send`.
+
+The 07:30 UTC run on 2026-11-16 is the first warm measurement to check.
 
 ## Alerts: 2026-11-15
 
@@ -647,7 +656,7 @@ scheduled-run rule splits by `name`.
 (`alert-mindme-test-verify`, severity 4, a two-day window) was deployed at 20:39 UTC so that
 it would catch the real `morning_briefing_timer` failure of 2026-11-14 07:30 UTC. It fired at
 20:45 UTC with the dimension `name=morning_briefing_timer` and a count of 1. The alert
-history records "Action group prime-alerts executed" two seconds later. The temporary rule
+history records "Action group prime-alerts executed" about a second later. The temporary rule
 was then deleted and its alert closed. That one notification, to the owner, was the only
 one sent.
 
